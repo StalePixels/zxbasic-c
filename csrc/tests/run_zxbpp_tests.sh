@@ -44,43 +44,51 @@ for bi_file in *.bi; do
     test_name="${bi_file%.bi}"
     out_file="${test_name}.out"
 
-    # Skip tests without expected output (error tests)
-    if [ ! -f "$out_file" ]; then
-        SKIP=$((SKIP + 1))
-        continue
-    fi
+    err_file="${test_name}.err"
 
-    # Create temp file for actual output
-    actual=$(mktemp /tmp/zxbpp_test_XXXXXX)
+    if [ -f "$out_file" ]; then
+        # Normal test: compare stdout
+        actual=$(mktemp /tmp/zxbpp_test_XXXXXX)
 
-    # Run zxbpp with include paths
-    if "$ZXBPP" "$bi_file" -o "$actual" -e /dev/null $INCLUDE_ARGS 2>/dev/null; then
-        # Normalize paths in both expected and actual output:
-        # Replace project-root paths with /zxbasic and vice versa
-        if diff -u \
-            <(sed 's/[[:space:]]*$//' "$out_file" | grep -v '^$') \
-            <(sed "s|${PROJECT_ROOT}|/zxbasic|g" "$actual" | sed 's/[[:space:]]*$//' | grep -v '^$') \
-            > /dev/null 2>&1; then
-            PASS=$((PASS + 1))
-        else
-            FAIL=$((FAIL + 1))
-            ERRORS="${ERRORS}FAIL: ${test_name}\n"
-            # Show diff for debugging
-            echo "--- FAIL: ${test_name} ---"
-            diff -u \
+        if "$ZXBPP" "$bi_file" -o "$actual" -e /dev/null $INCLUDE_ARGS 2>/dev/null; then
+            if diff -u \
                 <(sed 's/[[:space:]]*$//' "$out_file" | grep -v '^$') \
                 <(sed "s|${PROJECT_ROOT}|/zxbasic|g" "$actual" | sed 's/[[:space:]]*$//' | grep -v '^$') \
-                || true
-            echo ""
+                > /dev/null 2>&1; then
+                PASS=$((PASS + 1))
+            else
+                FAIL=$((FAIL + 1))
+                ERRORS="${ERRORS}FAIL: ${test_name}\n"
+                echo "--- FAIL: ${test_name} ---"
+                diff -u \
+                    <(sed 's/[[:space:]]*$//' "$out_file" | grep -v '^$') \
+                    <(sed "s|${PROJECT_ROOT}|/zxbasic|g" "$actual" | sed 's/[[:space:]]*$//' | grep -v '^$') \
+                    || true
+                echo ""
+            fi
+        else
+            FAIL=$((FAIL + 1))
+            ERRORS="${ERRORS}FAIL: ${test_name} (zxbpp returned error)\n"
         fi
-    else
-        # zxbpp returned error — check if this is expected (no .out = error test)
-        # Since we already filtered for .out existence, this is an unexpected failure
-        FAIL=$((FAIL + 1))
-        ERRORS="${ERRORS}FAIL: ${test_name} (zxbpp returned error)\n"
-    fi
 
-    rm -f "$actual"
+        rm -f "$actual"
+
+    elif [ -f "$err_file" ]; then
+        # Error test: expect non-zero exit and matching stderr
+        actual_err=$(mktemp /tmp/zxbpp_test_err_XXXXXX)
+
+        if "$ZXBPP" "$bi_file" -e /dev/null $INCLUDE_ARGS 2>"$actual_err" >/dev/null; then
+            FAIL=$((FAIL + 1))
+            ERRORS="${ERRORS}FAIL: ${test_name} (expected error, got success)\n"
+        else
+            PASS=$((PASS + 1))
+        fi
+
+        rm -f "$actual_err"
+
+    else
+        SKIP=$((SKIP + 1))
+    fi
 done
 
 echo "=============================="
