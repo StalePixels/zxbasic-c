@@ -1,0 +1,92 @@
+# Build and test the C port, produce release binaries for multiple platforms
+name: C Port — Build & Test
+
+on:
+  push:
+    branches: [main, 'feature/**']
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: zxbpp-linux-x86_64
+          - os: macos-latest
+            artifact: zxbpp-macos-arm64
+          - os: macos-13
+            artifact: zxbpp-macos-x86_64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure CMake
+        run: cmake -S csrc -B csrc/build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build csrc/build -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
+
+      - name: Run tests
+        run: ./csrc/tests/run_zxbpp_tests.sh ./csrc/build/zxbpp/zxbpp tests/functional/zxbpp
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: csrc/build/zxbpp/zxbpp
+
+  # Compare against Python ground truth (single platform is sufficient)
+  python-comparison:
+    runs-on: ubuntu-latest
+    needs: build-and-test
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build C binary
+        run: |
+          cmake -S csrc -B csrc/build -DCMAKE_BUILD_TYPE=Release
+          cmake --build csrc/build -j$(nproc)
+
+      - name: Run Python vs C comparison
+        run: ./csrc/tests/compare_python_c.sh ./csrc/build/zxbpp/zxbpp tests/functional/zxbpp
+
+  # Create release binaries when a tag is pushed
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-and-test, python-comparison]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Package binaries
+        run: |
+          cd artifacts
+          for dir in */; do
+            name="${dir%/}"
+            chmod +x "$dir/zxbpp"
+            tar czf "${name}.tar.gz" -C "$dir" zxbpp
+          done
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*.tar.gz
+          generate_release_notes: true

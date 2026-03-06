@@ -9,7 +9,7 @@
 # replacement for the Python original.
 #
 # Requirements:
-#   - /opt/homebrew/bin/python3.12 (brew install python@3.12)
+#   - Python 3.12+ (auto-detected: python3.12, python3, python)
 #   - Project root must contain src/zxbpp/zxbpp.py (Python reference)
 
 set -euo pipefail
@@ -17,7 +17,21 @@ set -euo pipefail
 ZXBPP_C="${1:?Usage: $0 <c-zxbpp-binary> <test-dir>}"
 TEST_DIR="${2:?Usage: $0 <c-zxbpp-binary> <test-dir>}"
 
-PYTHON="/opt/homebrew/bin/python3.12"
+# Find Python 3.12+
+PYTHON=""
+for candidate in python3.12 python3 python; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+        ver=$("$candidate" -c "import sys; print(sys.version_info[:2] >= (3,12))" 2>/dev/null || echo "False")
+        if [ "$ver" = "True" ]; then
+            PYTHON="$candidate"
+            break
+        fi
+    fi
+done
+if [ -z "$PYTHON" ]; then
+    echo "ERROR: Python 3.12+ not found. Install with: brew install python@3.12"
+    exit 1
+fi
 
 # Normalize paths
 ZXBPP_C=$(cd "$(dirname "$ZXBPP_C")" && echo "$(pwd)/$(basename "$ZXBPP_C")")
