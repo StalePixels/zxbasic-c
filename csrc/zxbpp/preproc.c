@@ -347,7 +347,11 @@ static char *resolve_include(PreprocState *pp, const char *name, bool is_system)
         char *dir = dirname(dir_tmp);
         snprintf(path, sizeof(path), "%s/%s", dir, name);
         if (access(path, R_OK) == 0) {
-            return arena_strdup(&pp->arena, path);
+            /* Normalize: strip leading "./" */
+            const char *normalized = path;
+            if (normalized[0] == '.' && normalized[1] == '/')
+                normalized += 2;
+            return arena_strdup(&pp->arena, normalized);
         }
     }
 
@@ -1254,10 +1258,7 @@ static void handle_include(PreprocState *pp, const char *rest)
 
     free(content);
 
-    /* Emit closing #line for the included file */
-    preproc_emit_line(pp, pp->current_line, pp->current_file);
-
-    /* Restore file state */
+    /* Restore file state and emit parent's #line */
     pp->file_stack.len--;
     pp->current_file = saved_file;
     pp->current_line = saved_line;
@@ -1324,8 +1325,9 @@ static void handle_require(PreprocState *pp, const char *rest)
 /* Handle: #init "name" */
 static void handle_init(PreprocState *pp, const char *rest)
 {
-    /* Pass through to output */
-    strbuf_printf(&pp->output, "#init %s\n", rest);
+    /* Pass through to output, trimming leading whitespace */
+    const char *p = skip_ws(rest);
+    strbuf_printf(&pp->output, "#init %s\n", p);
 }
 
 /* Handle: #error MESSAGE */
@@ -1379,7 +1381,9 @@ static void process_directive(PreprocState *pp, const char *directive)
         /* Emit blank line only when condition is true (both before and after enabled) */
         if (was_enabled && now_enabled) {
             strbuf_append_char(&pp->output, '\n');
-            pp->has_output = true;
+            /* Reset has_output: the inner program is a new grammar scope,
+             * so the first define/content inside gets "first production" treatment. */
+            pp->has_output = false;
         }
         return;
     }
@@ -1389,7 +1393,7 @@ static void process_directive(PreprocState *pp, const char *directive)
         bool now_enabled = is_enabled(pp);
         if (was_enabled && now_enabled) {
             strbuf_append_char(&pp->output, '\n');
-            pp->has_output = true;
+            pp->has_output = false;
         }
         return;
     }
@@ -1399,7 +1403,7 @@ static void process_directive(PreprocState *pp, const char *directive)
         bool now_enabled = is_enabled(pp);
         if (was_enabled && now_enabled) {
             strbuf_append_char(&pp->output, '\n');
-            pp->has_output = true;
+            pp->has_output = false;
         }
         return;
     }
@@ -1456,10 +1460,13 @@ static void process_directive(PreprocState *pp, const char *directive)
         pp->has_output = true;
     } else if (strnicmp_local(p, "line", (size_t)dlen) == 0 && dlen == 4) {
         handle_line_directive(pp, rest);
-        /* #line directives pass through — reconstruct cleanly */
-        const char *lr = skip_ws(rest);
-        strbuf_printf(&pp->output, "#line %s\n", lr);
-        pp->has_output = true;
+        /* In ASM mode, #line is consumed silently (updates tracking only).
+         * In BASIC mode, #line passes through to output. */
+        if (!pp->in_asm) {
+            const char *lr = skip_ws(rest);
+            strbuf_printf(&pp->output, "#line %s\n", lr);
+            pp->has_output = true;
+        }
     } else if (strnicmp_local(p, "pragma", (size_t)dlen) == 0 && dlen == 6) {
         bool was_once = handle_pragma(pp, rest);
         if (was_once) {
