@@ -72,10 +72,51 @@ cd csrc/build && cmake .. && make
 
 ## Testing
 
+The gold standard is **the C binary as a drop-in replacement for Python** — run the same tests, get the same output, no one can tell the difference.
+
+### Python Reference (Ground Truth)
+
+The original Python preprocessor is the source of truth. Use brew Python 3.12 to run it:
+
+```bash
+# Python 3.12 via Homebrew
+/opt/homebrew/bin/python3.12
+
+# Run Python zxbpp from project root:
+/opt/homebrew/bin/python3.12 -c "
+import sys; sys.path.insert(0, '.')
+from src.zxbpp.zxbpp import entry_point
+sys.argv = ['zxbpp', 'tests/functional/zxbpp/prepro01.bi']
+result = entry_point()
+sys.exit(result)
+"
+```
+
+### Test Harnesses
+
+- **`csrc/tests/run_zxbpp_tests.sh <binary> <test-dir>`** — Standalone test harness. Compares C output against `.out` files (normal tests) and `.err` files (error tests). Currently: **96/96 passing**.
+- **`csrc/tests/compare_python_c.sh <binary> <test-dir>`** — Runs BOTH Python and C on every test, diffs their outputs. This is the ultimate proof: **91/91 identical** (5 helper .bi files skipped).
+
+```bash
+# Quick test after changes:
+cd csrc/build && make -j4 && cd ../..
+./csrc/tests/run_zxbpp_tests.sh ./csrc/build/zxbpp/zxbpp tests/functional/zxbpp
+
+# Full Python comparison (slower, requires Python 3.12):
+./csrc/tests/compare_python_c.sh ./csrc/build/zxbpp/zxbpp tests/functional/zxbpp
+```
+
+### Test File Types
+
+- `.bi` — Input file (BASIC source with preprocessor directives)
+- `.out` — Expected stdout (91 normal tests)
+- `.err` — Expected error description (5 error tests: prepro07, 22, 28, 35, 76)
+
+### Key Rules
+
 - C binaries must accept **identical CLI flags** as the Python originals
 - Tests compare C output against the **same expected files** used by Python's test suite
-- Test harness scripts live in `csrc/tests/`
-- Each component has its own test subset (see `plan.md` for counts)
+- Always validate against Python when adding features — don't trust assumptions
 
 ## Pitfalls
 
