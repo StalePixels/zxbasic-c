@@ -76,7 +76,7 @@ The gold standard is **each C binary as a drop-in replacement for its Python cou
 
 ### Python Reference (Ground Truth)
 
-The original Python toolchain is the source of truth. Use Python 3.12+ to run any component:
+The original Python toolchain is the source of truth. Use Python 3.11+ to run any component:
 
 ```bash
 # Run any Python component from project root:

@@ -67,13 +67,13 @@ This builds `csrc/build/zxbpp/zxbpp` — the C preprocessor binary.
 
 ### 🐍 Python Ground-Truth Comparison
 
-Want to see for yourself that C matches Python? You'll need Python 3.12+:
+Want to see for yourself that C matches Python? You'll need Python 3.11+:
 
 ```bash
 # Install Python 3.12+ if you don't have it:
-#   macOS:   brew install python@3.12
-#   Ubuntu:  sudo apt install python3.12
-#   Fedora:  sudo dnf install python3.12
+#   macOS:   brew install python@3.11  (or newer)
+#   Ubuntu:  sudo apt install python3
+#   Fedora:  sudo dnf install python3
 
 # Run both Python and C on every test, diff the outputs:
 ./csrc/tests/compare_python_c.sh ./csrc/build/zxbpp/zxbpp tests/functional/zxbpp
