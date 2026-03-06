@@ -571,6 +571,12 @@ static char *expand_macros_in_text(PreprocState *pp, const char *text)
                         int argc = parse_macro_args(text, i, argv, 64, &end_pos, &pp->arena);
                         i = end_pos;
 
+                        /* Expand macros in each argument before substitution */
+                        for (int a = 0; a < argc && a < 64; a++) {
+                            if (argv[a])
+                                argv[a] = expand_macros_in_text(pp, argv[a]);
+                        }
+
                         char *expanded = preproc_expand_macro(pp, id, argc, argv);
                         if (expanded)
                             strbuf_append(&result, expanded);
@@ -581,8 +587,29 @@ static char *expand_macros_in_text(PreprocState *pp, const char *text)
                 } else {
                     /* Object-like macro */
                     char *expanded = preproc_expand_macro(pp, id, 0, NULL);
-                    if (expanded)
-                        strbuf_append(&result, expanded);
+                    if (expanded) {
+                        /* If the expanded result is an identifier followed by
+                         * '(' in the remaining text, we need to rescan so the
+                         * function-like macro can be called with the args.
+                         * Build new text = expanded + remaining and re-expand. */
+                        int exp_id = scan_id(expanded);
+                        const char *after_exp = skip_ws(&text[i]);
+                        if (exp_id > 0 && (size_t)exp_id == strlen(expanded) &&
+                            *after_exp == '(') {
+                            /* Rescan: prepend expanded to remaining text */
+                            StrBuf rescan;
+                            strbuf_init(&rescan);
+                            strbuf_append(&rescan, expanded);
+                            strbuf_append(&rescan, &text[i]);
+                            char *rescanned = expand_macros_in_text(pp,
+                                                strbuf_cstr(&rescan));
+                            strbuf_free(&rescan);
+                            strbuf_append(&result, rescanned);
+                            i = len; /* consumed everything */
+                        } else {
+                            strbuf_append(&result, expanded);
+                        }
+                    }
                 }
             } else {
                 strbuf_append_n(&result, &text[i], (size_t)id_len);
