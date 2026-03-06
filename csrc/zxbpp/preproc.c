@@ -1159,19 +1159,33 @@ static void handle_include(PreprocState *pp, const char *rest)
     bool is_system = false;
     char filename[PATH_MAX];
 
-    /* Check for optional [arch:XXX] modifier */
-    if (*p == '[') {
-        /* TODO: architecture-specific includes */
-        while (*p && *p != ']') p++;
-        if (*p == ']') p++;
-        p = skip_ws(p);
-    }
-
-    /* Check for ONCE keyword */
+    /* Check for ONCE keyword (may come before [arch:] modifier) */
     bool once = false;
     if (strnicmp_local(p, "once", 4) == 0 && !is_id_char(p[4])) {
         once = true;
         p += 4;
+        p = skip_ws(p);
+    }
+
+    /* Check for optional [arch:XXX] modifier */
+    char arch_value[64] = "";
+    if (*p == '[') {
+        p++; /* skip '[' */
+        /* Parse modifier: arch:value */
+        p = skip_ws(p);
+        if (strnicmp_local(p, "arch", 4) == 0 && p[4] == ':') {
+            p += 5;
+            int ai = 0;
+            while (*p && *p != ']' && ai < 63) {
+                arch_value[ai++] = *p++;
+            }
+            arch_value[ai] = '\0';
+            /* Trim whitespace from arch value */
+            while (ai > 0 && (arch_value[ai-1] == ' ' || arch_value[ai-1] == '\t'))
+                arch_value[--ai] = '\0';
+        }
+        while (*p && *p != ']') p++;
+        if (*p == ']') p++;
         p = skip_ws(p);
     }
 
@@ -1229,8 +1243,36 @@ static void handle_include(PreprocState *pp, const char *rest)
     char *fn = filename;
     while (fn[0] == '.' && fn[1] == '/') fn += 2;
 
-    /* Resolve path */
-    char *resolved = resolve_include(pp, fn, is_system);
+    /* If an architecture modifier was specified, try arch-specific include path first */
+    char *resolved = NULL;
+    if (arch_value[0]) {
+        const char *default_arch = pp->arch ? pp->arch : "zx48k";
+        for (int ip = 0; ip < pp->include_paths.len; ip++) {
+            const char *ipath = pp->include_paths.data[ip];
+            /* Check if include path contains the default arch */
+            const char *arch_pos = strstr(ipath, default_arch);
+            if (arch_pos) {
+                /* Build path with substituted arch */
+                char arch_ipath[PATH_MAX];
+                int prefix_len = (int)(arch_pos - ipath);
+                snprintf(arch_ipath, sizeof(arch_ipath), "%.*s%s%s",
+                        prefix_len, ipath, arch_value,
+                        arch_pos + strlen(default_arch));
+                char trypath[PATH_MAX];
+                snprintf(trypath, sizeof(trypath), "%s/%s", arch_ipath, fn);
+                if (access(trypath, R_OK) == 0) {
+                    const char *norm = trypath;
+                    while (norm[0] == '.' && norm[1] == '/') norm += 2;
+                    resolved = arena_strdup(&pp->arena, norm);
+                    break;
+                }
+            }
+        }
+    }
+
+    /* Standard path resolution */
+    if (!resolved)
+        resolved = resolve_include(pp, fn, is_system);
     if (!resolved) {
         preproc_error(pp, "cannot find include file \"%s\"", filename);
         return;
