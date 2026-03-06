@@ -159,7 +159,7 @@ suite — with every commit pushed in real-time for full transparency.
 | Hash tables | Python dict | `HashMap` (open addressing) |
 | CLI | argparse | `getopt_long` |
 
-See **[plan.md](plan.md)** for the full implementation plan with detailed breakdown.
+See **[docs/c-port-plan.md](docs/c-port-plan.md)** for the full implementation plan with detailed breakdown.
 
 ## 🔄 Upstream Sync
 

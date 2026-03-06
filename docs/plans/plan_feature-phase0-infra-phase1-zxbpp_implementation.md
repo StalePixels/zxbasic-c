@@ -6,7 +6,7 @@
 
 ## Plan
 
-Implementing the first two phases from [plan.md](../../plan.md):
+Implementing the first two phases from [c-port-plan.md](../c-port-plan.md):
 
 **Phase 0 — Infrastructure Setup:** Project skeleton, build system (CMake), shared utilities
 (strings, dynamic arrays, hash maps), arena memory allocator, CLI argument parsing, test

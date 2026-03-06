@@ -24,7 +24,7 @@ zxbasic-c/
 │   ├── common/             # Shared utilities (arena, strbuf, vec, hashmap)
 │   └── ...                 # Component subdirectories mirror src/
 ├── tests/functional/       # Test suite (shared with Python original)
-├── plan.md                 # Full implementation plan with phase breakdown
+├── docs/c-port-plan.md     # Full implementation plan with phase breakdown
 ├── zxbpp.py, zxbc.py, zxbasm.py  # Python entry points (reference)
 ```
 
@@ -41,7 +41,7 @@ cd csrc/build && cmake .. && make
 3. **Do not modify `tests/`** — those are shared test fixtures (synced from upstream).
 4. **NEVER push to `python-upstream` or `boriel-basic/zxbasic`** — that is Boriel's repo. We are read-only consumers. All our work goes to `origin` (`StalePixels/zxbasic-c`) only.
 5. **No external dependencies** — the Python original has zero; the C port should match.
-6. **See `plan.md`** for the full phased implementation plan, architecture mapping, and test strategy.
+6. **See `docs/c-port-plan.md`** for the full phased implementation plan, architecture mapping, and test strategy.
 
 ## Architecture Decisions
 
@@ -127,7 +127,7 @@ This project has several living documents and CI artefacts that MUST stay in syn
 
 - **README.md** — Update the status table, test counts, and phase progress. The `zxbpp tests` badge is static (`96%2F96` etc.) — update the number when tests are added. The `C Build` badge is live from CI.
 - **CLAUDE.md** (this file) — Update test file conventions table, test commands, and any new component patterns as phases are completed.
-- **plan.md** — Check off completed items as phases progress.
+- **docs/c-port-plan.md** — Check off completed items as phases progress.
 - **docs/plans/** — WIP progress files for active branches.
 - **CI workflow** (`.github/workflows/c-build.yml`) — Add new test steps as components are completed (e.g. `run_zxbasm_tests.sh` for Phase 2). The workflow builds on Linux x86_64, macOS ARM64, and macOS x86_64, runs tests, and does a Python ground-truth comparison.
 - **Test harnesses** (`csrc/tests/`) — Each new component needs its own `run_<component>_tests.sh` and an entry in `compare_python_c.sh` (or a component-specific comparison script).
