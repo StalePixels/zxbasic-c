@@ -44,6 +44,8 @@ verifying correctness against the existing test suite.
 
 ### Porting Strategy
 
+See **[plan.md](plan.md)** for the full implementation plan with detailed breakdown.
+
 The port follows a bottom-up, phase-by-phase approach:
 
 | Phase | Component | Status |
