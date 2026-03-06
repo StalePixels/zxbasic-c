@@ -185,6 +185,6 @@ directories `library/` and `library-asm`, which are licensed under
 [MIT license](https://en.wikipedia.org/wiki/MIT_License) unless otherwise
 specified in the files themselves.
 
-- 🏠 [Upstream source of truth](https://github.com/boriel-basic/zxbasic) — the canonical Python project
+- 💜 [Upstream, Original, Amazing, ZX BASIC project](https://github.com/boriel-basic/zxbasic)
 - 📖 [ZX BASIC documentation](https://zxbasic.readthedocs.io/en/latest/)
 - 💬 [Community forum](https://forum.boriel.com/)
