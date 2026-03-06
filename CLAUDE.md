@@ -4,7 +4,7 @@
 
 A **C port of [Boriel ZX BASIC](https://github.com/boriel-basic/zxbasic)**, a Python compiler toolchain (~38,500 lines) for the ZX Spectrum. The port targets embedding on resource-constrained platforms (NextPi) where Python is impractical.
 
-**This is a port, not a rewrite.** When in doubt, reference how the Python does it. The goal is **byte-for-byte identical output** — same inputs, same flags, same output files.
+**This is a port, not a rewrite.** Always reference how the Python does it. The goal is **byte-for-byte identical output** — same inputs, same flags, same output files.
 
 ## Repository Layout
 
