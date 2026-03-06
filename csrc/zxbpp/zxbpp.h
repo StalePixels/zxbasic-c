@@ -95,6 +95,11 @@ typedef struct PreprocState {
     int error_count;
     int expect_warnings; /* suppress first N warnings */
 
+    /* Output tracking: has_output is false until the first content line
+     * is emitted. Used to decide whether #define emits a blank line
+     * (first production) or a #line directive (subsequent). */
+    bool has_output;
+
     /* Error output */
     FILE *err_file;
 } PreprocState;

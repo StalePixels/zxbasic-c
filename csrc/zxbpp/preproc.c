@@ -50,6 +50,7 @@ void preproc_init(PreprocState *pp)
     pp->warning_count = 0;
     pp->error_count = 0;
     pp->expect_warnings = 0;
+    pp->has_output = false;
     pp->err_file = stderr;
 }
 
@@ -697,6 +698,7 @@ static void handle_define(PreprocState *pp, const char *rest)
         strip_trailing(body_str);
 
         preproc_define(pp, name, body_str, pp->current_line, pp->current_file);
+
         free(body_str);
     }
 }
@@ -956,8 +958,9 @@ static void handle_line_directive(PreprocState *pp, const char *rest)
     }
 }
 
-/* Handle: #pragma ... */
-static void handle_pragma(PreprocState *pp, const char *rest)
+/* Handle: #pragma ...
+ * Returns true if this was #pragma once (no text output needed). */
+static bool handle_pragma(PreprocState *pp, const char *rest)
 {
     const char *p = skip_ws(rest);
 
@@ -971,11 +974,12 @@ static void handle_pragma(PreprocState *pp, const char *rest)
             }
             info->once = true;
         }
-        return;
+        return true;
     }
 
     /* Pass other pragmas through to output */
     strbuf_printf(&pp->output, "#pragma %s\n", rest);
+    return false;
 }
 
 /* Handle: #require "file" */
@@ -1006,7 +1010,20 @@ static void handle_warning_directive(PreprocState *pp, const char *rest)
     preproc_warning(pp, 0, "%s", p);
 }
 
-/* Process a preprocessor directive line */
+/* Process a preprocessor directive line.
+ *
+ * Output model (matching Python PLY grammar):
+ * - #ifdef (condition true): emit "\n" (blank line for the directive)
+ * - #ifdef (condition false): no output
+ * - #else (false→true): emit "#line N+1 file\n"
+ * - #else (true→false): no output
+ * - #endif: emit "#line N+1 file\n" (when parent was enabled)
+ * - #define (first in file): emit "\n"
+ * - #define (subsequent): emit "#line N+1 file\n"
+ * - #undef, #error, #warning, #pragma once: emit "\n"
+ * - #pragma other, #require, #init, #line: emit directive text
+ * - #include: handled specially
+ */
 static void process_directive(PreprocState *pp, const char *directive)
 {
     const char *p = skip_ws(directive);
@@ -1017,61 +1034,173 @@ static void process_directive(PreprocState *pp, const char *directive)
 
     /* Get directive name */
     int dlen = scan_id(p);
-    if (dlen == 0) {
-        /* Empty directive, ignore */
-        return;
-    }
+    if (dlen == 0) return;
 
     const char *rest = p + dlen;
-    bool enabled = is_enabled(pp);
 
-    /* Conditional directives are always processed */
+    /* === Conditional directives (always processed) === */
+
     if (strnicmp_local(p, "ifdef", (size_t)dlen) == 0 && dlen == 5) {
+        bool was_enabled = is_enabled(pp);
         handle_ifdef(pp, rest, false);
+        bool now_enabled = is_enabled(pp);
+        /* Emit blank line only when condition is true (both before and after enabled) */
+        if (was_enabled && now_enabled) {
+            strbuf_append_char(&pp->output, '\n');
+            pp->has_output = true;
+        }
         return;
     }
     if (strnicmp_local(p, "ifndef", (size_t)dlen) == 0 && dlen == 6) {
+        bool was_enabled = is_enabled(pp);
         handle_ifdef(pp, rest, true);
+        bool now_enabled = is_enabled(pp);
+        if (was_enabled && now_enabled) {
+            strbuf_append_char(&pp->output, '\n');
+            pp->has_output = true;
+        }
         return;
     }
     if (strnicmp_local(p, "if", (size_t)dlen) == 0 && dlen == 2) {
+        bool was_enabled = is_enabled(pp);
         handle_if(pp, rest);
+        bool now_enabled = is_enabled(pp);
+        if (was_enabled && now_enabled) {
+            strbuf_append_char(&pp->output, '\n');
+            pp->has_output = true;
+        }
         return;
     }
     if (strnicmp_local(p, "else", (size_t)dlen) == 0 && dlen == 4) {
+        bool was_enabled = is_enabled(pp);
         handle_else(pp);
+        bool now_enabled = is_enabled(pp);
+        /* Transitioning from disabled to enabled: emit #line */
+        if (!was_enabled && now_enabled) {
+            strbuf_printf(&pp->output, "#line %d \"%s\"\n",
+                         pp->current_line + 1, pp->current_file);
+            pp->has_output = true;
+        }
         return;
     }
     if (strnicmp_local(p, "endif", (size_t)dlen) == 0 && dlen == 5) {
+        /* Check if parent (after pop) will be enabled */
+        bool parent_enabled = true;
+        for (int i = 0; i < pp->ifdef_stack.len - 1; i++) {
+            if (!pp->ifdef_stack.data[i].enabled) {
+                parent_enabled = false;
+                break;
+            }
+        }
         handle_endif(pp);
+        /* Emit #line when returning to an enabled state */
+        if (parent_enabled) {
+            strbuf_printf(&pp->output, "#line %d \"%s\"\n",
+                         pp->current_line + 1, pp->current_file);
+            pp->has_output = true;
+        }
         return;
     }
 
-    /* All other directives only processed when enabled */
-    if (!enabled) return;
+    /* === Other directives (only when enabled) === */
+    if (!is_enabled(pp)) return;
 
     if (strnicmp_local(p, "define", (size_t)dlen) == 0 && dlen == 6) {
         handle_define(pp, rest);
+        /* First define in file: blank line. Subsequent: #line directive. */
+        if (!pp->has_output) {
+            strbuf_append_char(&pp->output, '\n');
+        } else {
+            strbuf_printf(&pp->output, "#line %d \"%s\"\n",
+                         pp->current_line + 1, pp->current_file);
+        }
+        pp->has_output = true;
     } else if (strnicmp_local(p, "undef", (size_t)dlen) == 0 && dlen == 5) {
         handle_undef(pp, rest);
+        strbuf_append_char(&pp->output, '\n');
+        pp->has_output = true;
     } else if (strnicmp_local(p, "include", (size_t)dlen) == 0 && dlen == 7) {
         handle_include(pp, rest);
+        pp->has_output = true;
     } else if (strnicmp_local(p, "line", (size_t)dlen) == 0 && dlen == 4) {
         handle_line_directive(pp, rest);
+        /* #line directives pass through — reconstruct cleanly */
+        const char *lr = skip_ws(rest);
+        strbuf_printf(&pp->output, "#line %s\n", lr);
+        pp->has_output = true;
     } else if (strnicmp_local(p, "pragma", (size_t)dlen) == 0 && dlen == 6) {
-        handle_pragma(pp, rest);
+        bool was_once = handle_pragma(pp, rest);
+        if (was_once) {
+            /* #pragma once produces blank line (like #undef) */
+            strbuf_append_char(&pp->output, '\n');
+        }
+        pp->has_output = true;
     } else if (strnicmp_local(p, "require", (size_t)dlen) == 0 && dlen == 7) {
         handle_require(pp, rest);
+        pp->has_output = true;
     } else if (strnicmp_local(p, "init", (size_t)dlen) == 0 && dlen == 4) {
         handle_init(pp, rest);
+        pp->has_output = true;
     } else if (strnicmp_local(p, "error", (size_t)dlen) == 0 && dlen == 5) {
         handle_error_directive(pp, rest);
+        strbuf_append_char(&pp->output, '\n');
+        pp->has_output = true;
     } else if (strnicmp_local(p, "warning", (size_t)dlen) == 0 && dlen == 7) {
         handle_warning_directive(pp, rest);
+        strbuf_append_char(&pp->output, '\n');
+        pp->has_output = true;
     } else {
         char *dname = arena_strndup(&pp->arena, p, (size_t)dlen);
         preproc_error(pp, "invalid directive #%s", dname);
     }
+}
+
+/* ----------------------------------------------------------------
+ * BASIC comment stripping
+ * ---------------------------------------------------------------- */
+
+/* Check if a line is a BASIC comment (REM or starts with ').
+ * Returns pointer to start of comment, or NULL if not a comment-only line.
+ * Also handles lines that ARE content but have trailing comments. */
+static const char *find_basic_comment(const char *line)
+{
+    const char *p = line;
+    bool in_string = false;
+
+    while (*p) {
+        if (*p == '"') {
+            in_string = !in_string;
+        } else if (!in_string) {
+            /* Check for ' comment (apostrophe) */
+            if (*p == '\'') {
+                return p;
+            }
+            /* Check for REM keyword */
+            if ((p[0] == 'R' || p[0] == 'r') &&
+                (p[1] == 'E' || p[1] == 'e') &&
+                (p[2] == 'M' || p[2] == 'm') &&
+                (p == line || !is_id_char(p[-1])) &&
+                !is_id_char(p[3])) {
+                return p;
+            }
+        }
+        p++;
+    }
+    return NULL;
+}
+
+/* Check if a line is entirely a comment (only whitespace before REM/') */
+static bool is_comment_only_line(const char *line)
+{
+    const char *p = skip_ws(line);
+    if (*p == '\'') return true;
+    if ((p[0] == 'R' || p[0] == 'r') &&
+        (p[1] == 'E' || p[1] == 'e') &&
+        (p[2] == 'M' || p[2] == 'm') &&
+        !is_id_char(p[3])) {
+        return true;
+    }
+    return false;
 }
 
 /* ----------------------------------------------------------------
@@ -1085,17 +1214,43 @@ static bool is_directive(const char *line)
     return *p == '#';
 }
 
-/* Process a single line of input */
+/* Process a single line of input.
+ *
+ * The output model matches the Python PLY grammar:
+ * - Directives handle their own output in process_directive()
+ * - Enabled content lines: expand macros, emit text + "\n"
+ * - Enabled comment/empty lines: emit "\n" (blank line)
+ * - Disabled lines: no output at all
+ */
 static void process_line(PreprocState *pp, const char *line)
 {
     if (is_directive(line)) {
         process_directive(pp, line);
-    } else if (is_enabled(pp)) {
-        /* Regular line — expand macros and output */
-        char *expanded = expand_macros_in_text(pp, line);
-        strbuf_append(&pp->output, expanded);
-        strbuf_append_char(&pp->output, '\n');
+        return;
     }
+
+    if (!is_enabled(pp)) return;
+
+    /* Comment-only lines → blank line */
+    if (is_comment_only_line(line)) {
+        strbuf_append_char(&pp->output, '\n');
+        pp->has_output = true;
+        return;
+    }
+
+    /* Empty lines → blank line */
+    const char *trimmed = skip_ws(line);
+    if (*trimmed == '\0') {
+        strbuf_append_char(&pp->output, '\n');
+        pp->has_output = true;
+        return;
+    }
+
+    /* Regular content line — expand macros and emit */
+    char *expanded = expand_macros_in_text(pp, line);
+    strbuf_append(&pp->output, expanded);
+    strbuf_append_char(&pp->output, '\n');
+    pp->has_output = true;
 }
 
 /* ----------------------------------------------------------------
@@ -1120,7 +1275,9 @@ int preproc_file(PreprocState *pp, const char *filename)
     pp->current_file = arena_strdup(&pp->arena, filename);
     pp->current_line = 1;
 
-    /* Emit initial #line */
+    /* Emit initial #line — this sets the baseline for line tracking.
+     * Don't set has_output here; that flag tracks grammar-level output
+     * (i.e., first define produces "\n", subsequent produces "#line"). */
     preproc_emit_line(pp, 1, pp->current_file);
 
     /* Process line by line */

@@ -22,7 +22,7 @@ suite of 1,285+ functional tests.
 The goal is not to produce a perfect piece of art software. It is to test the viability
 of AI-driven porting at this scale, with a practical end-goal: a C implementation of
 the compiler suitable for **embedding on [NextPi](https://www.specnext.com/)** and
-similar resource-constrained platforms where a Python runtime is undesirable.
+similar resource-constrained platforms where a full modern Python runtime is undesirable.
 
 ### Who is doing this?
 
