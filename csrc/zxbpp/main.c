@@ -161,18 +161,20 @@ int main(int argc, char *argv[])
         strbuf_free(&input);
     }
 
-    /* Write output */
-    if (output_file) {
-        FILE *f = fopen(output_file, "w");
-        if (!f) {
-            fprintf(stderr, "Cannot open output file: %s\n", output_file);
-            preproc_destroy(&pp);
-            return 1;
+    /* Write output only if no errors (matches Python: if not global_.has_errors) */
+    if (pp.error_count == 0) {
+        if (output_file) {
+            FILE *f = fopen(output_file, "w");
+            if (!f) {
+                fprintf(stderr, "Cannot open output file: %s\n", output_file);
+                preproc_destroy(&pp);
+                return 1;
+            }
+            fputs(strbuf_cstr(&pp.output), f);
+            fclose(f);
+        } else {
+            fputs(strbuf_cstr(&pp.output), stdout);
         }
-        fputs(strbuf_cstr(&pp.output), f);
-        fclose(f);
-    } else {
-        fputs(strbuf_cstr(&pp.output), stdout);
     }
 
     /* Cleanup */

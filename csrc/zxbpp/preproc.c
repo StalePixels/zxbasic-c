@@ -574,6 +574,13 @@ char *preproc_expand_macro(PreprocState *pp, const char *name,
     char *expanded;
 
     if (def->num_params >= 0) {
+        /* Function-like macro — check argument count */
+        if (argc != def->num_params) {
+            preproc_error(pp, "Macro \"%s\" expected %d params, got %d",
+                          name, def->num_params, argc);
+            def->evaluating = false;
+            return arena_strdup(&pp->arena, "");
+        }
         /* Function-like macro — substitute params */
         expanded = substitute_params(pp, def, argc, argv);
     } else {
@@ -737,31 +744,39 @@ static void handle_define(PreprocState *pp, const char *rest)
         char *params[64];
         int num_params = 0;
 
-        while (*p && *p != ')') {
-            p = skip_ws(p);
-            if (*p == ')') break;
+        p = skip_ws(p);
+        if (*p == ')') {
+            /* Empty parens: #define foo() — Python creates one epsilon param */
+            params[0] = arena_strdup(&pp->arena, "");
+            num_params = 1;
+            p++;
+        } else {
+            while (*p && *p != ')') {
+                p = skip_ws(p);
+                if (*p == ')') break;
 
-            int plen = scan_id(p);
-            if (plen == 0) {
-                preproc_error(pp, "expected parameter name in #define");
-                return;
-            }
-
-            /* Check for duplicate parameter names */
-            char *pname = arena_strndup(&pp->arena, p, (size_t)plen);
-            for (int i = 0; i < num_params; i++) {
-                if (strcmp(params[i], pname) == 0) {
-                    preproc_error(pp, "Duplicated name parameter \"%s\"", pname);
+                int plen = scan_id(p);
+                if (plen == 0) {
+                    preproc_error(pp, "expected parameter name in #define");
                     return;
                 }
-            }
 
-            params[num_params++] = pname;
-            p += plen;
-            p = skip_ws(p);
-            if (*p == ',') p++;
+                /* Check for duplicate parameter names */
+                char *pname = arena_strndup(&pp->arena, p, (size_t)plen);
+                for (int i = 0; i < num_params; i++) {
+                    if (strcmp(params[i], pname) == 0) {
+                        preproc_error(pp, "Duplicated name parameter \"%s\"", pname);
+                        return;
+                    }
+                }
+
+                params[num_params++] = pname;
+                p += plen;
+                p = skip_ws(p);
+                if (*p == ',') p++;
+            }
+            if (*p == ')') p++;
         }
-        if (*p == ')') p++;
 
         /* Body is the rest after optional whitespace */
         /* Check for missing whitespace */
@@ -1787,6 +1802,12 @@ static void process_line(PreprocState *pp, const char *line)
     /* Strip inline comments from the line before macro expansion */
     char *stripped = strip_comment(pp, line);
     const char *to_expand = stripped ? stripped : line;
+
+    /* In ASM mode, backslash is not a valid token (Python lexer rejects it) */
+    if (pp->in_asm && strchr(to_expand, '\\')) {
+        preproc_error(pp, "illegal preprocessor character '\\'");
+        return;
+    }
 
     /* Regular content line — expand macros and emit */
     char *expanded = expand_macros_in_text(pp, to_expand);
