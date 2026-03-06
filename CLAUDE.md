@@ -37,10 +37,11 @@ cd csrc/build && cmake .. && make
 ## Key Rules
 
 1. **Always read the Python source first** when unsure about behavior. The C port must match exactly, not what you think the code "should" do.
-2. **Do not modify `src/`** — that's the Python reference implementation.
-3. **Do not modify `tests/`** — those are shared test fixtures used by both Python and C.
-4. **No external dependencies** — the Python original has zero; the C port should match.
-5. **See `plan.md`** for the full phased implementation plan, architecture mapping, and test strategy.
+2. **Do not modify `src/`** — that's the Python reference implementation (synced from upstream).
+3. **Do not modify `tests/`** — those are shared test fixtures (synced from upstream).
+4. **NEVER push to `python-upstream` or `boriel-basic/zxbasic`** — that is Boriel's repo. We are read-only consumers. All our work goes to `origin` (`StalePixels/zxbasic-c`) only.
+5. **No external dependencies** — the Python original has zero; the C port should match.
+6. **See `plan.md`** for the full phased implementation plan, architecture mapping, and test strategy.
 
 ## Architecture Decisions
 
