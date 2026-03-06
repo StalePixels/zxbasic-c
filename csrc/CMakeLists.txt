@@ -10,9 +10,10 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
     add_compile_options(-Wall -Wextra -Wpedantic -Wno-unused-parameter)
 endif()
 
-# Find flex and bison
-find_package(FLEX REQUIRED)
-find_package(BISON REQUIRED)
+# Flex and bison will be needed for later phases (assembler, compiler).
+# The preprocessor uses a hand-written recursive-descent approach.
+# find_package(FLEX REQUIRED)
+# find_package(BISON REQUIRED)
 
 # Common library (shared utilities)
 add_subdirectory(common)

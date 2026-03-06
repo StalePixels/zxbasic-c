@@ -1,23 +1,18 @@
-# Preprocessor lexer (flex)
-FLEX_TARGET(zxbpp_lexer lexer.l ${CMAKE_CURRENT_BINARY_DIR}/lexer.c
-    DEFINES_FILE ${CMAKE_CURRENT_BINARY_DIR}/lexer.h)
-
-# Preprocessor parser (bison)
-BISON_TARGET(zxbpp_parser parser.y ${CMAKE_CURRENT_BINARY_DIR}/parser.c
-    DEFINES_FILE ${CMAKE_CURRENT_BINARY_DIR}/parser.h
-    COMPILE_FLAGS "-v")
-
-ADD_FLEX_BISON_DEPENDENCY(zxbpp_lexer zxbpp_parser)
+# zxbpp — ZX BASIC Preprocessor
+#
+# Using a hand-written recursive-descent preprocessor rather than
+# flex/bison. The preprocessor is simple enough that a line-oriented
+# approach is more natural and easier to match the Python original's
+# exact output format. Flex/bison will be used for the assembler and
+# compiler parser in later phases.
 
 add_executable(zxbpp
     main.c
-    ${FLEX_zxbpp_lexer_OUTPUTS}
-    ${BISON_zxbpp_parser_OUTPUTS}
+    preproc.c
 )
 
 target_include_directories(zxbpp PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_BINARY_DIR}
 )
 
 target_link_libraries(zxbpp PRIVATE zxbasic_common)
