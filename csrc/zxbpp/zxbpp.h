@@ -100,6 +100,9 @@ typedef struct PreprocState {
      * (first production) or a #line directive (subsequent). */
     bool has_output;
 
+    /* ASM mode: inside asm..end asm block, comment char is ; not ' */
+    bool in_asm;
+
     /* Error output */
     FILE *err_file;
 } PreprocState;

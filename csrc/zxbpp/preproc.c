@@ -51,6 +51,7 @@ void preproc_init(PreprocState *pp)
     pp->error_count = 0;
     pp->expect_warnings = 0;
     pp->has_output = false;
+    pp->in_asm = false;
     pp->err_file = stderr;
 }
 
@@ -1193,10 +1194,11 @@ static void process_directive(PreprocState *pp, const char *directive)
  * BASIC comment stripping
  * ---------------------------------------------------------------- */
 
-/* Check if a line is a BASIC comment (REM or starts with ').
- * Returns pointer to start of comment, or NULL if not a comment-only line.
- * Also handles lines that ARE content but have trailing comments. */
-static const char *find_basic_comment(const char *line)
+/* Find the start of a comment in a line.
+ * In BASIC mode: ' or REM starts a comment.
+ * In ASM mode: ; starts a comment, but ' is a valid token (e.g. af').
+ * Returns pointer to start of comment, or NULL if none found. */
+static const char *find_comment(const char *line, bool in_asm)
 {
     const char *p = line;
     bool in_string = false;
@@ -1205,17 +1207,20 @@ static const char *find_basic_comment(const char *line)
         if (*p == '"') {
             in_string = !in_string;
         } else if (!in_string) {
-            /* Check for ' comment (apostrophe) */
-            if (*p == '\'') {
-                return p;
-            }
-            /* Check for REM keyword */
-            if ((p[0] == 'R' || p[0] == 'r') &&
-                (p[1] == 'E' || p[1] == 'e') &&
-                (p[2] == 'M' || p[2] == 'm') &&
-                (p == line || !is_id_char(p[-1])) &&
-                !is_id_char(p[3])) {
-                return p;
+            if (in_asm) {
+                /* ASM mode: ; starts comment */
+                if (*p == ';') return p;
+            } else {
+                /* BASIC mode: ' starts comment */
+                if (*p == '\'') return p;
+                /* REM keyword */
+                if ((p[0] == 'R' || p[0] == 'r') &&
+                    (p[1] == 'E' || p[1] == 'e') &&
+                    (p[2] == 'M' || p[2] == 'm') &&
+                    (p == line || !is_id_char(p[-1])) &&
+                    !is_id_char(p[3])) {
+                    return p;
+                }
             }
         }
         p++;
@@ -1223,10 +1228,13 @@ static const char *find_basic_comment(const char *line)
     return NULL;
 }
 
-/* Check if a line is entirely a comment (only whitespace before REM/') */
-static bool is_comment_only_line(const char *line)
+/* Check if a line is entirely a comment (only whitespace before comment start) */
+static bool is_comment_only_line(const char *line, bool in_asm)
 {
     const char *p = skip_ws(line);
+    if (in_asm) {
+        return *p == ';';
+    }
     if (*p == '\'') return true;
     if ((p[0] == 'R' || p[0] == 'r') &&
         (p[1] == 'E' || p[1] == 'e') &&
@@ -1235,6 +1243,46 @@ static bool is_comment_only_line(const char *line)
         return true;
     }
     return false;
+}
+
+/* Strip trailing comment from a line, returning a new arena-allocated string.
+ * Also strips trailing whitespace after removing the comment. */
+static char *strip_comment(PreprocState *pp, const char *line)
+{
+    const char *comment = find_comment(line, pp->in_asm);
+    if (!comment) return NULL; /* no comment found */
+
+    /* Copy everything before the comment */
+    size_t len = (size_t)(comment - line);
+    char *result = arena_strndup(&pp->arena, line, len);
+    /* Strip trailing whitespace */
+    int rlen = (int)len;
+    while (rlen > 0 && (result[rlen-1] == ' ' || result[rlen-1] == '\t'))
+        rlen--;
+    result[rlen] = '\0';
+    return result;
+}
+
+/* Check if line starts/ends ASM mode. Updates pp->in_asm.
+ * Returns true if this line is an asm/end asm boundary. */
+static void check_asm_boundary(PreprocState *pp, const char *line)
+{
+    const char *p = skip_ws(line);
+
+    if (pp->in_asm) {
+        /* Check for "end asm" (case-insensitive) */
+        if (strnicmp_local(p, "end", 3) == 0 && !is_id_char(p[3])) {
+            const char *after = skip_ws(p + 3);
+            if (strnicmp_local(after, "asm", 3) == 0 && !is_id_char(after[3])) {
+                pp->in_asm = false;
+            }
+        }
+    } else {
+        /* Check for "asm" (case-insensitive), not "end asm" */
+        if (strnicmp_local(p, "asm", 3) == 0 && !is_id_char(p[3])) {
+            pp->in_asm = true;
+        }
+    }
 }
 
 /* ----------------------------------------------------------------
@@ -1265,8 +1313,11 @@ static void process_line(PreprocState *pp, const char *line)
 
     if (!is_enabled(pp)) return;
 
+    /* Track ASM mode transitions */
+    check_asm_boundary(pp, line);
+
     /* Comment-only lines → blank line */
-    if (is_comment_only_line(line)) {
+    if (is_comment_only_line(line, pp->in_asm)) {
         strbuf_append_char(&pp->output, '\n');
         pp->has_output = true;
         return;
@@ -1280,8 +1331,12 @@ static void process_line(PreprocState *pp, const char *line)
         return;
     }
 
+    /* Strip inline comments from the line before macro expansion */
+    char *stripped = strip_comment(pp, line);
+    const char *to_expand = stripped ? stripped : line;
+
     /* Regular content line — expand macros and emit */
-    char *expanded = expand_macros_in_text(pp, line);
+    char *expanded = expand_macros_in_text(pp, to_expand);
     strbuf_append(&pp->output, expanded);
     /* If expansion contains newlines (from continuation macros),
      * add a #line directive to resync after the multi-line output */
