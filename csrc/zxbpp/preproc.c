@@ -1236,6 +1236,19 @@ static void handle_include(PreprocState *pp, const char *rest)
         return;
     }
 
+    /* Normalize: make path relative to CWD if possible */
+    {
+        char abs_resolved[PATH_MAX];
+        char abs_cwd[PATH_MAX];
+        if (realpath(resolved, abs_resolved) && getcwd(abs_cwd, sizeof(abs_cwd))) {
+            size_t cwd_len = strlen(abs_cwd);
+            if (strncmp(abs_resolved, abs_cwd, cwd_len) == 0 &&
+                abs_resolved[cwd_len] == '/') {
+                resolved = arena_strdup(&pp->arena, abs_resolved + cwd_len + 1);
+            }
+        }
+    }
+
     /* Check for #pragma once / include once */
     IncludeInfo *inc_info = hashmap_get(&pp->included, resolved);
     if (inc_info && (inc_info->once || once)) {
@@ -1344,15 +1357,17 @@ static bool handle_pragma(PreprocState *pp, const char *rest)
     }
 
     /* Pass other pragmas through to output */
-    strbuf_printf(&pp->output, "#pragma %s\n", rest);
+    const char *pr = skip_ws(rest);
+    strbuf_printf(&pp->output, "#pragma %s\n", pr);
     return false;
 }
 
 /* Handle: #require "file" */
 static void handle_require(PreprocState *pp, const char *rest)
 {
-    /* Pass through to output */
-    strbuf_printf(&pp->output, "#require %s\n", rest);
+    /* Pass through to output, trimming leading whitespace */
+    const char *p = skip_ws(rest);
+    strbuf_printf(&pp->output, "#require %s\n", p);
 }
 
 /* Handle: #init "name" */
