@@ -872,38 +872,236 @@ static void handle_ifdef(PreprocState *pp, const char *rest, bool is_ifndef)
     vec_push(pp->ifdef_stack, entry);
 }
 
+/* ----------------------------------------------------------------
+ * #if expression evaluator
+ *
+ * Grammar (matching Python PLY precedence):
+ *   expr = primary ( (== | != | < | <= | > | >=) primary )*
+ *   primary = atom ( (&& | ||) atom )*    [lower precedence]
+ *
+ * Actually the Python grammar has:
+ *   expr : macrocall | NUMBER | STRING | expr AND expr | expr OR expr
+ *        | expr EQ expr | expr NE expr | expr LT expr | ...
+ *        | LLP expr RRP
+ *
+ * We implement a recursive-descent parser with proper precedence:
+ *   or_expr   = and_expr ( '||' and_expr )*
+ *   and_expr  = cmp_expr ( '&&' cmp_expr )*
+ *   cmp_expr  = atom ( ('==' | '!=' | '<' | '<=' | '>' | '>=') atom )?
+ *   atom      = NUMBER | STRING | ID ['(' args ')'] | '(' or_expr ')'
+ *
+ * All values are strings. Comparison uses string equality.
+ * Boolean result: "1" or "0".
+ * ---------------------------------------------------------------- */
+
+typedef struct IfExprParser {
+    PreprocState *pp;
+    const char *pos;
+} IfExprParser;
+
+static void if_skip_ws(IfExprParser *ep)
+{
+    while (*ep->pos == ' ' || *ep->pos == '\t') ep->pos++;
+}
+
+static char *if_parse_or(IfExprParser *ep);
+
+static char *if_parse_atom(IfExprParser *ep)
+{
+    if_skip_ws(ep);
+
+    /* Parenthesized expression */
+    if (*ep->pos == '(') {
+        ep->pos++;
+        char *val = if_parse_or(ep);
+        if_skip_ws(ep);
+        if (*ep->pos == ')') ep->pos++;
+        return val;
+    }
+
+    /* String literal — keep quotes to match Python behavior */
+    if (*ep->pos == '"') {
+        StrBuf sb;
+        strbuf_init(&sb);
+        strbuf_append_char(&sb, *ep->pos); /* opening quote */
+        ep->pos++;
+        while (*ep->pos && *ep->pos != '"') {
+            strbuf_append_char(&sb, *ep->pos);
+            ep->pos++;
+        }
+        if (*ep->pos == '"') {
+            strbuf_append_char(&sb, *ep->pos); /* closing quote */
+            ep->pos++;
+        }
+        char *r = arena_strdup(&ep->pp->arena, strbuf_cstr(&sb));
+        strbuf_free(&sb);
+        return r;
+    }
+
+    /* Number */
+    if (*ep->pos >= '0' && *ep->pos <= '9') {
+        const char *start = ep->pos;
+        while (*ep->pos >= '0' && *ep->pos <= '9') ep->pos++;
+        return arena_strndup(&ep->pp->arena, start, (size_t)(ep->pos - start));
+    }
+
+    /* Identifier (possibly macro call) */
+    int id_len = scan_id(ep->pos);
+    if (id_len > 0) {
+        char *id = arena_strndup(&ep->pp->arena, ep->pos, (size_t)id_len);
+        ep->pos += id_len;
+        if_skip_ws(ep);
+
+        /* Function-like macro call? */
+        if (*ep->pos == '(') {
+            /* Build the full call text and expand */
+            StrBuf call;
+            strbuf_init(&call);
+            strbuf_append(&call, id);
+            /* Capture everything from ( to matching ) */
+            int depth = 0;
+            do {
+                if (*ep->pos == '(') depth++;
+                else if (*ep->pos == ')') depth--;
+                strbuf_append_char(&call, *ep->pos);
+                ep->pos++;
+            } while (*ep->pos && depth > 0);
+
+            char *expanded = expand_macros_in_text(ep->pp, strbuf_cstr(&call));
+            strbuf_free(&call);
+            /* Trim whitespace */
+            char *r = arena_strdup(&ep->pp->arena, expanded);
+            strip_trailing(r);
+            const char *tr = skip_ws(r);
+            return arena_strdup(&ep->pp->arena, tr);
+        }
+
+        /* Object-like macro — expand it */
+        char *expanded = expand_macros_in_text(ep->pp, id);
+        char *r = arena_strdup(&ep->pp->arena, expanded);
+        strip_trailing(r);
+        const char *tr = skip_ws(r);
+        return arena_strdup(&ep->pp->arena, tr);
+    }
+
+    return arena_strdup(&ep->pp->arena, "");
+}
+
+static long if_to_int(const char *s)
+{
+    if (!s || !*s) return 0;
+    char *end;
+    long val = strtol(s, &end, 10);
+    if (end == s) return 0;
+    return val;
+}
+
+static bool if_to_bool(const char *s)
+{
+    if (!s || !*s) return false;
+    /* If all digits, convert to int */
+    const char *p = s;
+    while (*p >= '0' && *p <= '9') p++;
+    if (*p == '\0' && p > s)
+        return strtol(s, NULL, 10) != 0;
+    /* Non-empty non-numeric string is truthy */
+    return true;
+}
+
+static char *if_parse_cmp(IfExprParser *ep)
+{
+    char *left = if_parse_atom(ep);
+    if_skip_ws(ep);
+
+    /* Check for comparison operators */
+    if (ep->pos[0] == '=' && ep->pos[1] == '=') {
+        ep->pos += 2;
+        char *right = if_parse_atom(ep);
+        return arena_strdup(&ep->pp->arena, strcmp(left, right) == 0 ? "1" : "0");
+    }
+    if ((ep->pos[0] == '!' && ep->pos[1] == '=') ||
+        (ep->pos[0] == '<' && ep->pos[1] == '>')) {
+        ep->pos += 2;
+        char *right = if_parse_atom(ep);
+        return arena_strdup(&ep->pp->arena, strcmp(left, right) != 0 ? "1" : "0");
+    }
+    if (ep->pos[0] == '<' && ep->pos[1] == '=') {
+        ep->pos += 2;
+        char *right = if_parse_atom(ep);
+        return arena_strdup(&ep->pp->arena, if_to_int(left) <= if_to_int(right) ? "1" : "0");
+    }
+    if (ep->pos[0] == '>' && ep->pos[1] == '=') {
+        ep->pos += 2;
+        char *right = if_parse_atom(ep);
+        return arena_strdup(&ep->pp->arena, if_to_int(left) >= if_to_int(right) ? "1" : "0");
+    }
+    if (ep->pos[0] == '<') {
+        ep->pos += 1;
+        char *right = if_parse_atom(ep);
+        return arena_strdup(&ep->pp->arena, if_to_int(left) < if_to_int(right) ? "1" : "0");
+    }
+    if (ep->pos[0] == '>') {
+        ep->pos += 1;
+        char *right = if_parse_atom(ep);
+        return arena_strdup(&ep->pp->arena, if_to_int(left) > if_to_int(right) ? "1" : "0");
+    }
+
+    return left;
+}
+
+static char *if_parse_and(IfExprParser *ep)
+{
+    char *left = if_parse_cmp(ep);
+    while (1) {
+        if_skip_ws(ep);
+        if (ep->pos[0] == '&' && ep->pos[1] == '&') {
+            ep->pos += 2;
+            char *right = if_parse_cmp(ep);
+            left = arena_strdup(&ep->pp->arena,
+                               (if_to_bool(left) && if_to_bool(right)) ? "1" : "0");
+        } else {
+            break;
+        }
+    }
+    return left;
+}
+
+static char *if_parse_or(IfExprParser *ep)
+{
+    char *left = if_parse_and(ep);
+    while (1) {
+        if_skip_ws(ep);
+        if (ep->pos[0] == '|' && ep->pos[1] == '|') {
+            ep->pos += 2;
+            char *right = if_parse_and(ep);
+            left = arena_strdup(&ep->pp->arena,
+                               (if_to_bool(left) || if_to_bool(right)) ? "1" : "0");
+        } else {
+            break;
+        }
+    }
+    return left;
+}
+
 /* Handle: #if EXPR */
 static void handle_if(PreprocState *pp, const char *rest)
 {
-    /* Simple expression evaluation: currently just check if it's
-     * a defined macro name or a numeric literal */
     const char *p = skip_ws(rest);
     bool result = false;
 
-    /* Try to evaluate as a simple expression */
-    int id_len = scan_id(p);
-    if (id_len > 0) {
-        char *id = arena_strndup(&pp->arena, p, (size_t)id_len);
-        /* Check if it's a macro and expand it */
-        if (preproc_is_defined(pp, id)) {
-            char *val = preproc_expand_macro(pp, id, 0, NULL);
-            if (val) {
-                /* Try to parse as number */
-                char *end;
-                long num = strtol(val, &end, 10);
-                if (end != val)
-                    result = (num != 0);
-                else
-                    result = (strlen(val) > 0);
-            }
-        }
-    } else {
-        /* Try as number */
-        char *end;
-        long num = strtol(p, &end, 10);
-        if (end != p)
-            result = (num != 0);
+    IfExprParser ep = { .pp = pp, .pos = p };
+    char *val = if_parse_or(&ep);
+
+    /* If numeric, check non-zero. If non-numeric, check if defined. */
+    const char *v = val;
+    bool is_number = (*v != '\0');
+    for (const char *c = v; *c; c++) {
+        if (*c < '0' || *c > '9') { is_number = false; break; }
     }
+    if (is_number && *v)
+        result = strtol(v, NULL, 10) != 0;
+    else if (*v)
+        result = preproc_is_defined(pp, v);
 
     if (!is_enabled(pp))
         result = false;
