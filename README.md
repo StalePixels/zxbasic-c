@@ -11,13 +11,18 @@ originally written in Python by Jose Rodriguez-Rosa (a.k.a. Boriel).
 
 ### What is this?
 
-This project is an effort to rewrite the ZX BASIC compiler toolchain — `zxbc` (compiler),
-`zxbasm` (assembler), and `zxbpp` (preprocessor) — from Python to C, producing a
+This is an **agentic porting experiment** — a test of whether an AI coding assistant can
+systematically port a non-trivial compiler (~38,500 lines of Python) to C, producing a
 drop-in replacement with **byte-for-byte identical output**.
 
-The original Python compiler (~38,500 lines) is being systematically ported to C,
-stage by stage, validated against the original's comprehensive test suite of 1,285+
-functional tests.
+The toolchain being ported — `zxbc` (compiler), `zxbasm` (assembler), and `zxbpp`
+(preprocessor) — is validated stage by stage against the original's comprehensive test
+suite of 1,285+ functional tests.
+
+The goal is not to produce a perfect piece of art software. It is to test the viability
+of AI-driven porting at this scale, with a practical end-goal: a C implementation of
+the compiler suitable for **embedding on [NextPi](https://www.specnext.com/)** and
+similar resource-constrained platforms where a Python runtime is undesirable.
 
 ### Who is doing this?
 
