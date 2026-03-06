@@ -52,6 +52,7 @@ void preproc_init(PreprocState *pp)
     pp->expect_warnings = 0;
     pp->has_output = false;
     pp->in_asm = false;
+    pp->in_block_comment = false;
     pp->err_file = stderr;
 }
 
@@ -1404,6 +1405,65 @@ static bool is_directive(const char *line)
  */
 static void process_line(PreprocState *pp, const char *line)
 {
+    /* Handle block comments (/' ... '/) */
+    if (pp->in_block_comment) {
+        /* Check if this line contains the closing '/ */
+        const char *close = strstr(line, "'/");
+        if (close) {
+            pp->in_block_comment = false;
+            /* Anything after '/ on this line is content */
+            const char *after = close + 2;
+            after = skip_ws(after);
+            if (*after) {
+                /* There's content after the block comment close */
+                process_line(pp, after);
+                return;
+            }
+        }
+        /* Inside block comment — emit blank line */
+        if (is_enabled(pp)) {
+            strbuf_append_char(&pp->output, '\n');
+            pp->has_output = true;
+        }
+        return;
+    }
+
+    /* Check for block comment start /' */
+    if (!pp->in_asm) {
+        const char *bc = strstr(line, "/'");
+        if (bc) {
+            /* Check if there's a closing '/ on the same line */
+            const char *close = strstr(bc + 2, "'/");
+            if (close) {
+                /* Single-line block comment — remove it and process rest */
+                StrBuf cleaned;
+                strbuf_init(&cleaned);
+                strbuf_append_n(&cleaned, line, (size_t)(bc - line));
+                strbuf_append(&cleaned, close + 2);
+                char *cl = arena_strdup(&pp->arena, strbuf_cstr(&cleaned));
+                strbuf_free(&cleaned);
+                process_line(pp, cl);
+                return;
+            }
+            /* Multi-line block comment starts here */
+            pp->in_block_comment = true;
+            /* Content before /' on this line */
+            if (bc > line) {
+                char *before = arena_strndup(&pp->arena, line, (size_t)(bc - line));
+                const char *t = skip_ws(before);
+                if (*t) {
+                    process_line(pp, before);
+                    return;
+                }
+            }
+            if (is_enabled(pp)) {
+                strbuf_append_char(&pp->output, '\n');
+                pp->has_output = true;
+            }
+            return;
+        }
+    }
+
     if (is_directive(line)) {
         process_directive(pp, line);
         return;
@@ -1495,12 +1555,20 @@ int preproc_file(PreprocState *pp, const char *filename)
         bool continued = false;
 
         if (curlen > 0) {
-            /* Backslash continuation (for #define) */
             char last = cur[curlen - 1];
+            /* Backslash continuation (for #define) */
             if (last == '\\') {
                 continued = true;
                 /* Replace backslash with newline to preserve line structure */
                 linebuf.data[linebuf.len - 1] = '\n';
+            }
+            /* Underscore continuation (BASIC line continuation).
+             * Only when _ is at end of line AND is not part of an identifier.
+             * i.e., preceded by non-identifier char or is the only char. */
+            else if (last == '_' && (curlen == 1 || !is_id_char(cur[curlen - 2]))) {
+                continued = true;
+                /* Keep the _ and append \n */
+                strbuf_append_char(&linebuf, '\n');
             }
         }
 

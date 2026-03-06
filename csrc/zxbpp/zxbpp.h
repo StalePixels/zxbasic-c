@@ -103,6 +103,9 @@ typedef struct PreprocState {
     /* ASM mode: inside asm..end asm block, comment char is ; not ' */
     bool in_asm;
 
+    /* Block comment: inside /' ... '/ multi-line comment */
+    bool in_block_comment;
+
     /* Error output */
     FILE *err_file;
 } PreprocState;
