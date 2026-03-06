@@ -1,0 +1,64 @@
+# Check for upstream Python changes weekly and open a PR if found
+name: Sync Upstream
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'  # Every Monday at 06:00 UTC
+  workflow_dispatch:       # Manual trigger from Actions tab
+
+jobs:
+  check-upstream:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Add upstream remote
+        run: |
+          git remote add python-upstream https://github.com/boriel-basic/zxbasic.git || true
+          git fetch python-upstream main
+
+      - name: Check for changes
+        id: check
+        run: |
+          DIFF=$(git diff HEAD...python-upstream/main -- src/ tests/functional/ 2>/dev/null | head -1)
+          if [ -n "$DIFF" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Upstream has changes in src/ or tests/"
+            git diff --stat HEAD...python-upstream/main -- src/ tests/functional/
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No upstream changes detected"
+          fi
+
+      - name: Apply upstream changes
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          git checkout python-upstream/main -- src/ tests/functional/
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Create PR
+        if: steps.check.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: sync/upstream-python
+          delete-branch: true
+          title: "sync: update Python reference from upstream boriel-basic/zxbasic"
+          body: |
+            Automated sync from [boriel-basic/zxbasic](https://github.com/boriel-basic/zxbasic) `master`.
+
+            This PR updates `src/` and `tests/functional/` to match the latest upstream Python source.
+
+            **Review checklist:**
+            - [ ] Check if any changed Python files affect components we've already ported (zxbpp)
+            - [ ] Run `compare_python_c.sh` to verify C port still matches
+            - [ ] Update C port if upstream behaviour changed
+            - [ ] Update test counts in README badge if tests were added/removed
+          labels: upstream-sync
