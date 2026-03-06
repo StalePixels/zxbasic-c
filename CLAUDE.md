@@ -76,14 +76,11 @@ The gold standard is **each C binary as a drop-in replacement for its Python cou
 
 ### Python Reference (Ground Truth)
 
-The original Python toolchain is the source of truth. Use brew Python 3.12 to run any component:
+The original Python toolchain is the source of truth. Use Python 3.12+ to run any component:
 
 ```bash
-# Python 3.12 via Homebrew
-/opt/homebrew/bin/python3.12
-
 # Run any Python component from project root:
-/opt/homebrew/bin/python3.12 -c "
+python3 -c "
 import sys; sys.path.insert(0, '.')
 from src.<component>.<component> import entry_point
 sys.argv = ['<component>', '<input_file>']

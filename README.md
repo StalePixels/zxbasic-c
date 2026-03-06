@@ -70,7 +70,10 @@ This builds `csrc/build/zxbpp/zxbpp` — the C preprocessor binary.
 Want to see for yourself that C matches Python? You'll need Python 3.12+:
 
 ```bash
-brew install python@3.12   # macOS
+# Install Python 3.12+ if you don't have it:
+#   macOS:   brew install python@3.12
+#   Ubuntu:  sudo apt install python3.12
+#   Fedora:  sudo dnf install python3.12
 
 # Run both Python and C on every test, diff the outputs:
 ./csrc/tests/compare_python_c.sh ./csrc/build/zxbpp/zxbpp tests/functional/zxbpp
