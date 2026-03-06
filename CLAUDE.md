@@ -112,10 +112,16 @@ cd csrc/build && cmake .. && make -j4 && cd ../..
 
 ### Test File Conventions
 
-- `.bi` / `.bas` / `.asm` — Input files
-- `.out` — Expected stdout for normal tests
-- `.err` — Expected error description for error tests (expect non-zero exit)
+Each component has its own input/output file types:
+
+| Component | Input | Expected Output | Test Dir |
+|-----------|-------|-----------------|----------|
+| zxbpp | `.bi` | `.out` (stdout), `.err` (errors) | `tests/functional/zxbpp/` |
+| zxbasm | `.asm` | `.bin` (binary) | `tests/functional/asm/` |
+| zxbc | `.bas` | varies (`.asm`, `.bin`, `.tap`, etc.) | `tests/functional/arch/` |
+
 - C binaries must accept **identical CLI flags** as the Python originals
+- Python test runner: `tests/functional/test.py` (used by pytest via `test_prepro.py`, `test_asm.py`, `test_basic.py`)
 
 ## Pitfalls
 
