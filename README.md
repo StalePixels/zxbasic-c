@@ -161,6 +161,20 @@ suite — with every commit pushed in real-time for full transparency.
 
 See **[plan.md](plan.md)** for the full implementation plan with detailed breakdown.
 
+## 🔄 Upstream Sync
+
+The `src/` and `tests/functional/` directories are a read-only mirror of the
+canonical Python source at [boriel-basic/zxbasic](https://github.com/boriel-basic/zxbasic).
+A weekly CI job checks for upstream changes and opens a PR automatically if
+anything has moved. You can also sync manually:
+
+```bash
+./csrc/scripts/sync-upstream.sh
+```
+
+This keeps our Python reference and test suite in lockstep with Boriel's latest,
+so the C port is always validated against the real thing. 🎯
+
 ## 📜 Original Project
 
 Copyleft (K) 2008, Jose Rodriguez-Rosa (a.k.a. Boriel) <http://www.boriel.com>
@@ -171,6 +185,6 @@ directories `library/` and `library-asm`, which are licensed under
 [MIT license](https://en.wikipedia.org/wiki/MIT_License) unless otherwise
 specified in the files themselves.
 
-- 🏠 [Original ZX BASIC project](https://github.com/boriel-basic/zxbasic)
+- 🏠 [Upstream source of truth](https://github.com/boriel-basic/zxbasic) — the canonical Python project
 - 📖 [ZX BASIC documentation](https://zxbasic.readthedocs.io/en/latest/)
 - 💬 [Community forum](https://forum.boriel.com/)
