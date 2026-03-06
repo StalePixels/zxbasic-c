@@ -397,14 +397,15 @@ static int parse_macro_args(const char *text, int start, char **argv, int max_ar
             if (depth == 0) {
                 /* End of args */
                 if (argc < max_args) {
-                    char *s = strbuf_detach(&arg);
+                    char *original = strbuf_detach(&arg);
+                    char *s = original;
                     /* Trim whitespace */
                     while (*s == ' ' || *s == '\t') s++;
                     char *end = s + strlen(s);
                     while (end > s && (end[-1] == ' ' || end[-1] == '\t')) end--;
                     *end = '\0';
                     argv[argc] = arena_strdup(arena, s);
-                    free(s - (s - strbuf_cstr(&arg))); /* free original */
+                    free(original);
                 }
                 argc++;
                 pos++; /* skip ')' */
@@ -414,9 +415,11 @@ static int parse_macro_args(const char *text, int start, char **argv, int max_ar
             }
         } else if (text[pos] == ',' && depth == 1) {
             if (argc < max_args) {
-                char *s = strbuf_detach(&arg);
+                char *original = strbuf_detach(&arg);
+                char *s = original;
                 while (*s == ' ' || *s == '\t') s++;
                 argv[argc] = arena_strdup(arena, s);
+                free(original);
             }
             argc++;
             strbuf_init(&arg);
