@@ -435,7 +435,35 @@ static int parse_macro_args(const char *text, int start, char **argv, int max_ar
     return argc;
 }
 
-/* Substitute parameters in macro body */
+/* Stringize an argument: wrap in quotes, doubling any internal quotes */
+static char *stringize_arg(PreprocState *pp, const char *arg)
+{
+    StrBuf sb;
+    strbuf_init(&sb);
+    strbuf_append_char(&sb, '"');
+    for (const char *p = arg; *p; p++) {
+        if (*p == '"')
+            strbuf_append_char(&sb, '"'); /* double the quote */
+        strbuf_append_char(&sb, *p);
+    }
+    strbuf_append_char(&sb, '"');
+    char *r = arena_strdup(&pp->arena, strbuf_cstr(&sb));
+    strbuf_free(&sb);
+    return r;
+}
+
+/* Find which parameter index matches an identifier, or -1 */
+static int find_param(const MacroDef *def, const char *id, int id_len)
+{
+    for (int p = 0; p < def->num_params; p++) {
+        if ((int)strlen(def->param_names[p]) == id_len &&
+            strncmp(id, def->param_names[p], (size_t)id_len) == 0)
+            return p;
+    }
+    return -1;
+}
+
+/* Substitute parameters in macro body, handling ## (token paste) and # (stringize) */
 static char *substitute_params(PreprocState *pp, const MacroDef *def,
                                int argc, char **argv)
 {
@@ -448,25 +476,68 @@ static char *substitute_params(PreprocState *pp, const MacroDef *def,
     int i = 0;
 
     while (body[i]) {
-        /* Check for parameter name */
+        /* Check for stringize operator: # followed by parameter name */
+        if (body[i] == '#' && body[i+1] != '#') {
+            i++; /* skip # */
+            /* Skip whitespace after # */
+            while (body[i] == ' ' || body[i] == '\t') i++;
+            int id_len = scan_id(&body[i]);
+            if (id_len > 0) {
+                int pidx = find_param(def, &body[i], id_len);
+                if (pidx >= 0 && pidx < argc && argv[pidx]) {
+                    char *s = stringize_arg(pp, argv[pidx]);
+                    strbuf_append(&result, s);
+                } else {
+                    /* Not a parameter — output # and the identifier */
+                    strbuf_append_char(&result, '#');
+                    strbuf_append_n(&result, &body[i], (size_t)id_len);
+                }
+                i += id_len;
+            } else {
+                strbuf_append_char(&result, '#');
+            }
+            continue;
+        }
+
+        /* Check for parameter name or token paste */
         int id_len = scan_id(&body[i]);
         if (id_len > 0) {
-            /* Check if it matches a parameter */
-            bool found = false;
-            for (int p = 0; p < def->num_params; p++) {
-                if ((int)strlen(def->param_names[p]) == id_len &&
-                    strncmp(&body[i], def->param_names[p], (size_t)id_len) == 0) {
-                    /* Substitute with argument value */
-                    if (p < argc && argv[p])
-                        strbuf_append(&result, argv[p]);
-                    found = true;
-                    break;
-                }
-            }
-            if (!found) {
+            int pidx = find_param(def, &body[i], id_len);
+            const char *value;
+            if (pidx >= 0 && pidx < argc && argv[pidx])
+                value = argv[pidx];
+            else if (pidx >= 0)
+                value = "";
+            else
+                value = NULL;
+
+            if (value) {
+                strbuf_append(&result, value);
+            } else {
                 strbuf_append_n(&result, &body[i], (size_t)id_len);
             }
             i += id_len;
+
+            /* Check for ## (token paste) after this token */
+            const char *after = &body[i];
+            while (*after == ' ' || *after == '\t') after++;
+            if (after[0] == '#' && after[1] == '#') {
+                /* Token paste: strip trailing whitespace from result,
+                 * skip ## and leading whitespace, paste next token */
+                while (result.len > 0 && (result.data[result.len-1] == ' ' ||
+                       result.data[result.len-1] == '\t'))
+                    result.len--;
+                i = (int)(after - body) + 2; /* skip ## */
+                while (body[i] == ' ' || body[i] == '\t') i++;
+                /* The next token will be appended directly (pasted) */
+            }
+        } else if (body[i] == '#' && body[i+1] == '#') {
+            /* ## not preceded by identifier — strip trailing ws from result */
+            while (result.len > 0 && (result.data[result.len-1] == ' ' ||
+                   result.data[result.len-1] == '\t'))
+                result.len--;
+            i += 2; /* skip ## */
+            while (body[i] == ' ' || body[i] == '\t') i++;
         } else {
             strbuf_append_char(&result, body[i]);
             i++;
