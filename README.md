@@ -2,6 +2,8 @@
 ![Boriel ZX Basic](img/zxbasic_logo.png)
 
 [![license](https://img.shields.io/badge/License-AGPLv3-blue.svg)](./LICENSE.txt)
+[![C Build](https://github.com/StalePixels/zxbasic-c/actions/workflows/c-build.yml/badge.svg)](https://github.com/StalePixels/zxbasic-c/actions/workflows/c-build.yml)
+[![zxbpp tests](https://img.shields.io/badge/zxbpp_tests-96%2F96_passing-brightgreen)](#-phase-1--preprocessor-done)
 
 ZX BASIC — C Port 🚀
 ---------------------

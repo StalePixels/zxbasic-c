@@ -1,5 +1,5 @@
 # Build and test the C port, produce release binaries for multiple platforms
-name: C Port — Build & Test
+name: C Build
 
 on:
   push:
@@ -31,7 +31,7 @@ jobs:
       - name: Build
         run: cmake --build csrc/build -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
 
-      - name: Run tests
+      - name: Run zxbpp tests
         run: ./csrc/tests/run_zxbpp_tests.sh ./csrc/build/zxbpp/zxbpp tests/functional/zxbpp
 
       - name: Upload binary
@@ -42,6 +42,7 @@ jobs:
 
   # Compare against Python ground truth (single platform is sufficient)
   python-comparison:
+    name: Python Ground Truth
     runs-on: ubuntu-latest
     needs: build-and-test
 
@@ -59,7 +60,7 @@ jobs:
           cmake -S csrc -B csrc/build -DCMAKE_BUILD_TYPE=Release
           cmake --build csrc/build -j$(nproc)
 
-      - name: Run Python vs C comparison
+      - name: Compare Python vs C output
         run: ./csrc/tests/compare_python_c.sh ./csrc/build/zxbpp/zxbpp tests/functional/zxbpp
 
   # Create release binaries when a tag is pushed
