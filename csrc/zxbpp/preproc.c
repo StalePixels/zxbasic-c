@@ -666,12 +666,30 @@ static void handle_define(PreprocState *pp, const char *rest)
         }
         p = skip_ws(p);
 
-        /* Strip comment from body */
+        /* Parse body: handle comments and continuation lines.
+         * In BASIC, ' starts a comment. If a continuation (\) was in a
+         * comment, it was replaced with \n during line joining. The body
+         * continues on the next "line" (after the \n). */
         StrBuf body;
         strbuf_init(&body);
-        while (*p && *p != '\'' && *p != '\n' && *p != '\r') {
-            strbuf_append_char(&body, *p);
-            p++;
+        while (*p) {
+            if (*p == '\'') {
+                /* Comment — skip until \n or end of string */
+                p++;
+                while (*p && *p != '\n') p++;
+                /* If \n, body continues on next continuation line */
+                if (*p == '\n') {
+                    strbuf_append_char(&body, '\n');
+                    p++;
+                }
+            } else if (*p == '\n') {
+                /* Continuation line boundary without comment */
+                strbuf_append_char(&body, '\n');
+                p++;
+            } else {
+                strbuf_append_char(&body, *p);
+                p++;
+            }
         }
 
         /* Trim trailing whitespace from body */
@@ -689,12 +707,25 @@ static void handle_define(PreprocState *pp, const char *rest)
         }
         p = skip_ws(p);
 
-        /* Body is the rest of the line (strip comment) */
+        /* Parse body with comment/continuation handling */
         StrBuf body;
         strbuf_init(&body);
-        while (*p && *p != '\'' && *p != '\n' && *p != '\r') {
-            strbuf_append_char(&body, *p);
-            p++;
+        while (*p) {
+            if (*p == '\'') {
+                /* Comment — skip until \n or end of string */
+                p++;
+                while (*p && *p != '\n') p++;
+                if (*p == '\n') {
+                    strbuf_append_char(&body, '\n');
+                    p++;
+                }
+            } else if (*p == '\n') {
+                strbuf_append_char(&body, '\n');
+                p++;
+            } else {
+                strbuf_append_char(&body, *p);
+                p++;
+            }
         }
 
         char *body_str = strbuf_detach(&body);
@@ -1252,6 +1283,11 @@ static void process_line(PreprocState *pp, const char *line)
     /* Regular content line — expand macros and emit */
     char *expanded = expand_macros_in_text(pp, line);
     strbuf_append(&pp->output, expanded);
+    /* If expansion contains newlines (from continuation macros),
+     * add a #line directive to resync after the multi-line output */
+    if (strchr(expanded, '\n') != NULL) {
+        strbuf_printf(&pp->output, "\n#line %d", pp->current_line + 1);
+    }
     strbuf_append_char(&pp->output, '\n');
     pp->has_output = true;
 }
@@ -1309,14 +1345,9 @@ int preproc_file(PreprocState *pp, const char *filename)
             /* Backslash continuation (for #define) */
             char last = cur[curlen - 1];
             if (last == '\\') {
-                /* Remove backslash, continue to next line */
-                /* But we need a mutable copy */
-                /* Actually just mark for continuation */
                 continued = true;
-                /* Remove the trailing backslash */
-                /* HACK: directly modify length */
-                ((StrBuf *)&linebuf)->len--;
-                ((StrBuf *)&linebuf)->data[linebuf.len] = '\0';
+                /* Replace backslash with newline to preserve line structure */
+                linebuf.data[linebuf.len - 1] = '\n';
             }
         }
 
