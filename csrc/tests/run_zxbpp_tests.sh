@@ -23,6 +23,21 @@ ERRORS=""
 ZXBPP=$(cd "$(dirname "$ZXBPP")" && echo "$(pwd)/$(basename "$ZXBPP")")
 TEST_DIR=$(cd "$TEST_DIR" && pwd)
 
+# Find project root (where src/lib exists)
+PROJECT_ROOT="$TEST_DIR"
+while [ "$PROJECT_ROOT" != "/" ]; do
+    if [ -d "$PROJECT_ROOT/src/lib" ]; then
+        break
+    fi
+    PROJECT_ROOT=$(dirname "$PROJECT_ROOT")
+done
+
+# Build include paths for standard library
+INCLUDE_ARGS=""
+if [ -d "$PROJECT_ROOT/src/lib/arch/zx48k/stdlib" ]; then
+    INCLUDE_ARGS="-I $PROJECT_ROOT/src/lib/arch/zx48k/stdlib"
+fi
+
 cd "$TEST_DIR"
 
 for bi_file in *.bi; do
@@ -38,13 +53,13 @@ for bi_file in *.bi; do
     # Create temp file for actual output
     actual=$(mktemp /tmp/zxbpp_test_XXXXXX)
 
-    # Run zxbpp
-    if "$ZXBPP" "$bi_file" -o "$actual" -e /dev/null 2>/dev/null; then
-        # Compare output, stripping blank lines and trailing whitespace
-        # Also normalize path references (replace build paths with /zxbasic)
+    # Run zxbpp with include paths
+    if "$ZXBPP" "$bi_file" -o "$actual" -e /dev/null $INCLUDE_ARGS 2>/dev/null; then
+        # Normalize paths in both expected and actual output:
+        # Replace project-root paths with /zxbasic and vice versa
         if diff -u \
             <(sed 's/[[:space:]]*$//' "$out_file" | grep -v '^$') \
-            <(sed 's/[[:space:]]*$//' "$actual" | grep -v '^$') \
+            <(sed "s|${PROJECT_ROOT}|/zxbasic|g" "$actual" | sed 's/[[:space:]]*$//' | grep -v '^$') \
             > /dev/null 2>&1; then
             PASS=$((PASS + 1))
         else
@@ -54,7 +69,7 @@ for bi_file in *.bi; do
             echo "--- FAIL: ${test_name} ---"
             diff -u \
                 <(sed 's/[[:space:]]*$//' "$out_file" | grep -v '^$') \
-                <(sed 's/[[:space:]]*$//' "$actual" | grep -v '^$') \
+                <(sed "s|${PROJECT_ROOT}|/zxbasic|g" "$actual" | sed 's/[[:space:]]*$//' | grep -v '^$') \
                 || true
             echo ""
         fi

@@ -1192,12 +1192,45 @@ static void handle_include(PreprocState *pp, const char *rest)
         if (*p == '"') p++;
     } else {
         /* Could be a macro that expands to a filename */
-        preproc_error(pp, "expected filename after #include");
-        return;
+        char *expanded = expand_macros_in_text(pp, p);
+        if (expanded) {
+            expanded = arena_strdup(&pp->arena, expanded);
+            strip_trailing(expanded);
+            const char *ep = skip_ws(expanded);
+            if (*ep == '<') {
+                is_system = true;
+                ep++;
+                int fi = 0;
+                while (*ep && *ep != '>' && fi < (int)sizeof(filename) - 1)
+                    filename[fi++] = *ep++;
+                filename[fi] = '\0';
+            } else if (*ep == '"') {
+                ep++;
+                int fi = 0;
+                while (*ep && *ep != '"' && fi < (int)sizeof(filename) - 1)
+                    filename[fi++] = *ep++;
+                filename[fi] = '\0';
+            } else {
+                preproc_error(pp, "expected filename after #include");
+                return;
+            }
+        } else {
+            preproc_error(pp, "expected filename after #include");
+            return;
+        }
     }
 
+    /* Convert Windows-style backslash paths to forward slash */
+    for (int fi = 0; filename[fi]; fi++) {
+        if (filename[fi] == '\\') filename[fi] = '/';
+    }
+
+    /* Strip leading ./ from filename */
+    char *fn = filename;
+    while (fn[0] == '.' && fn[1] == '/') fn += 2;
+
     /* Resolve path */
-    char *resolved = resolve_include(pp, filename, is_system);
+    char *resolved = resolve_include(pp, fn, is_system);
     if (!resolved) {
         preproc_error(pp, "cannot find include file \"%s\"", filename);
         return;
