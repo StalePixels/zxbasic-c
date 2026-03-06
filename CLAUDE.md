@@ -103,7 +103,7 @@ Always validate against Python when adding features — don't trust assumptions.
 cd csrc/build && cmake .. && make -j4 && cd ../..
 ./csrc/tests/run_zxbpp_tests.sh ./csrc/build/zxbpp/zxbpp tests/functional/zxbpp
 
-# Full Python comparison (slower, requires Python 3.12):
+# Full Python comparison (slower, requires Python 3.11+):
 ./csrc/tests/compare_python_c.sh ./csrc/build/zxbpp/zxbpp tests/functional/zxbpp
 ```
 
@@ -119,6 +119,19 @@ Each component has its own input/output file types:
 
 - C binaries must accept **identical CLI flags** as the Python originals
 - Python test runner: `tests/functional/test.py` (used by pytest via `test_prepro.py`, `test_asm.py`, `test_basic.py`)
+
+## Keeping Things Up To Date
+
+This project has several living documents and CI artefacts that MUST stay in sync with the code. When you add features, fix bugs, or complete phases:
+
+- **README.md** — Update the status table, test counts, and phase progress. The `zxbpp tests` badge is static (`96%2F96` etc.) — update the number when tests are added. The `C Build` badge is live from CI.
+- **CLAUDE.md** (this file) — Update test file conventions table, test commands, and any new component patterns as phases are completed.
+- **plan.md** — Check off completed items as phases progress.
+- **docs/plans/** — WIP progress files for active branches.
+- **CI workflow** (`.github/workflows/c-build.yml`) — Add new test steps as components are completed (e.g. `run_zxbasm_tests.sh` for Phase 2). The workflow builds on Linux x86_64, macOS ARM64, and macOS x86_64, runs tests, and does a Python ground-truth comparison.
+- **Test harnesses** (`csrc/tests/`) — Each new component needs its own `run_<component>_tests.sh` and an entry in `compare_python_c.sh` (or a component-specific comparison script).
+
+If test counts change, the README badge lies until you fix it. Don't leave it lying.
 
 ## Pitfalls
 
