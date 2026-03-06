@@ -1,5 +1,10 @@
 cmake_minimum_required(VERSION 3.16)
-project(zxbasic-c C)
+
+# Read version from VERSION file
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" ZXBASIC_C_VERSION)
+string(STRIP "${ZXBASIC_C_VERSION}" ZXBASIC_C_VERSION)
+
+project(zxbasic-c VERSION 0.1.0 LANGUAGES C)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -17,6 +22,9 @@ endif()
 
 # Common library (shared utilities)
 add_subdirectory(common)
+
+# Pass version to all targets
+add_compile_definitions(ZXBASIC_C_VERSION="${ZXBASIC_C_VERSION}")
 
 # Preprocessor (zxbpp)
 add_subdirectory(zxbpp)

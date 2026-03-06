@@ -24,6 +24,7 @@ static void usage(const char *progname)
     fprintf(stderr, "  -I, --include-path DIR     Add include search path\n");
     fprintf(stderr, "  --arch ARCH          Target architecture (default: zx48k)\n");
     fprintf(stderr, "  --expect-warnings N  Suppress first N warnings\n");
+    fprintf(stderr, "  --version            Show version\n");
     fprintf(stderr, "  -h, --help           Show this help\n");
 }
 
@@ -52,6 +53,7 @@ int main(int argc, char *argv[])
         {"include-path",    required_argument, NULL, 'I'},
         {"arch",            required_argument, NULL, 'A'},
         {"expect-warnings", required_argument, NULL, 'W'},
+        {"version",         no_argument,       NULL, 'V'},
         {"help",            no_argument,       NULL, 'h'},
         {NULL, 0, NULL, 0}
     };
@@ -82,6 +84,9 @@ int main(int argc, char *argv[])
         case 'W':
             expect_warnings = atoi(optarg);
             break;
+        case 'V':
+            printf("zxbpp %s (C port)\n", ZXBASIC_C_VERSION);
+            return 0;
         case 'h':
             usage(argv[0]);
             return 0;

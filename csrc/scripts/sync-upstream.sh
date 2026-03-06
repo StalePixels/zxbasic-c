@@ -18,7 +18,7 @@
 
 set -euo pipefail
 
-UPSTREAM_BRANCH="${1:-master}"
+UPSTREAM_BRANCH="${1:-main}"
 REMOTE="python-upstream"
 
 # Ensure remote exists

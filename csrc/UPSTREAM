@@ -1,0 +1,5 @@
+upstream: boriel-basic/zxbasic
+version: 1.18.7
+commit: 9c0693f83651e51f4ad114d977506ce0414c4a34
+branch: main
+synced: 2026-03-06
