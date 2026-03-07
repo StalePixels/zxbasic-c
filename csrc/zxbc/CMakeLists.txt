@@ -2,6 +2,7 @@
 
 add_executable(zxbc
     main.c
+    args.c
     compiler.c
     ast.c
     errmsg.c

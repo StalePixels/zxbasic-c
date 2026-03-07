@@ -8,6 +8,7 @@
 #define ZXBC_OPTIONS_H
 
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 
 /* ----------------------------------------------------------------
@@ -88,7 +89,26 @@ typedef struct CompilerOptions {
 
     /* Parse-only mode (no output generated) */
     bool parse_only;
+
+    /* Bitmask of options explicitly set on the command line.
+     * Used to implement Python's "ignore None" semantics: config file values
+     * are only applied for fields NOT set on the cmdline. */
+    uint32_t cmdline_set;
 } CompilerOptions;
+
+/* Bitmask flags for cmdline_set — tracks which options were explicitly given */
+#define OPT_SET_ORG              (1u << 0)
+#define OPT_SET_OPT_LEVEL        (1u << 1)
+#define OPT_SET_AUTORUN          (1u << 2)
+#define OPT_SET_BASIC            (1u << 3)
+#define OPT_SET_DEBUG            (1u << 4)
+#define OPT_SET_HEAP_SIZE        (1u << 5)
+#define OPT_SET_ARRAY_BASE       (1u << 6)
+#define OPT_SET_STRING_BASE      (1u << 7)
+#define OPT_SET_CASE_INS         (1u << 8)
+#define OPT_SET_SINCLAIR         (1u << 9)
+#define OPT_SET_STRICT           (1u << 10)
+#define OPT_SET_OUTPUT_TYPE      (1u << 11)
 
 /* Initialize options with defaults matching Python's config.init() */
 void compiler_options_init(CompilerOptions *opts);

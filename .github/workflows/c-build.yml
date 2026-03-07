@@ -55,6 +55,8 @@ jobs:
           ./tests/test_types
           ./tests/test_ast
           ./tests/test_symboltable
+          cd ../..
+          ./csrc/build/tests/test_cmdline
 
       - name: Run cmdline tests (Unix)
         if: runner.os != 'Windows'
@@ -78,6 +80,8 @@ jobs:
           ./tests/Release/test_types.exe
           ./tests/Release/test_ast.exe
           ./tests/Release/test_symboltable.exe
+          cd ../..
+          ./csrc/build/tests/Release/test_cmdline.exe
 
       - name: Upload zxbpp binary (Unix)
         if: runner.os != 'Windows'

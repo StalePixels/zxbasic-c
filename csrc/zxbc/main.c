@@ -4,173 +4,15 @@
  * Ported from src/zxbc/zxbc.py and src/zxbc/args_parser.py
  */
 #include "zxbc.h"
+#include "args.h"
 #include "parser.h"
 #include "errmsg.h"
 #include "zxbpp.h"
-#include "ya_getopt.h"
-#include "compat.h"
 #include "cwalk.h"
-
-#include "utils.h"
-#include "config_file.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-#ifndef ZXBASIC_C_VERSION
-#define ZXBASIC_C_VERSION "dev"
-#endif
-
-/* Config file callback — applies key=value pairs to CompilerOptions */
-static bool config_apply_option(const char *key, const char *value, void *userdata) {
-    CompilerOptions *opts = (CompilerOptions *)userdata;
-
-    if (strcmp(key, "optimization_level") == 0 || strcmp(key, "optimize") == 0) {
-        opts->optimization_level = atoi(value);
-    } else if (strcmp(key, "org") == 0) {
-        parse_int(value, &opts->org);
-    } else if (strcmp(key, "heap_size") == 0) {
-        opts->heap_size = atoi(value);
-    } else if (strcmp(key, "debug_level") == 0) {
-        opts->debug_level = atoi(value);
-    } else if (strcmp(key, "array_base") == 0) {
-        opts->array_base = atoi(value);
-    } else if (strcmp(key, "string_base") == 0) {
-        opts->string_base = atoi(value);
-    } else if (strcmp(key, "case_insensitive") == 0) {
-        opts->case_insensitive = (strcmp(value, "true") == 0 || strcmp(value, "1") == 0);
-    } else if (strcmp(key, "strict") == 0) {
-        opts->strict = (strcmp(value, "true") == 0 || strcmp(value, "1") == 0);
-    } else if (strcmp(key, "sinclair") == 0) {
-        opts->sinclair = (strcmp(value, "true") == 0 || strcmp(value, "1") == 0);
-    } else if (strcmp(key, "output_file_type") == 0) {
-        opts->output_file_type = strdup(value);
-    }
-    /* Additional config keys can be added as needed */
-    return true;
-}
-
-static int config_load_zxbc_options(const char *filename, CompilerOptions *opts) {
-    return config_load_section(filename, "zxbc", config_apply_option, opts);
-}
-
-static void print_usage(const char *prog) {
-    fprintf(stderr,
-        "Usage: %s [options] PROGRAM.bas\n"
-        "\n"
-        "ZX BASIC Compiler v%s\n"
-        "\n"
-        "Options:\n"
-        "  -h, --help              Show this help message\n"
-        "  -d, --debug             Enable debug output (repeat for more)\n"
-        "  -O, --optimize LEVEL    Optimization level (0=none)\n"
-        "  -o, --output FILE       Output file\n"
-        "  -f, --output-format FMT Output format: asm, bin, tap, tzx, sna, z80, ir\n"
-        "  -T, --tzx               Output .tzx format (deprecated, use -f)\n"
-        "  -t, --tap               Output .tap format (deprecated, use -f)\n"
-        "  -A, --asm               Output .asm format (deprecated, use -f)\n"
-        "  -E, --emit-backend      Emit backend IR (deprecated, use -f)\n"
-        "  --parse-only            Only parse, check syntax/semantics\n"
-        "  -B, --BASIC             Create BASIC loader\n"
-        "  -a, --autorun           Auto-run after loading\n"
-        "  -S, --org ADDRESS       Start of machine code\n"
-        "  -e, --errmsg FILE       Error message output file\n"
-        "  --array-base N          Default array lower bound (0 or 1)\n"
-        "  --string-base N         Default string lower bound (0 or 1)\n"
-        "  -Z, --sinclair          Enable Sinclair BASIC features\n"
-        "  -H, --heap-size N       Heap size in bytes\n"
-        "  --debug-memory          Out-of-memory debugging\n"
-        "  --debug-array           Array boundary checking\n"
-        "  --strict-bool           Enforce boolean 0/1\n"
-        "  --enable-break          Enable BREAK detection\n"
-        "  --explicit              Require declarations\n"
-        "  -D, --define MACRO      Define preprocessor macro\n"
-        "  -M, --mmap FILE         Generate memory map\n"
-        "  -i, --ignore-case       Case-insensitive identifiers\n"
-        "  -I, --include-path PATH Include search path\n"
-        "  --strict                Force explicit type declarations\n"
-        "  --headerless            Omit prologue/epilogue\n"
-        "  -N, --zxnext            Enable ZX Next opcodes\n"
-        "  --arch ARCH             Target architecture (zx48k, zxnext)\n"
-        "  -W, --disable-warning N Disable warning WXXX\n"
-        "  +W, --enable-warning N  Enable warning WXXX\n"
-        "  --expect-warnings N     Silence first N warnings\n"
-        "  --hide-warning-codes    Hide WXXX codes\n"
-        "  -F, --config-file FILE  Load config from file\n"
-        "  --save-config FILE      Save config to file\n"
-        "  --version               Show version\n",
-        prog, ZXBASIC_C_VERSION);
-}
-
-/* Long option definitions */
-enum {
-    OPT_ARRAY_BASE = 256,
-    OPT_STRING_BASE,
-    OPT_DEBUG_MEMORY,
-    OPT_DEBUG_ARRAY,
-    OPT_STRICT_BOOL,
-    OPT_ENABLE_BREAK,
-    OPT_EXPLICIT,
-    OPT_STRICT,
-    OPT_HEADERLESS,
-    OPT_ARCH,
-    OPT_EXPECT_WARNINGS,
-    OPT_HIDE_WARNING_CODES,
-    OPT_SAVE_CONFIG,
-    OPT_VERSION,
-    OPT_PARSE_ONLY,
-    OPT_HEAP_ADDR,
-    OPT_APPEND_BIN,
-    OPT_APPEND_HEADLESS_BIN,
-    OPT_OPT_STRATEGY,
-    OPT_DISABLE_WARNING,
-};
-
-static const struct option long_options[] = {
-    { "help",                  ya_no_argument,       NULL, 'h' },
-    { "debug",                 ya_no_argument,       NULL, 'd' },
-    { "optimize",              ya_required_argument, NULL, 'O' },
-    { "output",                ya_required_argument, NULL, 'o' },
-    { "output-format",         ya_required_argument, NULL, 'f' },
-    { "tzx",                   ya_no_argument,       NULL, 'T' },
-    { "tap",                   ya_no_argument,       NULL, 't' },
-    { "asm",                   ya_no_argument,       NULL, 'A' },
-    { "emit-backend",          ya_no_argument,       NULL, 'E' },
-    { "parse-only",            ya_no_argument,       NULL, OPT_PARSE_ONLY },
-    { "BASIC",                 ya_no_argument,       NULL, 'B' },
-    { "autorun",               ya_no_argument,       NULL, 'a' },
-    { "org",                   ya_required_argument, NULL, 'S' },
-    { "errmsg",                ya_required_argument, NULL, 'e' },
-    { "array-base",            ya_required_argument, NULL, OPT_ARRAY_BASE },
-    { "string-base",           ya_required_argument, NULL, OPT_STRING_BASE },
-    { "sinclair",              ya_no_argument,       NULL, 'Z' },
-    { "heap-size",             ya_required_argument, NULL, 'H' },
-    { "heap-address",          ya_required_argument, NULL, OPT_HEAP_ADDR },
-    { "debug-memory",          ya_no_argument,       NULL, OPT_DEBUG_MEMORY },
-    { "debug-array",           ya_no_argument,       NULL, OPT_DEBUG_ARRAY },
-    { "strict-bool",           ya_no_argument,       NULL, OPT_STRICT_BOOL },
-    { "enable-break",          ya_no_argument,       NULL, OPT_ENABLE_BREAK },
-    { "explicit",              ya_no_argument,       NULL, OPT_EXPLICIT },
-    { "define",                ya_required_argument, NULL, 'D' },
-    { "mmap",                  ya_required_argument, NULL, 'M' },
-    { "ignore-case",           ya_no_argument,       NULL, 'i' },
-    { "include-path",          ya_required_argument, NULL, 'I' },
-    { "strict",                ya_no_argument,       NULL, OPT_STRICT },
-    { "headerless",            ya_no_argument,       NULL, OPT_HEADERLESS },
-    { "zxnext",                ya_no_argument,       NULL, 'N' },
-    { "arch",                  ya_required_argument, NULL, OPT_ARCH },
-    { "expect-warnings",       ya_required_argument, NULL, OPT_EXPECT_WARNINGS },
-    { "hide-warning-codes",    ya_no_argument,       NULL, OPT_HIDE_WARNING_CODES },
-    { "config-file",           ya_required_argument, NULL, 'F' },
-    { "save-config",           ya_required_argument, NULL, OPT_SAVE_CONFIG },
-    { "version",               ya_no_argument,       NULL, OPT_VERSION },
-    { "opt-strategy",          ya_required_argument, NULL, OPT_OPT_STRATEGY },
-    { "append-binary",         ya_required_argument, NULL, OPT_APPEND_BIN },
-    { "append-headless-binary",ya_required_argument, NULL, OPT_APPEND_HEADLESS_BIN },
-    { "disable-warning",       ya_required_argument, NULL, OPT_DISABLE_WARNING },
-    { NULL, 0, NULL, 0 },
-};
 
 int main(int argc, char *argv[]) {
     CompilerState cs;
@@ -179,204 +21,12 @@ int main(int argc, char *argv[]) {
     /* Set cwalk to Unix-style paths for consistent output */
     cwk_path_set_style(CWK_STYLE_UNIX);
 
-    int opt;
-
-    ya_opterr = 0;  /* We handle errors ourselves */
-
-    /* Pre-scan for +W (enable-warning) — ya_getopt doesn't support + prefix.
-     * Python uses argparse prefix_chars="-+" for this. We extract +W args
-     * and build a filtered argv for ya_getopt. */
-    {
-        int new_argc = 0;
-        for (int i = 0; i < argc; i++) {
-            if (i > 0 && argv[i][0] == '+' && argv[i][1] == 'W') {
-                const char *code = argv[i] + 2;
-                if (!code[0] && i + 1 < argc) code = argv[++i]; /* +W NNN */
-                cs.opts.enabled_warnings = realloc(cs.opts.enabled_warnings,
-                    sizeof(char *) * (cs.opts.enabled_warning_count + 1));
-                cs.opts.enabled_warnings[cs.opts.enabled_warning_count++] = (char *)code;
-            } else {
-                argv[new_argc++] = argv[i];
-            }
-        }
-        argc = new_argc;
-    }
-
-    while ((opt = ya_getopt_long(argc, argv, "hdO:o:f:TtAEBaS:e:ZH:D:M:iI:NF:W:",
-                                  long_options, NULL)) != -1) {
-        switch (opt) {
-            case 'h':
-                print_usage(argv[0]);
-                compiler_destroy(&cs);
-                return 0;
-            case 'd':
-                cs.opts.debug_level++;
-                break;
-            case 'O':
-                cs.opts.optimization_level = atoi(ya_optarg);
-                break;
-            case 'o':
-                cs.opts.output_filename = ya_optarg;
-                break;
-            case 'f':
-                cs.opts.output_file_type = ya_optarg;
-                break;
-            case 'T':
-                cs.opts.output_file_type = "tzx";
-                break;
-            case 't':
-                cs.opts.output_file_type = "tap";
-                break;
-            case 'A':
-                cs.opts.output_file_type = "asm";
-                break;
-            case 'E':
-                cs.opts.emit_backend = true;
-                cs.opts.output_file_type = "ir";
-                break;
-            case OPT_PARSE_ONLY:
-                cs.opts.parse_only = true;
-                break;
-            case 'B':
-                cs.opts.use_basic_loader = true;
-                break;
-            case 'a':
-                cs.opts.autorun = true;
-                break;
-            case 'S':
-                if (!parse_int(ya_optarg, &cs.opts.org)) {
-                    fprintf(stderr, "Error: Invalid --org option '%s'\n", ya_optarg);
-                    compiler_destroy(&cs);
-                    return 1;
-                }
-                break;
-            case 'e':
-                cs.opts.stderr_filename = ya_optarg;
-                break;
-            case OPT_ARRAY_BASE:
-                cs.opts.array_base = atoi(ya_optarg);
-                break;
-            case OPT_STRING_BASE:
-                cs.opts.string_base = atoi(ya_optarg);
-                break;
-            case 'Z':
-                cs.opts.sinclair = true;
-                break;
-            case 'H':
-                cs.opts.heap_size = atoi(ya_optarg);
-                break;
-            case OPT_DEBUG_MEMORY:
-                cs.opts.memory_check = true;
-                break;
-            case OPT_DEBUG_ARRAY:
-                cs.opts.array_check = true;
-                break;
-            case OPT_STRICT_BOOL:
-                cs.opts.strict_bool = true;
-                break;
-            case OPT_ENABLE_BREAK:
-                cs.opts.enable_break = true;
-                break;
-            case OPT_EXPLICIT:
-                cs.opts.explicit_ = true;
-                break;
-            case 'D':
-                /* preprocessor define — will be passed to zxbpp */
-                break;
-            case 'M':
-                cs.opts.memory_map = ya_optarg;
-                break;
-            case 'i':
-                cs.opts.case_insensitive = true;
-                break;
-            case 'I':
-                cs.opts.include_path = ya_optarg;
-                break;
-            case OPT_STRICT:
-                cs.opts.strict = true;
-                break;
-            case OPT_HEADERLESS:
-                cs.opts.headerless = true;
-                break;
-            case 'N':
-                cs.opts.zxnext = true;
-                break;
-            case OPT_ARCH:
-                cs.opts.architecture = ya_optarg;
-                break;
-            case OPT_EXPECT_WARNINGS:
-                cs.opts.expected_warnings = atoi(ya_optarg);
-                break;
-            case OPT_HIDE_WARNING_CODES:
-                cs.opts.hide_warning_codes = true;
-                break;
-            case 'F':
-                cs.opts.project_filename = ya_optarg;
-                break;
-            case OPT_SAVE_CONFIG:
-                /* save config */
-                break;
-            case OPT_VERSION:
-                printf("zxbc %s\n", ZXBASIC_C_VERSION);
-                compiler_destroy(&cs);
-                return 0;
-            case 'W':
-            case OPT_DISABLE_WARNING:
-                cs.opts.disabled_warnings = realloc(cs.opts.disabled_warnings,
-                    sizeof(char *) * (cs.opts.disabled_warning_count + 1));
-                cs.opts.disabled_warnings[cs.opts.disabled_warning_count++] = ya_optarg;
-                break;
-            case OPT_OPT_STRATEGY:
-                if (strcmp(ya_optarg, "size") == 0)
-                    cs.opts.opt_strategy = OPT_STRATEGY_SIZE;
-                else if (strcmp(ya_optarg, "speed") == 0)
-                    cs.opts.opt_strategy = OPT_STRATEGY_SPEED;
-                else
-                    cs.opts.opt_strategy = OPT_STRATEGY_AUTO;
-                break;
-            case '?':
-                fprintf(stderr, "Unknown option: %s\n", argv[ya_optind - 1]);
-                print_usage(argv[0]);
-                compiler_destroy(&cs);
-                return 1;
-            default:
-                break;
-        }
-    }
-
-    /* Remaining argument is the input file */
-    if (ya_optind >= argc) {
-        fprintf(stderr, "Error: no input file specified\n");
-        print_usage(argv[0]);
+    int rc = zxbc_parse_args(argc, argv, &cs.opts);
+    if (rc != 0) {
         compiler_destroy(&cs);
-        return 1;
+        return rc < 0 ? 0 : rc;  /* -1 = --help/--version (success) */
     }
 
-    cs.opts.input_filename = argv[ya_optind];
-
-    /* Load config file if specified (-F).
-     * Python: loads config BEFORE applying cmdline options, so config values
-     * can be overridden by cmdline. We do a two-pass approach: first pass
-     * loads config (above), then re-parse cmdline to override. For simplicity,
-     * we save cmdline values and apply config only for fields not set on cmdline. */
-    if (cs.opts.project_filename) {
-        /* Save cmdline-set values before config loading */
-        CompilerOptions cmdline_opts = cs.opts;
-
-        /* Apply config file values */
-        config_load_zxbc_options(cs.opts.project_filename, &cs.opts);
-
-        /* Cmdline overrides: re-apply any explicitly-set cmdline values.
-         * We detect "explicitly set" by comparing against defaults. */
-        /* For now, the simplest correct approach: re-parse cmdline after config.
-         * But since ya_getopt is already consumed, we just restore values
-         * that were explicitly set on the cmdline.
-         * The key test case: --org on cmdline overrides org from config. */
-        if (cmdline_opts.org != 32768)  /* default = 32768 */
-            cs.opts.org = cmdline_opts.org;
-        if (cmdline_opts.optimization_level != DEFAULT_OPTIMIZATION_LEVEL)
-            cs.opts.optimization_level = cmdline_opts.optimization_level;
-    }
     cs.current_file = cs.opts.input_filename;
 
     /* Open error file if specified */
@@ -395,23 +45,16 @@ int main(int argc, char *argv[]) {
         zxbc_info(&cs, "Optimization level: %d", cs.opts.optimization_level);
     }
 
-    /* Run preprocessor (matching Python: zxbpp.main([filename]))
-     * Python sets include paths to: src/lib/arch/<arch>/stdlib, .../runtime
-     * We resolve these relative to the executable's location. */
+    /* Run preprocessor */
     PreprocState pp;
     preproc_init(&pp);
     pp.debug_level = cs.opts.debug_level;
 
-    /* Add standard library include paths.
-     * Python: get_include_path() => os.path.join(os.path.dirname(__file__), "..", "lib", "arch", arch)
-     * In the installed layout, the lib dir is at ../lib/arch/<arch>/ relative to the binary's src/ root.
-     * For development, we use the Python source tree's library files. */
     {
         const char *arch = cs.opts.architecture ? cs.opts.architecture : "zx48k";
         char stdlib_path[PATH_MAX];
         char runtime_path[PATH_MAX];
 
-        /* Try relative to the source tree root (development layout) */
         snprintf(stdlib_path, sizeof(stdlib_path), "src/lib/arch/%s/stdlib", arch);
         snprintf(runtime_path, sizeof(runtime_path), "src/lib/arch/%s/runtime", arch);
         if (access(stdlib_path, R_OK) == 0) {
@@ -443,7 +86,7 @@ int main(int argc, char *argv[]) {
     parser_init(&parser, &cs, source);
     AstNode *ast = parser_parse(&parser);
 
-    int rc = 0;
+    rc = 0;
     if (parser.had_error || !ast) {
         rc = 1;
     } else if (cs.opts.parse_only) {

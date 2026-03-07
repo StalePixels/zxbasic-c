@@ -110,6 +110,8 @@ static int ya_getopt_internal(int argc, char * const argv[], const char *optstri
         check_gnu_extension(optstring);
         ya_optind = 1;
         ya_optnext = NULL;
+        start = 0;
+        end = 0;
     }
 
     switch (optstring[0]) {
