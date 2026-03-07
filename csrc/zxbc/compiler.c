@@ -908,16 +908,21 @@ AstNode *symboltable_access_label(SymbolTable *st, CompilerState *cs,
                                    const char *name, int lineno) {
     AstNode *result = symboltable_lookup(st, name);
     if (!result) {
+        /* Labels are always global in ZX BASIC (matching Python's
+         * declare_label → move_to_global_scope). Temporarily switch to
+         * global scope for declaration, then restore. */
+        Scope_ *saved = st->current_scope;
+        st->current_scope = st->global_scope;
         result = symboltable_declare(st, cs, name, lineno, CLASS_label);
+        st->current_scope = saved;
         result->u.id.declared = false;
         return result;
     }
 
     if (result->u.id.class_ != CLASS_label && result->u.id.class_ != CLASS_unknown) {
-        err_unexpected_class(cs, lineno, name,
-                             symbolclass_to_string(result->u.id.class_),
-                             symbolclass_to_string(CLASS_label));
-        return NULL;
+        /* In Python, labels are always global and can coexist with functions/subs
+         * (label namespace is separate). Don't error — just return the entry. */
+        return result;
     }
 
     if (result->u.id.class_ == CLASS_unknown)
@@ -965,16 +970,21 @@ bool check_pending_labels(CompilerState *cs, AstNode *ast) {
             stack[stack_len++] = node->children[i];
         }
 
-        /* Only check raw ID nodes (not already classified as var/func/array etc.) */
+        /* Only check AST_ID nodes that were explicitly created as labels
+         * (by GOTO/GOSUB). CLASS_unknown nodes are implicit variables, not labels.
+         * This matches Python's check: node.token in ("ID", "LABEL") — but in Python,
+         * variables get resolved to "VAR" token, so only unresolved labels remain. */
         if (node->tag != AST_ID) continue;
-        /* Skip nodes already resolved to a concrete class */
-        if (node->u.id.class_ != CLASS_unknown && node->u.id.class_ != CLASS_label) continue;
+        if (node->u.id.class_ != CLASS_label) continue;
 
-        /* Look up in symbol table (matching Python's SYMBOL_TABLE.get_entry) */
+        /* Look up in symbol table — the label must be declared somewhere */
         AstNode *entry = symboltable_lookup(cs->symbol_table, node->u.id.name);
         if (!entry || entry->u.id.class_ == CLASS_unknown) {
-            zxbc_error(cs, node->lineno, "Undeclared identifier \"%s\"", node->u.id.name);
+            zxbc_error(cs, node->lineno, "Undeclared label \"%s\"", node->u.id.name);
             result = false;
+        } else if (entry->u.id.class_ != CLASS_label) {
+            /* Label name refers to something else (var, func, etc.) — Python would
+             * catch this differently, but for now just check it's a label */
         }
     }
 

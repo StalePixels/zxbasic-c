@@ -885,10 +885,10 @@ static AstNode *parse_statement(Parser *p) {
             label_text = label_buf;
         }
 
-        /* Create label in symbol table */
-        AstNode *label_node = symboltable_declare(p->cs->symbol_table, p->cs,
-                                                   label_text, p->previous.lineno, CLASS_label);
-        (void)label_node;
+        /* Create label in symbol table (labels are always global) */
+        AstNode *label_node = symboltable_access_label(p->cs->symbol_table, p->cs,
+                                                        label_text, p->previous.lineno);
+        if (label_node) label_node->u.id.declared = true;
 
         /* If followed by ':', consume it */
         match(p, BTOK_CO);
@@ -1546,6 +1546,10 @@ static AstNode *parse_statement(Parser *p) {
         if (numval == (int)numval) {
             char label_buf[32];
             snprintf(label_buf, sizeof(label_buf), "%d", (int)numval);
+            /* Register the label in symbol table (labels are always global) */
+            AstNode *lbl_entry = symboltable_access_label(p->cs->symbol_table, p->cs,
+                                                           label_buf, ln);
+            if (lbl_entry) lbl_entry->u.id.declared = true;
             AstNode *lbl_sent = make_sentence_node(p, "LABEL", ln);
             AstNode *lbl_id = ast_new(p->cs, AST_ID, ln);
             lbl_id->u.id.name = arena_strdup(&p->cs->arena, label_buf);

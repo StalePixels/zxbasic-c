@@ -95,6 +95,13 @@ int main(int argc, char *argv[]) {
     if (cs.error_count > 0)
         rc = 1;
 
+    /* Post-parse validation: check GOTO/GOSUB label targets */
+    if (rc == 0 && ast) {
+        check_pending_labels(&cs, ast);
+        if (cs.error_count > 0)
+            rc = 1;
+    }
+
     if (rc == 0 && cs.opts.parse_only) {
         if (cs.opts.debug_level > 0)
             zxbc_info(&cs, "Parse OK (%d top-level statements)", ast->child_count);
