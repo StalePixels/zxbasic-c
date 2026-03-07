@@ -258,6 +258,9 @@ bool symboltable_check_is_declared(SymbolTable *st, const char *name, int lineno
     arena_destroy(&tmp);
 
     if (!entry || !entry->u.id.declared) {
+        if (show_error && cs) {
+            zxbc_error(cs, lineno, "Undeclared %s \"%s\"", classname, name);
+        }
         return false;
     }
     return true;
@@ -917,20 +920,22 @@ AstNode *symboltable_access_label(SymbolTable *st, CompilerState *cs,
  * ---------------------------------------------------------------- */
 
 /* check_pending_labels: iteratively traverse AST looking for ID nodes
- * with CLASS_unknown or CLASS_label that haven't been declared.
- * Matches Python's src/api/check.py check_pending_labels(). */
+ * that still have CLASS_unknown in the symbol table.
+ * Matches Python's src/api/check.py check_pending_labels().
+ *
+ * In Python, only nodes with token "ID" or "LABEL" are checked —
+ * nodes that were resolved to VAR/FUNCTION/ARRAY have different tokens.
+ * In our C code, we only check AST_ID nodes that remain CLASS_unknown
+ * or CLASS_label in the symbol table. */
 bool check_pending_labels(CompilerState *cs, AstNode *ast) {
     if (!ast) return true;
 
     bool result = true;
 
     /* Iterative traversal to avoid stack overflow on deeply nested ASTs */
-    AstNode **stack = NULL;
-    int stack_len = 0, stack_cap = 0;
-
-    /* Push initial node */
-    stack_cap = 256;
-    stack = arena_alloc(&cs->arena, stack_cap * sizeof(AstNode *));
+    int stack_cap = 256;
+    int stack_len = 0;
+    AstNode **stack = arena_alloc(&cs->arena, stack_cap * sizeof(AstNode *));
     stack[stack_len++] = ast;
 
     while (stack_len > 0) {
@@ -949,14 +954,15 @@ bool check_pending_labels(CompilerState *cs, AstNode *ast) {
             stack[stack_len++] = node->children[i];
         }
 
-        /* Only check ID nodes used as labels (in GOTO/GOSUB targets, etc.) */
+        /* Only check raw ID nodes (not already classified as var/func/array etc.) */
         if (node->tag != AST_ID) continue;
-        if (node->u.id.class_ != CLASS_label && node->u.id.class_ != CLASS_unknown) continue;
+        /* Skip nodes already resolved to a concrete class */
+        if (node->u.id.class_ != CLASS_unknown && node->u.id.class_ != CLASS_label) continue;
 
-        /* Look up in global symbol table */
+        /* Look up in symbol table (matching Python's SYMBOL_TABLE.get_entry) */
         AstNode *entry = symboltable_lookup(cs->symbol_table, node->u.id.name);
-        if (!entry || (entry->u.id.class_ != CLASS_label && entry->u.id.class_ != CLASS_unknown)) {
-            zxbc_error(cs, node->lineno, "Undeclared label \"%s\"", node->u.id.name);
+        if (!entry || entry->u.id.class_ == CLASS_unknown) {
+            zxbc_error(cs, node->lineno, "Undeclared identifier \"%s\"", node->u.id.name);
             result = false;
         }
     }

@@ -353,7 +353,9 @@ static AstNode *parse_builtin_func(Parser *p, const char *fname, BTokenType kw) 
         }
     }
 
-    AstNode *arg = parse_expression(p, PREC_NONE + 1);
+    /* Without parens, builtins bind at unary precedence (matching Python %prec UMINUS).
+     * e.g. LEN x - 1 parses as (LEN x) - 1, not LEN(x - 1). */
+    AstNode *arg = parse_expression(p, had_paren ? PREC_NONE + 1 : PREC_UNARY);
     if (!arg) {
         if (had_paren) consume(p, BTOK_RP, "Expected ')' after builtin argument");
         return n;
@@ -542,15 +544,29 @@ AstNode *parse_primary(Parser *p) {
             return parse_call_or_array(p, name, lineno);
         }
 
-        /* Variable reference — resolve via symbol table (auto-declares if implicit) */
-        AstNode *entry = symboltable_access_var(p->cs->symbol_table, p->cs,
-                                                 name, lineno, NULL);
+        /* Variable reference — resolve via symbol table (auto-declares if implicit)
+         * Matches Python p_id_expr: uses access_id (not access_var) so labels,
+         * functions, and arrays are accepted without class-check errors. */
+        AstNode *entry = symboltable_access_id(p->cs->symbol_table, p->cs,
+                                                name, lineno, NULL, CLASS_var);
         if (entry) {
             entry->u.id.accessed = true;
+            /* If class is still unknown, set it to var */
+            if (entry->u.id.class_ == CLASS_unknown)
+                entry->u.id.class_ = CLASS_var;
+            /* Function with 0 args — treat as call (matching Python p_id_expr) */
+            if (entry->u.id.class_ == CLASS_function) {
+                AstNode *call = ast_new(p->cs, AST_FUNCCALL, lineno);
+                AstNode *args = ast_new(p->cs, AST_ARGLIST, lineno);
+                ast_add_child(p->cs, call, entry);
+                ast_add_child(p->cs, call, args);
+                call->type_ = entry->type_;
+                return call;
+            }
             return entry;
         }
 
-        /* access_var returned NULL (error) — create placeholder */
+        /* access_id returned NULL (error) — create placeholder */
         AstNode *n = ast_new(p->cs, AST_ID, lineno);
         n->u.id.name = arena_strdup(&p->cs->arena, name);
         n->type_ = p->cs->default_type;
@@ -1346,7 +1362,37 @@ static AstNode *parse_statement(Parser *p) {
         return make_nop(p);
     }
     if (match(p, BTOK__PRAGMA)) {
-        /* Skip pragma arguments for now */
+        /* #pragma NAME = VALUE — set compiler option (matching Python setattr(OPTIONS, name, value))
+         * #pragma push(NAME) / #pragma pop(NAME) — save/restore option */
+        if (check(p, BTOK_ID)) {
+            const char *opt_name = p->current.sval;
+            advance(p);
+            if (match(p, BTOK_EQ)) {
+                /* Parse value: True/False (ID), integer, or string */
+                bool bool_val = false;
+                bool is_bool = false;
+                if (check(p, BTOK_ID)) {
+                    const char *val = p->current.sval;
+                    advance(p);
+                    if (strcasecmp(val, "true") == 0) { bool_val = true; is_bool = true; }
+                    else if (strcasecmp(val, "false") == 0) { bool_val = false; is_bool = true; }
+                } else if (check(p, BTOK_NUMBER)) {
+                    bool_val = (p->current.numval != 0);
+                    is_bool = true;
+                    advance(p);
+                }
+                /* Apply known options */
+                if (is_bool) {
+                    if (strcasecmp(opt_name, "explicit") == 0) p->cs->opts.explicit_ = bool_val;
+                    else if (strcasecmp(opt_name, "strict") == 0) p->cs->opts.strict = bool_val;
+                    else if (strcasecmp(opt_name, "strict_bool") == 0) p->cs->opts.strict_bool = bool_val;
+                    else if (strcasecmp(opt_name, "array_check") == 0) p->cs->opts.array_check = bool_val;
+                    else if (strcasecmp(opt_name, "memory_check") == 0) p->cs->opts.memory_check = bool_val;
+                    else if (strcasecmp(opt_name, "sinclair") == 0) p->cs->opts.sinclair = bool_val;
+                }
+            }
+        }
+        /* Skip any remaining tokens on this line */
         while (!check(p, BTOK_NEWLINE) && !check(p, BTOK_EOF)) advance(p);
         return make_nop(p);
     }
@@ -2142,8 +2188,41 @@ static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function) {
         if (!ret_type && is_function) ret_type = type_new_ref(p->cs, p->cs->default_type, lineno, true);
     }
 
-    /* Enter scope */
+    /* Declare function/sub in the CURRENT (parent) scope BEFORE entering body scope.
+     * This enables recursive calls — the function name is visible from inside. */
+    SymbolClass cls = is_function ? CLASS_function : CLASS_sub;
+    AstNode *id_node = symboltable_declare(p->cs->symbol_table, p->cs, func_name, lineno, cls);
+    id_node->u.id.convention = conv;
+    id_node->type_ = ret_type;
+
+    /* Enter function body scope */
     symboltable_enter_scope(p->cs->symbol_table, p->cs);
+
+    /* Register parameters in the function scope (so body can reference them).
+     * Strip deprecated suffixes ($%&!) so lookups match (Python strips on get_entry). */
+    for (int i = 0; i < params->child_count; i++) {
+        AstNode *param = params->children[i];
+        const char *pname = param->u.argument.name;
+        /* Strip deprecated suffix if present */
+        size_t plen = strlen(pname);
+        char stripped[256];
+        if (plen > 0 && plen < sizeof(stripped) && is_deprecated_suffix(pname[plen - 1])) {
+            memcpy(stripped, pname, plen - 1);
+            stripped[plen - 1] = '\0';
+            pname = stripped;
+        }
+        SymbolClass pcls = param->u.argument.is_array ? CLASS_array : CLASS_var;
+        AstNode *sym = symboltable_declare(p->cs->symbol_table, p->cs, pname, param->lineno, pcls);
+        if (sym) {
+            sym->type_ = param->type_;
+            sym->u.id.declared = true;
+        }
+    }
+
+    /* Note: function name is NOT re-declared in the body scope.
+     * The parent scope CLASS_function entry is visible via scope chain lookup,
+     * enabling recursive calls. Return value assignment (funcname = expr) works
+     * because Python's LET handler recognizes CLASS_function as valid LHS. */
 
     /* Parse body */
     skip_newlines(p);
@@ -2172,12 +2251,8 @@ static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function) {
     /* Exit scope */
     symboltable_exit_scope(p->cs->symbol_table);
 
-    /* Create function declaration node */
+    /* Create function declaration node (id_node was declared before entering scope) */
     AstNode *decl = ast_new(p->cs, AST_FUNCDECL, lineno);
-    SymbolClass cls = is_function ? CLASS_function : CLASS_sub;
-    AstNode *id_node = symboltable_declare(p->cs->symbol_table, p->cs, func_name, lineno, cls);
-    id_node->u.id.convention = conv;
-    id_node->type_ = ret_type;
 
     ast_add_child(p->cs, decl, id_node);
     ast_add_child(p->cs, decl, params);
