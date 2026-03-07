@@ -69,6 +69,12 @@ typedef struct CompilerOptions {
     bool zxnext;             /* ZX Next extended opcodes */
     bool force_asm_brackets;
 
+    /* Memory layout */
+    int org;                 /* start of machine code (default 32768 = 0x8000) */
+    int heap_size;           /* heap size in bytes (default 4768) */
+    int heap_address;        /* explicit heap address, or -1 for auto */
+    bool headerless;         /* omit prologue/epilogue */
+
     /* Warnings */
     int expected_warnings;
     bool hide_warning_codes;
@@ -79,6 +85,9 @@ typedef struct CompilerOptions {
 
     /* Optimization */
     OptStrategy opt_strategy;
+
+    /* Parse-only mode (no output generated) */
+    bool parse_only;
 } CompilerOptions;
 
 /* Initialize options with defaults matching Python's config.init() */

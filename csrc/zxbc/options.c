@@ -38,8 +38,14 @@ void compiler_options_init(CompilerOptions *opts) {
     opts->zxnext = false;
     opts->force_asm_brackets = false;
 
+    opts->org = 32768;         /* 0x8000 — default from arch/z80/backend */
+    opts->heap_size = 4768;    /* default from Python */
+    opts->heap_address = -1;   /* auto */
+    opts->headerless = false;
+
     opts->expected_warnings = 0;
     opts->hide_warning_codes = false;
 
     opts->opt_strategy = OPT_STRATEGY_AUTO;
+    opts->parse_only = false;
 }
