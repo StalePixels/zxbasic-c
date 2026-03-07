@@ -888,7 +888,14 @@ static AstNode *parse_statement(Parser *p) {
         /* Create label in symbol table (labels are always global) */
         AstNode *label_node = symboltable_access_label(p->cs->symbol_table, p->cs,
                                                         label_text, p->previous.lineno);
-        if (label_node) label_node->u.id.declared = true;
+        if (label_node && label_node->u.id.class_ == CLASS_label) {
+            if (label_node->u.id.declared) {
+                zxbc_error(p->cs, p->previous.lineno,
+                           "Label '%s' already used at %s:%d",
+                           label_text, p->cs->current_file, label_node->lineno);
+            }
+            label_node->u.id.declared = true;
+        }
 
         /* If followed by ':', consume it */
         match(p, BTOK_CO);
@@ -968,8 +975,13 @@ static AstNode *parse_statement(Parser *p) {
 
     /* GOTO / GOSUB */
     if (match(p, BTOK_GOTO) || match(p, BTOK_GOSUB)) {
-        const char *kind = (p->previous.type == BTOK_GOTO) ? "GOTO" : "GOSUB";
+        bool is_gosub = (p->previous.type == BTOK_GOSUB);
+        const char *kind = is_gosub ? "GOSUB" : "GOTO";
         int ln = p->previous.lineno;
+        /* GOSUB not allowed inside SUB or FUNCTION (matching Python) */
+        if (is_gosub && p->cs->function_level.len > 0) {
+            zxbc_error(p->cs, ln, "GOSUB not allowed within SUB or FUNCTION");
+        }
         if (!check(p, BTOK_ID) && !check(p, BTOK_LABEL) && !check(p, BTOK_NUMBER)) {
             parser_error(p, "Expected label after GOTO/GOSUB");
             return NULL;
@@ -995,6 +1007,9 @@ static AstNode *parse_statement(Parser *p) {
         if (!is_sub) consume(p, BTOK_TO, "Expected TO or SUB after GO");
         const char *kind = is_sub ? "GOSUB" : "GOTO";
         int ln = p->previous.lineno;
+        if (is_sub && p->cs->function_level.len > 0) {
+            zxbc_error(p->cs, ln, "GOSUB not allowed within SUB or FUNCTION");
+        }
         if (!check(p, BTOK_ID) && !check(p, BTOK_LABEL) && !check(p, BTOK_NUMBER)) {
             parser_error(p, "Expected label after GO TO/GO SUB");
             return NULL;
@@ -2322,6 +2337,9 @@ static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function) {
      * enabling recursive calls. Return value assignment (funcname = expr) works
      * because Python's LET handler recognizes CLASS_function as valid LHS. */
 
+    /* Push function level (for GOSUB check and other function-scope tracking) */
+    vec_push(p->cs->function_level, id_node);
+
     /* Parse body */
     skip_newlines(p);
     AstNode *body = make_block_node(p, lineno);
@@ -2345,6 +2363,10 @@ static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function) {
         if (stmt) ast_add_child(p->cs, body, stmt);
         while (match(p, BTOK_NEWLINE) || match(p, BTOK_CO)) {}
     }
+
+    /* Pop function level */
+    if (p->cs->function_level.len > 0)
+        vec_pop(p->cs->function_level);
 
     /* Exit scope */
     symboltable_exit_scope(p->cs->symbol_table);
