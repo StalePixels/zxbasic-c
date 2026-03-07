@@ -5,6 +5,8 @@
 [![C Build](https://github.com/StalePixels/zxbasic-c/actions/workflows/c-build.yml/badge.svg)](https://github.com/StalePixels/zxbasic-c/actions/workflows/c-build.yml)
 [![zxbpp tests](https://img.shields.io/badge/zxbpp_tests-96%2F96_passing-brightgreen)](#-phase-1--preprocessor-done)
 [![zxbasm tests](https://img.shields.io/badge/zxbasm_tests-61%2F61_passing-brightgreen)](#-phase-2--assembler-done)
+[![zxbc parse-only](https://img.shields.io/badge/zxbc_parse--only-914%2F1036_matching_Python-yellow)](#-phase-3--compiler-frontend-in-progress)
+[![C unit tests](https://img.shields.io/badge/C_unit_tests-132_passing-blue)](#c-unit-test-suite)
 
 ZX BASIC — C Port 🚀
 ---------------------
@@ -23,8 +25,9 @@ The toolchain being ported — `zxbc` (compiler), `zxbasm` (assembler), and `zxb
 suite of 1,285+ functional tests.
 
 The practical end-goal: a C implementation of the compiler suitable for **embedding on
-[NextPi](https://www.specnext.com/)** and similar resource-constrained platforms where
-a full modern Python runtime is undesirable.
+[NextPi](https://www.specnext.com/)** and similar resource-constrained platforms. The
+NextPi ships with a lightweight Python 2 install, but ZX BASIC requires Python 3.11+ —
+far too heavy for the hardware. Native C binaries sidestep the problem entirely.
 
 ## 📊 Current Status
 
@@ -33,10 +36,44 @@ a full modern Python runtime is undesirable.
 | 0 | Infrastructure (arena, strbuf, vec, hashmap, CMake) | — | ✅ Complete |
 | 1 | **Preprocessor (`zxbpp`)** | **96/96** 🎉 | ✅ Complete |
 | 2 | **Assembler (`zxbasm`)** | **61/61** 🎉 | ✅ Complete |
-| 3 | BASIC compiler frontend (lexer + parser + AST) | — | ⏳ Planned |
+| 3 | **Compiler frontend (`zxbc`)** | **914/1036** matching Python | 🔨 In Progress |
 | 4 | Optimizer + IR generation (AST → Quads) | — | ⏳ Planned |
 | 5 | Z80 backend (Quads → Assembly) — 1,175 ASM tests | — | ⏳ Planned |
 | 6 | Full integration + all output formats | — | ⏳ Planned |
+
+### 🔬 Phase 3 — Compiler Frontend: In Progress
+
+The `zxbc` frontend is measured by **exit-code parity with Python** — for every `.bas` test file, does the C binary produce the same exit code as the Python original?
+
+- ✅ **914/1036 matching Python** (88%) — C and Python agree on pass/fail
+- ❌ **122 mismatches** — all cases where Python catches a semantic error but C doesn't yet
+- ✅ **0 false positives** — C never errors on a file that Python accepts
+- ✅ Hand-written recursive-descent lexer + parser (all 1036 files parse syntactically)
+- ✅ Full AST with tagged-union node types (30 node kinds)
+- ✅ Symbol table with lexical scoping, type registry, basic types
+- ✅ Type system: all ZX BASIC types (`byte` through `string`), aliases, refs
+- ✅ Semantic infrastructure: type coercion, constant folding, symbol resolution
+- ✅ CLI with all `zxbc` flags, config file loading, `--parse-only`
+- ✅ Preprocessor integration (reuses C zxbpp via static library)
+- 🔨 Remaining semantic analysis: function scope, post-parse validation, AST visitors
+
+#### C Unit Test Suite
+
+Beyond matching Python's functional tests, the C port has its own unit test suite
+verifying internal APIs match the Python test suites (`tests/api/`, `tests/symbols/`,
+`tests/cmdline/`):
+
+| Test Program | Tests | Matches Python |
+|-------------|-------|----------------|
+| `test_utils` | 14 | `tests/api/test_utils.py` |
+| `test_config` | 6 | `tests/api/test_config.py` + `test_arg_parser.py` |
+| `test_types` | 10 | `tests/symbols/test_symbolBASICTYPE.py` |
+| `test_ast` | 61 | All 19 `tests/symbols/test_symbol*.py` files |
+| `test_symboltable` | 22 | `tests/api/test_symbolTable.py` (18 + 4 C extras) |
+| `test_check` | 4 | `tests/api/test_check.py` |
+| `test_cmdline` | 15 | `tests/cmdline/test_zxb.py` + `test_arg_parser.py` |
+| `run_cmdline_tests.sh` | 4 | `tests/cmdline/test_zxb.py` (exit-code) |
+| **Total** | **136** | |
 
 ### 🔬 Phase 2 — Assembler: Done!
 
@@ -72,7 +109,7 @@ cmake ..
 make -j4
 ```
 
-This builds `csrc/build/zxbpp/zxbpp` and `csrc/build/zxbasm/zxbasm`.
+This builds `csrc/build/zxbpp/zxbpp`, `csrc/build/zxbasm/zxbasm`, and `csrc/build/zxbc/zxbc`.
 
 ### Running the Tests
 
@@ -82,6 +119,14 @@ This builds `csrc/build/zxbpp/zxbpp` and `csrc/build/zxbasm/zxbasm`.
 
 # Run all 61 assembler tests (binary-exact):
 ./csrc/tests/run_zxbasm_tests.sh ./csrc/build/zxbasm/zxbasm tests/functional/asm
+
+# Run 132 C unit tests:
+cd csrc/build && ./tests/test_utils && ./tests/test_config && ./tests/test_types \
+  && ./tests/test_ast && ./tests/test_symboltable && ./tests/test_check && cd ../..
+./csrc/build/tests/test_cmdline
+
+# Run 4 zxbc command-line tests:
+./csrc/tests/run_cmdline_tests.sh ./csrc/build/zxbc/zxbc tests/cmdline
 ```
 
 ### 🐍 Python Ground-Truth Comparison
@@ -117,25 +162,28 @@ python3 zxbpp.py myfile.bas -o myfile.preprocessed.bas
 
 Supported flags: `-o`, `-d`, `-e`, `-D`, `-I`, `--arch`, `--expect-warnings`
 
-Supported flags: `-d`, `-e`, `-o`, `-O` (output format)
-
 The `zxbasm` assembler is also available as a drop-in replacement:
 
 ```bash
-# Instead of:
-python3 zxbasm.py myfile.asm -o myfile.bin
-
-# Use:
 ./csrc/build/zxbasm/zxbasm myfile.asm -o myfile.bin
 ```
 
-The compiler frontend (`zxbc`) still requires Python — for now. 😏
+Supported flags: `-d`, `-e`, `-o`, `-O` (output format)
+
+The compiler frontend (`zxbc`) can already parse all BASIC sources:
+
+```bash
+./csrc/build/zxbc/zxbc --parse-only myfile.bas
+```
+
+Full compilation (code generation) is coming next. 😏
 
 ## 🗺️ The Road to NextPi
 
 The big picture: a fully native C compiler toolchain that runs on the
 [NextPi](https://www.specnext.com/) — a Raspberry Pi accelerator board for the
-ZX Spectrum Next. No Python runtime needed, just a single binary.
+ZX Spectrum Next. The NextPi has a lightweight Python 2, but ZX BASIC needs
+Python 3.11+ which is impractical on that hardware. Native C binaries solve this.
 
 Here's how we get there, one step at a time:
 
@@ -145,11 +193,12 @@ Here's how we get there, one step at a time:
  Phase 1  ✅  zxbpp — Preprocessor
     │         96/96 tests, drop-in replacement for Python's zxbpp
     │
- Phase 2  ✅  zxbasm — Z80 Assembler (you are here! 📍)
+ Phase 2  ✅  zxbasm — Z80 Assembler
     │         61/61 binary-exact tests passing
     │         zxbpp + zxbasm work without Python!
     │
- Phase 3  ⏳  BASIC Frontend — Lexer, parser, AST, symbol table
+ Phase 3  🔨  BASIC Frontend (you are here! 📍)
+    │         1036/1036 parse-only + 132 unit tests
     │
  Phase 4  ⏳  Optimizer + IR — AST → Quads intermediate code
     │
@@ -159,7 +208,7 @@ Here's how we get there, one step at a time:
  Phase 6  ⏳  Integration — All output formats (.tap, .tzx, .sna, .z80)
     │         Full CLI compatibility with zxbc
     │
-    🏁  Single static binary: zxbasic for NextPi and embedded platforms
+    🏁  Native binaries for NextPi and embedded platforms — no Python needed
 ```
 
 Each phase is independently useful — you don't have to wait for the whole thing.
@@ -181,7 +230,7 @@ suite — with every commit pushed in real-time for full transparency.
 | Aspect | Python Original | C Port |
 |--------|----------------|--------|
 | Parsing (zxbpp) | PLY lex/yacc | Hand-written recursive-descent |
-| Parsing (zxbasm, zxbc) | PLY lex/yacc | flex + bison |
+| Parsing (zxbasm, zxbc) | PLY lex/yacc | Hand-written recursive-descent |
 | AST nodes | 50+ classes with inheritance | Tagged union structs |
 | Memory | Python GC | Arena allocator |
 | Strings | Python str (immutable) | `StrBuf` (growable) |

@@ -43,13 +43,15 @@ cd csrc/build && cmake .. && make
 5. **No external dependencies** — the Python original has zero; the C port should match.
 6. **Battle-tested over hand-rolled** — when cross-platform portability shims or utilities are needed, use a proven, permissively-licensed library (e.g. ya_getopt for getopt_long) rather than writing a homebrew implementation. Tried-and-tested > vibe-coded.
 7. **See `docs/c-port-plan.md`** for the full phased implementation plan, architecture mapping, and test strategy.
+8. **Never discard, void, or stub out parsed values.** This is a byte-for-byte compiler port. Every language construct must produce correct AST output — no `(void)result`, no token-skipping loops, no "consume until newline" shortcuts. If the Python builds an AST node from a parsed value, the C must too. If you don't know how to handle a construct, stop and study the Python — don't guess, don't skip, don't stub. A parse that silently drops data is worse than a parse that fails loudly.
+9. **No speculative or guess-based parsing.** Don't invent grammar rules or function signatures. Every parser handler must correspond to an actual Python grammar production. Read `src/zxbc/zxbparser.py` (or the relevant Python source) and implement exactly what it does — including which AST nodes are created, what children they have, and what names/tags they use.
 
 ## Architecture Decisions
 
 | Aspect | Python Original | C Approach |
 |--------|----------------|------------|
 | Parsing (zxbpp) | PLY lex/yacc | Hand-written recursive-descent |
-| Parsing (zxbasm, zxbc) | PLY lex/yacc | flex + bison |
+| Parsing (zxbasm, zxbc) | PLY lex/yacc | Hand-written recursive-descent |
 | AST nodes | 50+ classes with inheritance | Tagged union structs with common header |
 | Memory | Python GC | Arena allocator (allocate during compilation, free all at end) |
 | Strings | Python str (immutable) | `StrBuf` (growable) + arena-allocated `char*` |
@@ -110,6 +112,8 @@ Each component gets two test harnesses in `csrc/tests/`:
 
 Always validate against Python when adding features — don't trust assumptions.
 
+**What "matching" means:** A test "matches" when C and Python produce the **same exit code** for the same input file and flags. Not "C exits 0" — that only measures syntax parsing. Python's `--parse-only` runs full semantic analysis, post-parse validation, and AST visitors before returning. A file that Python rejects with exit code 1 (semantic error) must also be rejected by C with exit code 1.
+
 ```bash
 # Build and quick test:
 cd csrc/build && cmake .. && make -j4 && cd ../..
@@ -127,10 +131,24 @@ Each component has its own input/output file types:
 |-----------|-------|-----------------|----------|
 | zxbpp | `.bi` | `.out` (stdout), `.err` (errors) | `tests/functional/zxbpp/` |
 | zxbasm | `.asm` | `.bin` (binary) | `tests/functional/asm/` |
-| zxbc | `.bas` | varies (`.asm`, `.bin`, `.tap`, etc.) | `tests/functional/arch/` |
+| zxbc | `.bas` | `.asm` (assembly output) | `tests/functional/arch/zx48k/` |
 
 - C binaries must accept **identical CLI flags** as the Python originals
 - Python test runner: `tests/functional/test.py` (used by pytest via `test_prepro.py`, `test_asm.py`, `test_basic.py`)
+
+### Beyond Functional Tests — Full Test Inventory
+
+The Python project has unit and integration tests beyond the functional `.bas`/`.bi`/`.asm` files. **All of these must be matched by the C port.** Don't assume functional tests are sufficient.
+
+| Suite | Location | What it tests | Files |
+|-------|----------|---------------|-------|
+| CLI / flags | `tests/cmdline/` | `--parse-only`, `--org` hex, `-F` config file, cmdline-overrides-config | `test_zxb.py` + fixtures |
+| API / config | `tests/api/` | arg parser defaults, type checking, symbol table, config, utils | 5 test files |
+| AST nodes | `tests/symbols/` | Node construction for all 20 AST node types | 20 test files |
+| Backend | `tests/arch/zx48k/backend/` | Memory cell operations | 1 test file |
+| Optimizer | `tests/arch/zx48k/optimizer/` | Basic blocks, CPU state, optimizer passes | 6 test files |
+| Peephole | `tests/arch/zx48k/peephole/` | Pattern matching, evaluation, templates | 4 test files |
+| Compiler | `tests/zxbc/` | Parser table generation | 1 test file |
 
 ## Keeping Things Up To Date
 

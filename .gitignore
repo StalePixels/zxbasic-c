@@ -19,3 +19,4 @@ build/
 venv/
 .pypi-token
 .coverage.*
+.claude/

@@ -36,6 +36,9 @@ add_subdirectory(zxbpp)
 # Assembler (zxbasm)
 add_subdirectory(zxbasm)
 
+# Compiler (zxbc)
+add_subdirectory(zxbc)
+
 # Test harness
 enable_testing()
 add_subdirectory(tests)
