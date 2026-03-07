@@ -5,6 +5,7 @@
  */
 #include "config_file.h"
 #include "hashmap.h"
+#include "compat.h"
 
 #include <ctype.h>
 #include <stdio.h>

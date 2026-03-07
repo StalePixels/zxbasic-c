@@ -10,7 +10,32 @@
 #include "utils.h"
 
 #include <stdlib.h>
+#include <stdio.h>
+#ifndef _MSC_VER
 #include <unistd.h>
+#endif
+
+/* Cross-platform temp file helper (tests only) */
+static const char *write_temp_file(const char *content) {
+    static char path[256];
+#ifdef _MSC_VER
+    if (tmpnam_s(path, sizeof(path)) != 0) return NULL;
+#else
+    snprintf(path, sizeof(path), "/tmp/zxbc_test_XXXXXX");
+    int fd = mkstemp(path);
+    if (fd < 0) return NULL;
+    close(fd);
+#endif
+    FILE *f = fopen(path, "w");
+    if (!f) return NULL;
+    fputs(content, f);
+    fclose(f);
+    return path;
+}
+
+static void remove_temp_file(const char *path) {
+    remove(path);
+}
 
 /* ---- test_config.py: test_init ---- */
 TEST(test_config_init_defaults) {
@@ -44,23 +69,18 @@ TEST(test_config_init_defaults) {
     ASSERT_EQ_INT(opts.org, 32768);
 }
 
-/* ---- test_config.py: test_loader_ignore_none and test_autorun_ignore_none
- * In Python, setting an option to None is ignored (preserves previous value).
- * In C, we don't have None — this tests the concept that we have proper
- * defaults that don't change when not explicitly set on the cmdline. ---- */
+/* ---- test_config.py: test_loader_ignore_none and test_autorun_ignore_none ---- */
 TEST(test_config_defaults_stable_across_reinit) {
     CompilerOptions opts;
     compiler_options_init(&opts);
     opts.use_basic_loader = true;
     opts.autorun = true;
 
-    /* Reinit should reset to defaults */
     CompilerOptions opts2;
     compiler_options_init(&opts2);
     ASSERT_FALSE(opts2.use_basic_loader);
     ASSERT_FALSE(opts2.autorun);
 
-    /* But our original should still be set */
     ASSERT_TRUE(opts.use_basic_loader);
     ASSERT_TRUE(opts.autorun);
 }
@@ -78,12 +98,8 @@ static bool config_test_cb(const char *key, const char *value, void *userdata) {
 }
 
 TEST(test_load_config_from_file_proper) {
-    char tmpfile[] = "/tmp/zxbc_test_config_XXXXXX";
-    int fd = mkstemp(tmpfile);
-    ASSERT(fd >= 0);
-    const char *content = "[zxbc]\noptimization_level = 3\norg = 31234\n";
-    write(fd, content, strlen(content));
-    close(fd);
+    const char *tmpfile = write_temp_file("[zxbc]\noptimization_level = 3\norg = 31234\n");
+    ASSERT_NOT_NULL(tmpfile);
 
     CompilerOptions opts;
     compiler_options_init(&opts);
@@ -93,25 +109,21 @@ TEST(test_load_config_from_file_proper) {
     ASSERT_EQ_INT(opts.optimization_level, 3);
     ASSERT_EQ_INT(opts.org, 31234);
 
-    unlink(tmpfile);
+    remove_temp_file(tmpfile);
 }
 
 /* ---- test_config.py: test_load_config_from_file_fails_if_no_section ---- */
 TEST(test_load_config_fails_if_no_section) {
-    char tmpfile[] = "/tmp/zxbc_test_config_XXXXXX";
-    int fd = mkstemp(tmpfile);
-    ASSERT(fd >= 0);
-    const char *content = "[zxbasm]\norg = 1234\n";
-    write(fd, content, strlen(content));
-    close(fd);
+    const char *tmpfile = write_temp_file("[zxbasm]\norg = 1234\n");
+    ASSERT_NOT_NULL(tmpfile);
 
     CompilerOptions opts;
     compiler_options_init(&opts);
 
     int rc = config_load_section(tmpfile, "zxbc", config_test_cb, &opts);
-    ASSERT_EQ_INT(rc, 0);  /* section not found */
+    ASSERT_EQ_INT(rc, 0);
 
-    unlink(tmpfile);
+    remove_temp_file(tmpfile);
 }
 
 /* ---- test_config.py: test_load_config_from_file_fails_if_no_file ---- */
@@ -120,32 +132,27 @@ TEST(test_load_config_fails_if_no_file) {
     compiler_options_init(&opts);
 
     int rc = config_load_section("/nonexistent/path/dummy.ini", "zxbc", config_test_cb, &opts);
-    ASSERT_EQ_INT(rc, -1);  /* file not found */
+    ASSERT_EQ_INT(rc, -1);
 }
 
 /* ---- test_config.py: test_load_config_from_file_fails_if_duplicated_fields ---- */
 TEST(test_load_config_fails_if_duplicated_fields) {
-    char tmpfile[] = "/tmp/zxbc_test_config_XXXXXX";
-    int fd = mkstemp(tmpfile);
-    ASSERT(fd >= 0);
-    const char *content = "[zxbc]\nheap_size = 1234\nheap_size = 5678\n";
-    write(fd, content, strlen(content));
-    close(fd);
+    const char *tmpfile = write_temp_file("[zxbc]\nheap_size = 1234\nheap_size = 5678\n");
+    ASSERT_NOT_NULL(tmpfile);
 
     CompilerOptions opts;
     compiler_options_init(&opts);
 
     int rc = config_load_section(tmpfile, "zxbc", config_test_cb, &opts);
-    ASSERT_EQ_INT(rc, -2);  /* duplicate keys */
+    ASSERT_EQ_INT(rc, -2);
 
-    unlink(tmpfile);
+    remove_temp_file(tmpfile);
 }
 
 int main(void) {
     printf("test_config (matching tests/api/test_config.py + test_arg_parser.py):\n");
     RUN_TEST(test_config_init_defaults);
     RUN_TEST(test_config_defaults_stable_across_reinit);
-    /* Skip test_load_config_from_file — uses nested function (non-standard) */
     RUN_TEST(test_load_config_from_file_proper);
     RUN_TEST(test_load_config_fails_if_no_section);
     RUN_TEST(test_load_config_fails_if_no_file);
