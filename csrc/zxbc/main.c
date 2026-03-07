@@ -89,12 +89,17 @@ int main(int argc, char *argv[]) {
     rc = 0;
     if (parser.had_error || !ast) {
         rc = 1;
-    } else if (cs.opts.parse_only) {
-        /* --parse-only: just report success */
+    }
+
+    /* Use error_count for exit code (matching Python's gl.has_errors) */
+    if (cs.error_count > 0)
+        rc = 1;
+
+    if (rc == 0 && cs.opts.parse_only) {
         if (cs.opts.debug_level > 0)
             zxbc_info(&cs, "Parse OK (%d top-level statements)", ast->child_count);
-    } else {
-        /* TODO: semantic checks, code generation */
+    } else if (rc == 0) {
+        /* TODO: code generation */
         fprintf(stderr, "zxbc: code generation not yet implemented (Phase 3 in progress)\n");
         rc = 1;
     }

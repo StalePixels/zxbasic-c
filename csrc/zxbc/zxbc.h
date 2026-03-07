@@ -404,4 +404,9 @@ void compiler_destroy(CompilerState *cs);
 /* Generate a new temporary variable name */
 char *compiler_new_temp(CompilerState *cs);
 
+/* Post-parse validation (from p_start in zxbparser.py, check.py) */
+bool check_pending_labels(CompilerState *cs, AstNode *ast);
+bool check_pending_calls(CompilerState *cs);
+void symboltable_check_classes(SymbolTable *st, CompilerState *cs);
+
 #endif /* ZXBC_H */

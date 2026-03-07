@@ -431,6 +431,15 @@ AstNode *make_typecast(CompilerState *cs, TypeInfo *new_type, AstNode *node, int
     if (type_equal(new_type, node->type_))
         return node;
 
+    /* Target is unknown — skip the cast (type not yet resolved) */
+    if (new_type->basic_type == TYPE_unknown ||
+        (new_type->final_type && new_type->final_type->basic_type == TYPE_unknown))
+        return node;
+
+    /* Source type not yet resolved — skip */
+    if (!node->type_)
+        return node;
+
     /* Array type mismatch */
     if (node->tag == AST_ID && node->u.id.class_ == CLASS_array) {
         if (type_size(new_type) == type_size(node->type_) &&
@@ -576,6 +585,18 @@ static bool is_string_forbidden_op(const char *op) {
 AstNode *make_binary_node(CompilerState *cs, const char *operator, AstNode *left,
                           AstNode *right, int lineno, TypeInfo *type_) {
     if (!left || !right) return NULL;
+
+    /* If either operand has no type, skip all type coercion and just build the node.
+     * This happens for builtins, function calls, etc. that don't have types
+     * resolved yet during parse-only. */
+    if (!left->type_ || !right->type_) {
+        AstNode *binary = ast_new(cs, AST_BINARY, lineno);
+        binary->u.binary.operator = arena_strdup(&cs->arena, operator);
+        ast_add_child(cs, binary, left);
+        ast_add_child(cs, binary, right);
+        binary->type_ = type_ ? type_ : (left->type_ ? left->type_ : right->type_);
+        return binary;
+    }
 
     SymbolTable *st = cs->symbol_table;
     TypeInfo *bool_type = st->basic_types[TYPE_boolean];
@@ -725,19 +746,40 @@ AstNode *make_unary_node(CompilerState *cs, const char *operator, AstNode *opera
 AstNode *symboltable_access_id(SymbolTable *st, CompilerState *cs,
                                 const char *name, int lineno,
                                 TypeInfo *default_type, SymbolClass default_class) {
+    /* Handle deprecated suffix: a$ → string type, a% → integer type, etc.
+     * Strip suffix for lookup, but use it to infer type.
+     * Matches Python's declare_safe() suffix handling. */
+    size_t len = strlen(name);
+    const char *lookup_name = name;
+    TypeInfo *suffix_type = NULL;
+    char stripped_buf[256];
+
+    if (len > 0 && is_deprecated_suffix(name[len - 1])) {
+        BasicType bt = suffix_to_type(name[len - 1]);
+        suffix_type = st->basic_types[bt];
+        /* Strip suffix for symbol table lookup */
+        if (len < sizeof(stripped_buf)) {
+            memcpy(stripped_buf, name, len - 1);
+            stripped_buf[len - 1] = '\0';
+            lookup_name = stripped_buf;
+        }
+    }
+
     /* Check --explicit mode */
     if (cs->opts.explicit_ && !default_type) {
-        if (!symboltable_check_is_declared(st, name, lineno, "identifier", true, cs))
+        if (!symboltable_check_is_declared(st, lookup_name, lineno, "identifier", true, cs))
             return NULL;
     }
 
-    AstNode *result = symboltable_lookup(st, name);
+    AstNode *result = symboltable_lookup(st, lookup_name);
     if (!result) {
         /* Implicit declaration */
-        if (!default_type) {
+        if (suffix_type) {
+            default_type = suffix_type;
+        } else if (!default_type) {
             default_type = type_new_ref(cs, cs->default_type, lineno, true);
         }
-        result = symboltable_declare(st, cs, name, lineno, default_class);
+        result = symboltable_declare(st, cs, lookup_name, lineno, default_class);
         result->type_ = default_type;
         result->u.id.declared = false; /* implicitly declared */
         return result;
@@ -764,9 +806,12 @@ AstNode *symboltable_access_var(SymbolTable *st, CompilerState *cs,
     AstNode *result = symboltable_access_id(st, cs, name, lineno, default_type, CLASS_var);
     if (!result) return NULL;
 
-    /* Check class — const is also readable as a var */
+    /* Check class — const, array, function, sub are also readable in var context.
+     * In ZX BASIC, function names are used as variables for return values,
+     * and arrays are accessible as variables in contexts like LBOUND(). */
     if (result->u.id.class_ != CLASS_unknown && result->u.id.class_ != CLASS_var &&
-        result->u.id.class_ != CLASS_const) {
+        result->u.id.class_ != CLASS_const && result->u.id.class_ != CLASS_array &&
+        result->u.id.class_ != CLASS_function && result->u.id.class_ != CLASS_sub) {
         err_unexpected_class(cs, lineno, name,
                              symbolclass_to_string(result->u.id.class_),
                              symbolclass_to_string(CLASS_var));
@@ -818,8 +863,8 @@ AstNode *symboltable_access_call(SymbolTable *st, CompilerState *cs,
         return entry;
     }
 
-    /* Variables are callable only if they're strings (string slicing) */
-    if (cls == CLASS_var && type_is_string(entry->type_)) {
+    /* Variables/constants are callable if they're strings (string slicing) */
+    if ((cls == CLASS_var || cls == CLASS_const) && type_is_string(entry->type_)) {
         return entry;
     }
 
@@ -865,6 +910,110 @@ AstNode *symboltable_access_label(SymbolTable *st, CompilerState *cs,
         result->u.id.class_ = CLASS_label;
 
     return result;
+}
+
+/* ----------------------------------------------------------------
+ * Post-parse validation (from p_start in zxbparser.py, check.py)
+ * ---------------------------------------------------------------- */
+
+/* check_pending_labels: iteratively traverse AST looking for ID nodes
+ * with CLASS_unknown or CLASS_label that haven't been declared.
+ * Matches Python's src/api/check.py check_pending_labels(). */
+bool check_pending_labels(CompilerState *cs, AstNode *ast) {
+    if (!ast) return true;
+
+    bool result = true;
+
+    /* Iterative traversal to avoid stack overflow on deeply nested ASTs */
+    AstNode **stack = NULL;
+    int stack_len = 0, stack_cap = 0;
+
+    /* Push initial node */
+    stack_cap = 256;
+    stack = arena_alloc(&cs->arena, stack_cap * sizeof(AstNode *));
+    stack[stack_len++] = ast;
+
+    while (stack_len > 0) {
+        AstNode *node = stack[--stack_len];
+        if (!node) continue;
+
+        /* Push children */
+        for (int i = 0; i < node->child_count; i++) {
+            if (stack_len >= stack_cap) {
+                int new_cap = stack_cap * 2;
+                AstNode **new_stack = arena_alloc(&cs->arena, new_cap * sizeof(AstNode *));
+                memcpy(new_stack, stack, stack_len * sizeof(AstNode *));
+                stack = new_stack;
+                stack_cap = new_cap;
+            }
+            stack[stack_len++] = node->children[i];
+        }
+
+        /* Only check ID nodes used as labels (in GOTO/GOSUB targets, etc.) */
+        if (node->tag != AST_ID) continue;
+        if (node->u.id.class_ != CLASS_label && node->u.id.class_ != CLASS_unknown) continue;
+
+        /* Look up in global symbol table */
+        AstNode *entry = symboltable_lookup(cs->symbol_table, node->u.id.name);
+        if (!entry || (entry->u.id.class_ != CLASS_label && entry->u.id.class_ != CLASS_unknown)) {
+            zxbc_error(cs, node->lineno, "Undeclared label \"%s\"", node->u.id.name);
+            result = false;
+        }
+    }
+
+    return result;
+}
+
+/* check_pending_calls: validate forward-referenced function calls.
+ * Matches Python's src/api/check.py check_pending_calls(). */
+bool check_pending_calls(CompilerState *cs) {
+    bool result = true;
+
+    for (int i = 0; i < cs->function_calls.len; i++) {
+        AstNode *call = cs->function_calls.data[i];
+        if (!call) continue;
+
+        /* The call node's first child is the callee ID */
+        if (call->child_count < 1) continue;
+        AstNode *callee = call->children[0];
+        if (!callee || callee->tag != AST_ID) continue;
+
+        const char *name = callee->u.id.name;
+        AstNode *entry = symboltable_lookup(cs->symbol_table, name);
+
+        if (!entry) {
+            zxbc_error(cs, call->lineno, "Undeclared function \"%s\"", name);
+            result = false;
+            continue;
+        }
+
+        /* Check if forward-declared but never implemented */
+        if (entry->u.id.forwarded) {
+            const char *kind = (entry->u.id.class_ == CLASS_sub) ? "sub" : "function";
+            zxbc_error(cs, call->lineno, "%s '%s' declared but not implemented", kind, name);
+            result = false;
+        }
+    }
+
+    return result;
+}
+
+/* symboltable_check_classes: validate that all symbols in global scope
+ * have been properly resolved (no CLASS_unknown left).
+ * Matches Python's SYMBOL_TABLE.check_classes(). */
+static bool check_classes_cb(const char *key, void *value, void *userdata) {
+    (void)key;
+    CompilerState *cs = (CompilerState *)userdata;
+    AstNode *entry = (AstNode *)value;
+    if (!entry) return true;
+    if (entry->u.id.class_ == CLASS_unknown) {
+        zxbc_error(cs, entry->lineno, "Undeclared identifier \"%s\"", entry->u.id.name);
+    }
+    return true;
+}
+
+void symboltable_check_classes(SymbolTable *st, CompilerState *cs) {
+    hashmap_foreach(&st->global_scope->symbols, check_classes_cb, cs);
 }
 
 /* ----------------------------------------------------------------
