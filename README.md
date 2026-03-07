@@ -187,7 +187,8 @@ suite — with every commit pushed in real-time for full transparency.
 | Strings | Python str (immutable) | `StrBuf` (growable) |
 | Dynamic arrays | Python list | `VEC(T)` macro |
 | Hash tables | Python dict | `HashMap` (open addressing) |
-| CLI | argparse | `getopt_long` |
+| CLI | argparse | [`ya_getopt`](https://github.com/kubo/ya_getopt) (BSD-2-Clause) |
+| Path manipulation | `os.path` | [`cwalk`](https://github.com/likle/cwalk) (MIT) |
 
 See **[docs/c-port-plan.md](docs/c-port-plan.md)** for the full implementation plan with detailed breakdown.
 

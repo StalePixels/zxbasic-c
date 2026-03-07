@@ -55,7 +55,9 @@ cd csrc/build && cmake .. && make
 | Strings | Python str (immutable) | `StrBuf` (growable) + arena-allocated `char*` |
 | Dynamic arrays | Python list | `VEC(T)` macro (type-safe growable array) |
 | Hash tables | Python dict | `HashMap` (string-keyed, open addressing) |
-| CLI | argparse | `getopt_long` |
+| CLI | argparse | `ya_getopt` (BSD-2-Clause, bundled) |
+| Path manipulation | `os.path` | `cwalk` (MIT, bundled) |
+| Cross-platform compat | N/A (Python) | `compat.h` (thin MSVC shims) |
 
 ## Common Utilities (csrc/common/)
 
@@ -63,6 +65,14 @@ cd csrc/build && cmake .. && make
 - **`strbuf.h`** — Growable string buffer: `strbuf_init`, `strbuf_append`, `strbuf_cstr`, `strbuf_free`
 - **`vec.h`** — Type-safe dynamic array: `VEC(T)`, `vec_init`, `vec_push`, `vec_pop`, `vec_free`
 - **`hashmap.h`** — String-keyed hash map: `hashmap_init`, `hashmap_set`, `hashmap_get`, `hashmap_remove`
+
+## Bundled Libraries (csrc/common/)
+
+These are vendored, permissively-licensed libraries chosen over hand-rolled implementations (see rule 6):
+
+- **`ya_getopt.h`/`.c`** — Portable `getopt_long` ([ya_getopt](https://github.com/kubo/ya_getopt), BSD-2-Clause). Drop-in replacement for POSIX getopt on all platforms including MSVC.
+- **`cwalk.h`/`.c`** — Cross-platform path manipulation ([cwalk](https://github.com/likle/cwalk), MIT). Provides `cwk_path_get_basename`, `cwk_path_get_dirname`, `cwk_path_get_extension`, etc. Set `cwk_path_set_style(CWK_STYLE_UNIX)` at startup for consistent forward-slash paths.
+- **`compat.h`** — Minimal POSIX→MSVC shim (our own). Only contains `#define` aliases (`strncasecmp`→`_strnicmp`, etc.) and thin wrappers for OS calls (`realpath`→`_fullpath`, `getcwd`→`_getcwd`) with backslash normalization. No path logic — that's cwalk's job.
 
 ## Coding Conventions
 
@@ -130,7 +140,7 @@ This project has several living documents and CI artefacts that MUST stay in syn
 - **CLAUDE.md** (this file) — Update test file conventions table, test commands, and any new component patterns as phases are completed.
 - **docs/c-port-plan.md** — Check off completed items as phases progress.
 - **docs/plans/** — WIP progress files for active branches.
-- **CI workflow** (`.github/workflows/c-build.yml`) — Add new test steps as components are completed (e.g. `run_zxbasm_tests.sh` for Phase 2). The workflow builds on Linux x86_64, macOS ARM64, and macOS x86_64, runs tests, and does a Python ground-truth comparison.
+- **CI workflow** (`.github/workflows/c-build.yml`) — Add new test steps as components are completed. The workflow builds on Linux x86_64, macOS ARM64, and Windows x86_64, runs tests on all three, and does a Python ground-truth comparison on Linux. Note: zxbpp text tests are skipped on Windows (path differences in `#line` directives); zxbasm binary tests run everywhere.
 - **Test harnesses** (`csrc/tests/`) — Each new component needs its own `run_<component>_tests.sh` and an entry in `compare_python_c.sh` (or a component-specific comparison script).
 
 If test counts change, the README badge lies until you fix it. Don't leave it lying.

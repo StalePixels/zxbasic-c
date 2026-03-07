@@ -38,8 +38,9 @@ Reference: [docs/c-port-plan.md](../c-port-plan.md) Phase 2.
 - [ ] Implement output: Z80 snapshot (.z80)
 - [ ] Implement BASIC loader generation
 - [ ] Implement memory map output (-M)
-- [ ] Update CI workflow for zxbasm tests
-- [ ] Update README.md, CHANGELOG-c.md, docs
+- [x] Update CI workflow for zxbasm tests (Linux, macOS, Windows)
+- [x] Update README.md, CHANGELOG-c.md, docs
+- [x] Cross-platform: ya_getopt (getopt_long), cwalk (dirname/basename), compat.h (MSVC shims)
 
 ## Progress Log
 
@@ -63,6 +64,12 @@ Reference: [docs/c-port-plan.md](../c-port-plan.md) Phase 2.
 - Fixed IX/IY offset parsing: full expression as offset
 - All 61/61 tests pass, Python ground-truth comparison confirms byte-identical output
 
+### 2026-03-07 — Cross-platform and docs
+- Replaced hand-rolled getopt_port.h with ya_getopt (BSD-2-Clause)
+- Replaced hand-rolled dirname/basename with cwalk (MIT)
+- Added Windows (MSVC) to CI — builds and passes all 61 zxbasm tests
+- Updated all docs (CLAUDE.md, README.md, CHANGELOG-c.md)
+
 ## Decisions & Notes
 
 - Hand-written recursive-descent parser (no flex/bison dependency), matching Phase 1
@@ -71,6 +78,7 @@ Reference: [docs/c-port-plan.md](../c-port-plan.md) Phase 2.
 - Reuse zxbpp C binary for preprocessing (fork+exec, same as Python)
 - 827 Z80+ZX Next opcodes in static lookup table (z80_opcodes.h)
 - Temp labels use namespace comparison per Python Label.__eq__
+- Cross-platform: use proven libraries (ya_getopt, cwalk) over hand-rolled shims
 
 ## Blockers
 
@@ -80,3 +88,5 @@ None currently.
 d103bf57 - wip: start phase 2 (zxbasm) — init progress tracker
 b82552ad - feat: initial zxbasm assembler — compiles and passes smoke test
 665d94d9 - fix: resolve all 13 remaining zxbasm test failures — 61/61 pass
+bc7462c9 - refactor: replace hand-rolled getopt_port.h with ya_getopt
+c2619eff - refactor: replace hand-rolled dirname/basename with cwalk

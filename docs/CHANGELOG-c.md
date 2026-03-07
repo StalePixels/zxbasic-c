@@ -29,7 +29,13 @@ Phase 2 — Z80 Assembler (`zxbasm`).
 - **Test harnesses** — `csrc/tests/`
   - `run_zxbasm_tests.sh` — standalone test runner (61/61 passing)
   - `compare_python_c_asm.sh` — Python ground-truth comparison (61/61 identical)
-- **CI** — Added zxbasm test steps and Python comparison
+- **Cross-platform** — Windows (MSVC) support
+  - `ya_getopt` (BSD-2-Clause) — portable `getopt_long`, replaces POSIX `<getopt.h>`
+  - `cwalk` (MIT) — portable path manipulation (`dirname`, `basename`), replaces `<libgen.h>`
+  - `compat.h` — minimal POSIX→MSVC shims (`strncasecmp`, `realpath`, `getcwd`, etc.)
+- **CI** — Linux x86_64, macOS ARM64, Windows x86_64
+  - Added zxbasm test steps and Python comparison
+  - Windows: builds and runs zxbasm binary tests (61/61)
 
 ## [1.18.7+c1] — 2026-03-06
 
