@@ -46,6 +46,20 @@ jobs:
         if: runner.os != 'Windows'
         run: ./csrc/tests/run_zxbasm_tests.sh ./csrc/build/zxbasm/zxbasm tests/functional/asm
 
+      - name: Run unit tests (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          cd csrc/build
+          ./tests/test_utils
+          ./tests/test_config
+          ./tests/test_types
+          ./tests/test_ast
+          ./tests/test_symboltable
+
+      - name: Run cmdline tests (Unix)
+        if: runner.os != 'Windows'
+        run: ./csrc/tests/run_cmdline_tests.sh ./csrc/build/zxbc/zxbc tests/cmdline
+
       # zxbpp text tests skipped on Windows — #line paths differ.
       # Build verification is sufficient; text output is validated on Unix.
 
@@ -53,6 +67,14 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         run: ./csrc/tests/run_zxbasm_tests.sh ./csrc/build/zxbasm/Release/zxbasm.exe tests/functional/asm
+
+      - name: Run unit tests (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          cd csrc/build
+          ./tests/Release/test_utils.exe
+          ./tests/Release/test_types.exe
 
       - name: Upload zxbpp binary (Unix)
         if: runner.os != 'Windows'
