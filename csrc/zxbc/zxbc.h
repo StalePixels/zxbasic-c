@@ -277,8 +277,27 @@ AstNode *symboltable_declare(SymbolTable *st, CompilerState *cs,
 AstNode *symboltable_lookup(SymbolTable *st, const char *name);
 AstNode *symboltable_get_entry(SymbolTable *st, const char *name);
 
+/* Higher-level declaration functions (matching Python's SymbolTable API) */
+AstNode *symboltable_declare_variable(SymbolTable *st, CompilerState *cs,
+                                       const char *name, int lineno, TypeInfo *typeref);
+AstNode *symboltable_declare_param(SymbolTable *st, CompilerState *cs,
+                                    const char *name, int lineno, TypeInfo *typeref);
+AstNode *symboltable_declare_array(SymbolTable *st, CompilerState *cs,
+                                    const char *name, int lineno,
+                                    TypeInfo *typeref, AstNode *bounds);
+
+/* Check functions (matching Python's check_is_declared/check_is_undeclared) */
+bool symboltable_check_is_declared(SymbolTable *st, const char *name, int lineno,
+                                    const char *classname, bool show_error,
+                                    CompilerState *cs);
+bool symboltable_check_is_undeclared(SymbolTable *st, const char *name, int lineno,
+                                      bool show_error, CompilerState *cs);
+
 /* Type operations */
 TypeInfo *symboltable_get_type(SymbolTable *st, const char *name);
+
+/* Check module (matching Python's api/check.py) */
+bool is_temporary_value(const AstNode *node);
 
 /* ----------------------------------------------------------------
  * Compiler state — the main context struct

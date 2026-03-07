@@ -56,6 +56,18 @@ target_sources(test_symboltable PRIVATE
 )
 add_test(NAME symboltable_tests COMMAND test_symboltable)
 
+# test_check — api/check functions (matches tests/api/test_check.py)
+add_executable(test_check test_check.c)
+target_include_directories(test_check PRIVATE ${CMAKE_SOURCE_DIR}/zxbc)
+target_link_libraries(test_check zxbasic_common)
+target_sources(test_check PRIVATE
+    ${CMAKE_SOURCE_DIR}/zxbc/ast.c
+    ${CMAKE_SOURCE_DIR}/zxbc/compiler.c
+    ${CMAKE_SOURCE_DIR}/zxbc/options.c
+    ${CMAKE_SOURCE_DIR}/zxbc/errmsg.c
+)
+add_test(NAME check_tests COMMAND test_check)
+
 # test_cmdline — value-verifying option parsing tests
 # (matches tests/cmdline/test_zxb.py + tests/api/test_arg_parser.py)
 add_executable(test_cmdline test_cmdline.c)
