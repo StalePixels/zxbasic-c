@@ -782,6 +782,10 @@ AstNode *symboltable_access_id(SymbolTable *st, CompilerState *cs,
         } else if (!default_type) {
             default_type = type_new_ref(cs, cs->default_type, lineno, true);
         }
+        /* Strict mode: error if type was implicitly inferred */
+        if (cs->opts.strict && default_type && default_type->implicit) {
+            zxbc_error(cs, lineno, "strict mode: missing type declaration for '%s'", name);
+        }
         result = symboltable_declare(st, cs, lookup_name, lineno, default_class);
         result->type_ = default_type;
         result->u.id.declared = false; /* implicitly declared */

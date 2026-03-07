@@ -1935,7 +1935,12 @@ static AstNode *parse_dim_statement(Parser *p) {
         consume(p, BTOK_RP, "Expected ')' after array bounds");
 
         TypeInfo *type = parse_typedef(p);
-        if (!type) type = type_new_ref(p->cs, p->cs->default_type, lineno, true);
+        if (!type) {
+            type = type_new_ref(p->cs, p->cs->default_type, lineno, true);
+            /* Strict mode: error on implicit type in DIM */
+            if (p->cs->opts.strict)
+                zxbc_error(p->cs, lineno, "strict mode: missing type declaration for '%s'", name);
+        }
 
         /* DIM array AT expr */
         AstNode *arr_at_expr = NULL;
@@ -2004,7 +2009,14 @@ static AstNode *parse_dim_statement(Parser *p) {
         }
     }
 
-    if (!type) type = type_new_ref(p->cs, p->cs->default_type, lineno, true);
+    if (!type) {
+        type = type_new_ref(p->cs, p->cs->default_type, lineno, true);
+        /* Strict mode: error on implicit type in DIM */
+        if (p->cs->opts.strict) {
+            for (int i = 0; i < name_count; i++)
+                zxbc_error(p->cs, lineno, "strict mode: missing type declaration for '%s'", names[i]);
+        }
+    }
 
     if (name_count == 1) {
         AstNode *decl = ast_new(p->cs, AST_VARDECL, lineno);
@@ -2161,7 +2173,11 @@ static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function) {
                 }
 
                 TypeInfo *param_type = parse_typedef(p);
-                if (!param_type) param_type = type_new_ref(p->cs, p->cs->default_type, param_line, true);
+                if (!param_type) {
+                    param_type = type_new_ref(p->cs, p->cs->default_type, param_line, true);
+                    if (p->cs->opts.strict)
+                        zxbc_error(p->cs, param_line, "strict mode: missing type declaration for '%s'", param_name);
+                }
 
                 /* Default value */
                 AstNode *default_val = NULL;
@@ -2185,7 +2201,11 @@ static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function) {
     TypeInfo *ret_type = NULL;
     if (is_function || check(p, BTOK_AS)) {
         ret_type = parse_typedef(p);
-        if (!ret_type && is_function) ret_type = type_new_ref(p->cs, p->cs->default_type, lineno, true);
+        if (!ret_type && is_function) {
+            ret_type = type_new_ref(p->cs, p->cs->default_type, lineno, true);
+            if (p->cs->opts.strict)
+                zxbc_error(p->cs, lineno, "strict mode: missing type declaration for '%s'", func_name);
+        }
     }
 
     /* Declare function/sub in the CURRENT (parent) scope BEFORE entering body scope.
