@@ -7,20 +7,35 @@
 # If specific .bas files are listed, only test those.
 # Otherwise, test all .bas files in <test-dir>.
 #
-# Exit codes from Python are cached in csrc/tests/zxbc_expected/*.rc
-# (generated once via: see comments in this file)
+# Two sets of baselines exist:
+#   csrc/tests/zxbc_parse_expected/*.rc — Python --parse-only exit codes (default)
+#   csrc/tests/zxbc_expected/*.rc       — Python full compilation exit codes
 #
-# To regenerate Python baselines:
+# Set ZXBC_FULL=1 to compare against full compilation baselines.
+#
+# To regenerate parse-only baselines:
 #   for f in tests/functional/arch/zx48k/*.bas; do
 #     bn=$(basename "$f" .bas)
-#     python3.12 -c "..." >/dev/null 2>&1; echo $? > csrc/tests/zxbc_expected/${bn}.rc
+#     python3.12 -c "
+#       import sys; sys.path.insert(0,'.')
+#       from src.zxbc import zxbc
+#       sys.argv=['zxbc','--parse-only','$f']
+#       try: zxbc.main()
+#       except SystemExit as e: sys.exit(e.code or 0)
+#     " >/dev/null 2>&1; echo $? > csrc/tests/zxbc_parse_expected/${bn}.rc
 #   done
 
 BINARY="$1"
 TESTDIR="$2"
 shift 2
 
-EXPECTED_DIR="$(dirname "$0")/zxbc_expected"
+SCRIPT_DIR="$(dirname "$0")"
+
+if [ "${ZXBC_FULL:-0}" = "1" ]; then
+    EXPECTED_DIR="$SCRIPT_DIR/zxbc_expected"
+else
+    EXPECTED_DIR="$SCRIPT_DIR/zxbc_parse_expected"
+fi
 
 if [ ! -x "$BINARY" ]; then
     echo "Usage: $0 <zxbc-binary> <test-dir> [file.bas ...]" >&2
