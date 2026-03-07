@@ -29,6 +29,9 @@ add_compile_definitions(ZXBASIC_C_VERSION="${ZXBASIC_C_VERSION}")
 # Preprocessor (zxbpp)
 add_subdirectory(zxbpp)
 
+# Assembler (zxbasm)
+add_subdirectory(zxbasm)
+
 # Test harness
 enable_testing()
 add_subdirectory(tests)
