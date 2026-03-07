@@ -18,7 +18,9 @@ Phase 3 — BASIC Compiler Frontend (`zxbc`).
   - `CompilerOptions` struct with `cmdline_set` bitmask for config-file override semantics
   - Config file loading (`-F`), `--parse-only`, `--org` hex parsing
   - Preprocessor integration via static library (zxbpp_lib)
-  - **1036/1036 parse-only tests passing** — all `.bas` files parse without error
+  - **914/1036 matching Python** (88%) — exit-code parity with Python `--parse-only`
+  - All 1036 `.bas` files parse syntactically; 122 need semantic analysis to match Python's error detection
+  - Semantic infrastructure: type coercion (`make_typecast`, `make_binary_node`), constant folding, symbol resolution (`access_var`, `access_call`)
 - **Symbol table API** — `csrc/zxbc/compiler.c`
   - `symboltable_declare_variable()` — type refs, deprecated suffix stripping/validation
   - `symboltable_declare_param()` — SCOPE_parameter, duplicate detection with line numbers

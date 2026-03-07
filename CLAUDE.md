@@ -112,6 +112,8 @@ Each component gets two test harnesses in `csrc/tests/`:
 
 Always validate against Python when adding features — don't trust assumptions.
 
+**What "matching" means:** A test "matches" when C and Python produce the **same exit code** for the same input file and flags. Not "C exits 0" — that only measures syntax parsing. Python's `--parse-only` runs full semantic analysis, post-parse validation, and AST visitors before returning. A file that Python rejects with exit code 1 (semantic error) must also be rejected by C with exit code 1.
+
 ```bash
 # Build and quick test:
 cd csrc/build && cmake .. && make -j4 && cd ../..

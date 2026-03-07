@@ -4,6 +4,43 @@
 **Started:** 2026-03-07
 **Status:** In Progress
 
+## Definition of Done
+
+Phase 3 is complete when `zxbc --parse-only` is a **drop-in replacement** for the Python original on all 1036 functional test files:
+
+- **Same exit code** — if Python exits 0, C exits 0. If Python exits 1, C exits 1.
+- **Same error/warning output** — same messages, same line numbers (exact text match not required initially, but exit code parity is mandatory).
+- **Post-parse passes run** — Python's `--parse-only` runs semantic analysis, post-parse validation, and three AST visitors (unreachable code, function graph, optimizer) before returning. The C port must do the same.
+
+### How We Measure
+
+```bash
+# The ground truth: compare C exit code against Python exit code for every .bas file
+for f in tests/functional/arch/zx48k/*.bas; do
+    c_rc=0; p_rc=0
+    ./csrc/build/zxbc/zxbc --parse-only "$f" >/dev/null 2>&1 || c_rc=1
+    python3.12 ... --parse-only "$f" >/dev/null 2>&1 || p_rc=1
+    [ "$c_rc" != "$p_rc" ] && echo "MISMATCH: $(basename $f)"
+done
+```
+
+A test "passes" when C and Python produce the **same exit code**. Not "C exits 0" — that was the old (wrong) metric that only measured syntax parsing.
+
+### Current Baseline
+
+| Metric | Count | Notes |
+|--------|-------|-------|
+| Total test files | 1036 | `tests/functional/arch/zx48k/*.bas` |
+| Exit code matches Python | **914** (88%) | C and Python agree |
+| Mismatches (C=0, Python=1) | **122** | C missing semantic errors that Python catches |
+| Mismatches (C=1, Python=0) | **0** | No false positives |
+
+The 122 mismatches are all cases where Python detects a semantic error (undeclared variable, type mismatch, parameter count, etc.) but C only does syntax parsing and doesn't catch it. These represent the remaining work.
+
+### Previous Metric (Superseded)
+
+The "1036/1036 parse-only" metric counted files where C exits 0. This measured **syntax parsing** completeness only. It was useful during parser development but is not the right measure for Phase 3 completion. The correct measure is exit-code parity with Python.
+
 ## Plan
 
 Port the BASIC compiler frontend from Python to C, as defined in [Phase 3 of c-port-plan.md](../c-port-plan.md#phase-3-basic-compiler-frontend).
@@ -61,7 +98,8 @@ Port the BASIC compiler frontend from Python to C, as defined in [Phase 3 of c-p
 - [x] Named arguments (name:=expr)
 - [x] Single-line IF, END WHILE, keyword-as-identifier
 - [x] PLOT/DRAW/CIRCLE with graphics attributes
-- [x] Parse-only mode: **1036/1036 (100%)**
+- [x] Syntax parsing: all 1036 files parse without syntax error
+- [ ] Exit-code parity with Python: **914/1036 (88%)** — 122 need semantic analysis
 
 #### 3e: Build & CLI (Complete)
 - [x] CMakeLists.txt for zxbc
@@ -192,7 +230,7 @@ Port the AST visitors that Python runs before code generation (even for --parse-
 - tmpfile() for portable stderr capture in tests.
 - test_build_parsetab.py is N/A (PLY-specific).
 - Python NUMBER arithmetic tests (__add__, __eq__) test operator overloading — N/A for C.
-- Python --parse-only runs 3 AST visitors (unreachable code, function graph, optimizer) after parsing. Our C --parse-only currently exits after syntax parsing only.
+- Python `--parse-only` runs full semantic analysis, post-parse validation (`check_pending_labels`, `check_pending_calls`), and 3 AST visitors (`UnreachableCodeVisitor`, `FunctionGraphVisitor`, `OptimizerVisitor`) before returning. Our C `--parse-only` currently exits after syntax parsing + partial semantic analysis (expression type coercion, symbol resolution for variables and calls).
 
 ## Blockers
 

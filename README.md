@@ -5,7 +5,7 @@
 [![C Build](https://github.com/StalePixels/zxbasic-c/actions/workflows/c-build.yml/badge.svg)](https://github.com/StalePixels/zxbasic-c/actions/workflows/c-build.yml)
 [![zxbpp tests](https://img.shields.io/badge/zxbpp_tests-96%2F96_passing-brightgreen)](#-phase-1--preprocessor-done)
 [![zxbasm tests](https://img.shields.io/badge/zxbasm_tests-61%2F61_passing-brightgreen)](#-phase-2--assembler-done)
-[![zxbc parse-only](https://img.shields.io/badge/zxbc_parse--only-1036%2F1036_passing-brightgreen)](#-phase-3--compiler-frontend-in-progress)
+[![zxbc parse-only](https://img.shields.io/badge/zxbc_parse--only-914%2F1036_matching_Python-yellow)](#-phase-3--compiler-frontend-in-progress)
 [![C unit tests](https://img.shields.io/badge/C_unit_tests-132_passing-blue)](#c-unit-test-suite)
 
 ZX BASIC — C Port 🚀
@@ -36,23 +36,26 @@ far too heavy for the hardware. Native C binaries sidestep the problem entirely.
 | 0 | Infrastructure (arena, strbuf, vec, hashmap, CMake) | — | ✅ Complete |
 | 1 | **Preprocessor (`zxbpp`)** | **96/96** 🎉 | ✅ Complete |
 | 2 | **Assembler (`zxbasm`)** | **61/61** 🎉 | ✅ Complete |
-| 3 | **Compiler frontend (`zxbc`)** | **1036/1036** parse-only | 🔨 In Progress |
+| 3 | **Compiler frontend (`zxbc`)** | **914/1036** matching Python | 🔨 In Progress |
 | 4 | Optimizer + IR generation (AST → Quads) | — | ⏳ Planned |
 | 5 | Z80 backend (Quads → Assembly) — 1,175 ASM tests | — | ⏳ Planned |
 | 6 | Full integration + all output formats | — | ⏳ Planned |
 
 ### 🔬 Phase 3 — Compiler Frontend: In Progress
 
-The `zxbc` frontend is functional for parse-only mode:
+The `zxbc` frontend is measured by **exit-code parity with Python** — for every `.bas` test file, does the C binary produce the same exit code as the Python original?
 
-- ✅ **1036/1036 parse-only tests passing** — all `.bas` files parse without error
-- ✅ Hand-written recursive-descent lexer + parser
+- ✅ **914/1036 matching Python** (88%) — C and Python agree on pass/fail
+- ❌ **122 mismatches** — all cases where Python catches a semantic error but C doesn't yet
+- ✅ **0 false positives** — C never errors on a file that Python accepts
+- ✅ Hand-written recursive-descent lexer + parser (all 1036 files parse syntactically)
 - ✅ Full AST with tagged-union node types (30 node kinds)
 - ✅ Symbol table with lexical scoping, type registry, basic types
 - ✅ Type system: all ZX BASIC types (`byte` through `string`), aliases, refs
+- ✅ Semantic infrastructure: type coercion, constant folding, symbol resolution
 - ✅ CLI with all `zxbc` flags, config file loading, `--parse-only`
 - ✅ Preprocessor integration (reuses C zxbpp via static library)
-- 🔨 Semantic analysis and code generation — next up
+- 🔨 Remaining semantic analysis: function scope, post-parse validation, AST visitors
 
 #### C Unit Test Suite
 
