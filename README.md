@@ -4,6 +4,7 @@
 [![license](https://img.shields.io/badge/License-AGPLv3-blue.svg)](./LICENSE.txt)
 [![C Build](https://github.com/StalePixels/zxbasic-c/actions/workflows/c-build.yml/badge.svg)](https://github.com/StalePixels/zxbasic-c/actions/workflows/c-build.yml)
 [![zxbpp tests](https://img.shields.io/badge/zxbpp_tests-96%2F96_passing-brightgreen)](#-phase-1--preprocessor-done)
+[![zxbasm tests](https://img.shields.io/badge/zxbasm_tests-61%2F61_passing-brightgreen)](#-phase-2--assembler-done)
 
 ZX BASIC — C Port 🚀
 ---------------------
@@ -31,11 +32,24 @@ a full modern Python runtime is undesirable.
 |-------|-----------|-------|--------|
 | 0 | Infrastructure (arena, strbuf, vec, hashmap, CMake) | — | ✅ Complete |
 | 1 | **Preprocessor (`zxbpp`)** | **96/96** 🎉 | ✅ Complete |
-| 2 | Assembler (`zxbasm`) — 62 binary-exact tests | 0/62 | 🔜 Next up |
+| 2 | **Assembler (`zxbasm`)** | **61/61** 🎉 | ✅ Complete |
 | 3 | BASIC compiler frontend (lexer + parser + AST) | — | ⏳ Planned |
 | 4 | Optimizer + IR generation (AST → Quads) | — | ⏳ Planned |
 | 5 | Z80 backend (Quads → Assembly) — 1,175 ASM tests | — | ⏳ Planned |
 | 6 | Full integration + all output formats | — | ⏳ Planned |
+
+### 🔬 Phase 2 — Assembler: Done!
+
+The `zxbasm` C binary is a **verified drop-in replacement** for the Python original:
+
+- ✅ **61/61 tests passing** — zero failures, byte-for-byte identical binary output
+- ✅ **61/61 Python comparison** — confirmed by running both side-by-side
+- ✅ Full Z80 instruction set (827 opcodes) including ZX Next extensions
+- ✅ Two-pass assembly: labels, forward references, expressions, temporaries
+- ✅ PROC/ENDP scoping, LOCAL labels, PUSH/POP NAMESPACE
+- ✅ `#init` directive, EQU/DEFL, ORG, ALIGN, INCBIN
+- ✅ Hand-written recursive-descent parser (~1,750 lines of C)
+- ✅ Preprocessor integration (reuses the C zxbpp binary)
 
 ### 🔬 Phase 1 — Preprocessor: Done!
 
@@ -58,13 +72,16 @@ cmake ..
 make -j4
 ```
 
-This builds `csrc/build/zxbpp/zxbpp` — the C preprocessor binary.
+This builds `csrc/build/zxbpp/zxbpp` and `csrc/build/zxbasm/zxbasm`.
 
 ### Running the Tests
 
 ```bash
-# Run all 96 preprocessor tests against expected output:
+# Run all 96 preprocessor tests:
 ./csrc/tests/run_zxbpp_tests.sh ./csrc/build/zxbpp/zxbpp tests/functional/zxbpp
+
+# Run all 61 assembler tests (binary-exact):
+./csrc/tests/run_zxbasm_tests.sh ./csrc/build/zxbasm/zxbasm tests/functional/asm
 ```
 
 ### 🐍 Python Ground-Truth Comparison
@@ -79,9 +96,10 @@ Want to see for yourself that C matches Python? You'll need Python 3.11+:
 
 # Run both Python and C on every test, diff the outputs:
 ./csrc/tests/compare_python_c.sh ./csrc/build/zxbpp/zxbpp tests/functional/zxbpp
+./csrc/tests/compare_python_c_asm.sh ./csrc/build/zxbasm/zxbasm tests/functional/asm
 ```
 
-This runs the original Python `zxbpp` and the C port on all 91 test inputs and
+This runs the original Python tools and the C ports on all test inputs and
 confirms their outputs are identical. 🤝
 
 ## 🔧 Using the C Preprocessor Today
@@ -99,7 +117,19 @@ python3 zxbpp.py myfile.bas -o myfile.preprocessed.bas
 
 Supported flags: `-o`, `-d`, `-e`, `-D`, `-I`, `--arch`, `--expect-warnings`
 
-The rest of the toolchain (`zxbasm`, `zxbc`) still requires Python — for now. 😏
+Supported flags: `-d`, `-e`, `-o`, `-O` (output format)
+
+The `zxbasm` assembler is also available as a drop-in replacement:
+
+```bash
+# Instead of:
+python3 zxbasm.py myfile.asm -o myfile.bin
+
+# Use:
+./csrc/build/zxbasm/zxbasm myfile.asm -o myfile.bin
+```
+
+The compiler frontend (`zxbc`) still requires Python — for now. 😏
 
 ## 🗺️ The Road to NextPi
 
@@ -112,12 +142,12 @@ Here's how we get there, one step at a time:
 ```
  Phase 0  ✅  Infrastructure — arena allocator, strings, vectors, hash maps
     │
- Phase 1  ✅  zxbpp — Preprocessor (you are here! 📍)
-    │         Can already replace Python's zxbpp in your workflow
+ Phase 1  ✅  zxbpp — Preprocessor
+    │         96/96 tests, drop-in replacement for Python's zxbpp
     │
- Phase 2  🔜  zxbasm — Z80 Assembler
-    │         62 binary-exact tests to pass
-    │         After this: zxbpp + zxbasm work without Python
+ Phase 2  ✅  zxbasm — Z80 Assembler (you are here! 📍)
+    │         61/61 binary-exact tests passing
+    │         zxbpp + zxbasm work without Python!
     │
  Phase 3  ⏳  BASIC Frontend — Lexer, parser, AST, symbol table
     │
@@ -157,7 +187,8 @@ suite — with every commit pushed in real-time for full transparency.
 | Strings | Python str (immutable) | `StrBuf` (growable) |
 | Dynamic arrays | Python list | `VEC(T)` macro |
 | Hash tables | Python dict | `HashMap` (open addressing) |
-| CLI | argparse | `getopt_long` |
+| CLI | argparse | [`ya_getopt`](https://github.com/kubo/ya_getopt) (BSD-2-Clause) |
+| Path manipulation | `os.path` | [`cwalk`](https://github.com/likle/cwalk) (MIT) |
 
 See **[docs/c-port-plan.md](docs/c-port-plan.md)** for the full implementation plan with detailed breakdown.
 

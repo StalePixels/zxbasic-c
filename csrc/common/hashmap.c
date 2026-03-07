@@ -3,6 +3,7 @@
  * Open addressing with linear probing and FNV-1a hash.
  */
 #include "hashmap.h"
+#include "compat.h"
 
 #include <stdlib.h>
 #include <string.h>

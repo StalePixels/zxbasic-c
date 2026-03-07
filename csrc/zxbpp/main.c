@@ -8,7 +8,8 @@
  */
 #include "zxbpp.h"
 
-#include <getopt.h>
+#include "cwalk.h"
+#include "ya_getopt.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -30,6 +31,8 @@ static void usage(const char *progname)
 
 int main(int argc, char *argv[])
 {
+    cwk_path_set_style(CWK_STYLE_UNIX);
+
     const char *output_file = NULL;
     const char *error_file = NULL;
     const char *input_file = NULL;

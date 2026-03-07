@@ -9,6 +9,7 @@
 
 #include <stddef.h>
 #include <stdarg.h>
+#include "compat.h"
 
 typedef struct StrBuf {
     char *data;
@@ -38,8 +39,7 @@ void strbuf_append_n(StrBuf *sb, const char *s, size_t n);
 void strbuf_append_char(StrBuf *sb, char c);
 
 /* Append formatted string (printf-style) */
-void strbuf_printf(StrBuf *sb, const char *fmt, ...)
-    __attribute__((format(printf, 2, 3)));
+void strbuf_printf(StrBuf *sb, const char *fmt, ...) PRINTF_FMT(2, 3);
 
 /* Append formatted string (va_list version) */
 void strbuf_vprintf(StrBuf *sb, const char *fmt, va_list ap);

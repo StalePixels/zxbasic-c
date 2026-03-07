@@ -145,11 +145,9 @@ char *preproc_expand_macro(PreprocState *pp, const char *name,
 void preproc_emit_line(PreprocState *pp, int line, const char *file);
 
 /* Emit a warning */
-void preproc_warning(PreprocState *pp, int code, const char *fmt, ...)
-    __attribute__((format(printf, 3, 4)));
+void preproc_warning(PreprocState *pp, int code, const char *fmt, ...) PRINTF_FMT(3, 4);
 
 /* Emit an error */
-void preproc_error(PreprocState *pp, const char *fmt, ...)
-    __attribute__((format(printf, 2, 3)));
+void preproc_error(PreprocState *pp, const char *fmt, ...) PRINTF_FMT(2, 3);
 
 #endif /* ZXBPP_H */

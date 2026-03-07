@@ -18,9 +18,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
-#include <libgen.h>
-#include <limits.h>
-#include <unistd.h>
+#include "compat.h"
+#include "cwalk.h"
 
 /* Forward declarations */
 static void process_line(PreprocState *pp, const char *line);
@@ -228,11 +227,13 @@ static char *expand_builtin(PreprocState *pp, const char *name)
     if (strcmp(name, "__BASE_FILE__") == 0) {
         /* basename only */
         if (!pp->current_file) return arena_strdup(&pp->arena, "\"\"");
-        char *tmp = arena_strdup(&pp->arena, pp->current_file);
-        char *base = basename(tmp);
+        const char *base_ptr;
+        size_t base_len;
+        cwk_path_get_basename(pp->current_file, &base_ptr, &base_len);
+        if (!base_ptr) { base_ptr = pp->current_file; base_len = strlen(pp->current_file); }
         StrBuf sb;
         strbuf_init(&sb);
-        strbuf_printf(&sb, "\"%s\"", base);
+        strbuf_printf(&sb, "\"%.*s\"", (int)base_len, base_ptr);
         char *result = arena_strdup(&pp->arena, strbuf_cstr(&sb));
         strbuf_free(&sb);
         return result;
@@ -330,6 +331,15 @@ static char *read_file(const char *path)
     size_t nread = fread(buf, 1, (size_t)size, f);
     buf[nread] = '\0';
     fclose(f);
+
+    /* Skip UTF-8 BOM if present */
+    if (nread >= 3 &&
+        (unsigned char)buf[0] == 0xEF &&
+        (unsigned char)buf[1] == 0xBB &&
+        (unsigned char)buf[2] == 0xBF) {
+        memmove(buf, buf + 3, nread - 3 + 1);
+    }
+
     return buf;
 }
 
@@ -343,9 +353,18 @@ static char *resolve_include(PreprocState *pp, const char *name, bool is_system)
 
     /* For local includes ("file"), try current file's directory first */
     if (!is_system && pp->current_file) {
-        char *dir_tmp = arena_strdup(&pp->arena, pp->current_file);
-        char *dir = dirname(dir_tmp);
-        snprintf(path, sizeof(path), "%s/%s", dir, name);
+        size_t dir_len;
+        cwk_path_get_dirname(pp->current_file, &dir_len);
+        /* dir_len includes trailing separator; if 0, use "." */
+        if (dir_len > 0) {
+            /* Strip trailing separator for snprintf */
+            size_t d = dir_len;
+            if (d > 1 && (pp->current_file[d-1] == '/' || pp->current_file[d-1] == '\\'))
+                d--;
+            snprintf(path, sizeof(path), "%.*s/%s", (int)d, pp->current_file, name);
+        } else {
+            snprintf(path, sizeof(path), "./%s", name);
+        }
         if (access(path, R_OK) == 0) {
             /* Normalize: strip leading "./" */
             const char *normalized = path;
@@ -1872,11 +1891,17 @@ int preproc_file(PreprocState *pp, const char *filename)
 
         if (curlen > 0) {
             char last = cur[curlen - 1];
-            /* Backslash continuation (for #define) */
+            /* Backslash continuation (for #define and ASM lines) */
             if (last == '\\') {
                 continued = true;
-                /* Replace backslash with newline to preserve line structure */
-                linebuf.data[linebuf.len - 1] = '\n';
+                if (pp->in_asm) {
+                    /* In ASM mode, join lines by removing the backslash */
+                    linebuf.len--;
+                    linebuf.data[linebuf.len] = '\0';
+                } else {
+                    /* Replace backslash with newline to preserve line structure */
+                    linebuf.data[linebuf.len - 1] = '\n';
+                }
             }
             /* Underscore continuation (BASIC line continuation).
              * Only when _ is at end of line AND is not part of an identifier.
