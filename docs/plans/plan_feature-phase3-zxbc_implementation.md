@@ -52,7 +52,7 @@ Port the BASIC compiler frontend from Python to C, as defined in [Phase 3 of c-p
 - [x] ASM inline blocks
 - [x] Preprocessor directives (#line, #init, #require, #pragma)
 - [x] Builtin functions with optional parens and multi-arg (PEEK type, CHR$, LBOUND)
-- [x] POKE with type, optional parens, speculative parse for all grammar forms
+- [x] POKE with type, optional parens, deterministic disambiguation for all grammar forms
 - [x] Print attributes (INK, PAPER, BRIGHT, FLASH, OVER, INVERSE, BOLD, ITALIC)
 - [x] ON GOTO/GOSUB, SAVE/LOAD/VERIFY, ERROR
 - [x] Named arguments (name:=expr)
@@ -60,6 +60,7 @@ Port the BASIC compiler frontend from Python to C, as defined in [Phase 3 of c-p
 - [x] Sinclair-style IF without THEN
 - [x] END WHILE alternative to WEND
 - [x] Keyword-as-identifier in parameter/function names
+- [x] PLOT/DRAW/CIRCLE with graphics attributes (INK/PAPER/BRIGHT/FLASH/OVER/INVERSE)
 
 #### Semantic Checking
 - [ ] Type compatibility checks (common_type) — basic version done
@@ -74,7 +75,7 @@ Port the BASIC compiler frontend from Python to C, as defined in [Phase 3 of c-p
 - [x] --parse-only mode for testing
 
 #### Testing
-- [x] Parse-only mode (1020/1036 = 98.5% of .bas files parse successfully)
+- [x] Parse-only mode (1030/1036 = 99.4% of .bas files parse successfully)
 - [ ] Test harness script
 - [ ] Python comparison script
 
@@ -97,6 +98,16 @@ Port the BASIC compiler frontend from Python to C, as defined in [Phase 3 of c-p
 - Added expression-as-statement, named args in sub calls without parens.
 - NUMBER at statement start treated as label, AS with unknown ID as type.
 - Remaining 16 failures: 7 preprocessor-dependent, 7 expected errors, 2 real gaps (single-line FOR, no-parens function call in expression).
+
+### 2026-03-07 (session 3)
+- Code quality audit: removed all `(void)` casts and token-skipping hacks.
+- Extracted `parse_infix` from `parse_expression` for reuse in expression-as-statement.
+- Replaced speculative POKE handler with deterministic RP-before-COMMA disambiguation.
+- Implemented `parse_gfx_attributes()` for PLOT/DRAW/CIRCLE — builds proper AST nodes matching Python `attr_list` grammar (INK/PAPER/BRIGHT/FLASH/OVER/INVERSE with `_TMP` suffix, no BOLD/ITALIC).
+- Stored POKE type on AST node instead of discarding.
+- Removed unused `end_kw` variable from function/sub parser.
+- Updated CLAUDE.md with rules 8 & 9: no voiding parsed values, no speculative parsing.
+- Test count: 1020 → 1030/1036 (99.4%). Remaining 6 are preprocessor-dependent.
 
 ## Decisions & Notes
 

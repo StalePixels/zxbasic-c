@@ -43,6 +43,8 @@ cd csrc/build && cmake .. && make
 5. **No external dependencies** — the Python original has zero; the C port should match.
 6. **Battle-tested over hand-rolled** — when cross-platform portability shims or utilities are needed, use a proven, permissively-licensed library (e.g. ya_getopt for getopt_long) rather than writing a homebrew implementation. Tried-and-tested > vibe-coded.
 7. **See `docs/c-port-plan.md`** for the full phased implementation plan, architecture mapping, and test strategy.
+8. **Never discard, void, or stub out parsed values.** This is a byte-for-byte compiler port. Every language construct must produce correct AST output — no `(void)result`, no token-skipping loops, no "consume until newline" shortcuts. If the Python builds an AST node from a parsed value, the C must too. If you don't know how to handle a construct, stop and study the Python — don't guess, don't skip, don't stub. A parse that silently drops data is worse than a parse that fails loudly.
+9. **No speculative or guess-based parsing.** Don't invent grammar rules or function signatures. Every parser handler must correspond to an actual Python grammar production. Read `src/zxbc/zxbparser.py` (or the relevant Python source) and implement exactly what it does — including which AST nodes are created, what children they have, and what names/tags they use.
 
 ## Architecture Decisions
 

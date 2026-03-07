@@ -821,14 +821,11 @@ static AstNode *parse_postfix(Parser *p, AstNode *left) {
     return left;
 }
 
-/* Parse expression with Pratt algorithm */
-AstNode *parse_expression(Parser *p, Precedence min_prec) {
-    AstNode *left = parse_primary(p);
-    if (!left) return NULL;
-
-    /* Handle postfix indexing/slicing: expr(...) */
-    left = parse_postfix(p, left);
-
+/* Continue parsing binary operators from a given left-hand side.
+ * This is the infix portion of the Pratt parser, extracted so it can be
+ * used both by parse_expression and by statement-level expression parsing
+ * (e.g. expression-as-statement: "test(1) + test(2)"). */
+static AstNode *parse_infix(Parser *p, AstNode *left, Precedence min_prec) {
     while (!check(p, BTOK_EOF) && !check(p, BTOK_NEWLINE) && !check(p, BTOK_CO)) {
         Precedence prec = get_precedence(p->current.type);
         if (prec < min_prec) break;
@@ -911,6 +908,17 @@ AstNode *parse_expression(Parser *p, Precedence min_prec) {
     return left;
 }
 
+/* Parse expression with Pratt algorithm */
+AstNode *parse_expression(Parser *p, Precedence min_prec) {
+    AstNode *left = parse_primary(p);
+    if (!left) return NULL;
+
+    /* Handle postfix indexing/slicing: expr(...) */
+    left = parse_postfix(p, left);
+
+    return parse_infix(p, left, min_prec);
+}
+
 /* ----------------------------------------------------------------
  * Statement parsing
  * ---------------------------------------------------------------- */
@@ -923,6 +931,27 @@ static AstNode *parse_do_statement(Parser *p);
 static AstNode *parse_dim_statement(Parser *p);
 static AstNode *parse_print_statement(Parser *p);
 static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function);
+
+/* Graphics attributes for PLOT/DRAW/CIRCLE: INK/PAPER/BRIGHT/FLASH/OVER/INVERSE expr ;
+ * Python grammar: attr_list : attr SC | attr_list attr SC
+ * Note: BOLD/ITALIC are NOT valid here (only in PRINT). */
+static void parse_gfx_attributes(Parser *p, AstNode *parent) {
+    for (;;) {
+        const char *attr_name = NULL;
+        if (match(p, BTOK_INK))          attr_name = "INK_TMP";
+        else if (match(p, BTOK_PAPER))   attr_name = "PAPER_TMP";
+        else if (match(p, BTOK_BRIGHT))  attr_name = "BRIGHT_TMP";
+        else if (match(p, BTOK_FLASH))   attr_name = "FLASH_TMP";
+        else if (match(p, BTOK_OVER))    attr_name = "OVER_TMP";
+        else if (match(p, BTOK_INVERSE)) attr_name = "INVERSE_TMP";
+        if (!attr_name) break;
+        AstNode *val = parse_expression(p, PREC_NONE + 1);
+        AstNode *attr_sent = make_sentence_node(p, attr_name, p->previous.lineno);
+        if (val) ast_add_child(p->cs, attr_sent, val);
+        ast_add_child(p->cs, parent, attr_sent);
+        consume(p, BTOK_SC, "Expected ';' after graphics attribute");
+    }
+}
 
 /* Parse a single statement */
 static AstNode *parse_statement(Parser *p) {
@@ -1143,59 +1172,39 @@ static AstNode *parse_statement(Parser *p) {
         return s;
     }
 
-    /* POKE [type] addr, val  —  various forms from Python grammar:
-     *   POKE expr, expr
-     *   POKE LP expr, expr RP
-     *   POKE type expr, expr
-     *   POKE LP type expr, expr RP
-     *   POKE type, expr, expr
-     *   POKE LP type, expr, expr RP
-     */
+    /* POKE [type] addr, val  —  six forms from Python grammar:
+     *   POKE expr COMMA expr              |  POKE LP expr COMMA expr RP
+     *   POKE type expr COMMA expr         |  POKE LP type expr COMMA expr RP
+     *   POKE type COMMA expr COMMA expr   |  POKE LP type COMMA expr COMMA expr RP
+     *
+     * When LP is consumed, we parse the args inside and expect RP at the end.
+     * If addr is followed by RP before COMMA, the LP was a parenthesized
+     * expression (e.g. POKE (dataSprite), val) — close it and continue. */
     if (match(p, BTOK_POKE)) {
         int ln = p->previous.lineno;
         AstNode *s = make_sentence_node(p, "POKE", ln);
-        TypeInfo *poke_type = NULL;
+        bool paren = match(p, BTOK_LP);
 
-        if (check(p, BTOK_LP)) {
-            /* Speculative parse: try POKE(... RP) form.
-             * Save state, consume (, try to parse args, check for closing ).
-             * If RP found at end, it's the paren form. Otherwise restore. */
-            int save_pos = p->lexer.pos;
-            BToken save_cur = p->current;
-            bool save_err = p->had_error;
-            bool save_panic = p->panic_mode;
-
-            advance(p); /* consume ( */
-            poke_type = parse_type_name(p);
-            if (poke_type) match(p, BTOK_COMMA); /* optional comma after type */
-
-            AstNode *try_addr = parse_expression(p, PREC_NONE + 1);
-            if (try_addr && match(p, BTOK_COMMA)) {
-                AstNode *try_val = parse_expression(p, PREC_NONE + 1);
-                if (try_val && check(p, BTOK_RP)) {
-                    /* Paren form succeeded */
-                    advance(p); /* consume ) */
-                    if (try_addr) ast_add_child(p->cs, s, try_addr);
-                    if (try_val) ast_add_child(p->cs, s, try_val);
-                    return s;
-                }
-            }
-            /* Paren form failed — restore and try without parens */
-            p->current = save_cur;
-            p->lexer.pos = save_pos;
-            p->had_error = save_err;
-            p->panic_mode = save_panic;
-            poke_type = NULL;
+        /* Optional type name — stored on POKE sentence for semantic phase */
+        TypeInfo *poke_type = parse_type_name(p);
+        if (poke_type) {
+            match(p, BTOK_COMMA); /* optional comma after type */
+            s->type_ = poke_type;
         }
 
-        /* Non-paren form: POKE [type] addr, val */
-        poke_type = parse_type_name(p);
-        (void)poke_type;
-        if (poke_type) match(p, BTOK_COMMA); /* optional comma after type */
-
         AstNode *addr = parse_expression(p, PREC_NONE + 1);
+
+        /* Disambiguate: if we consumed LP and see RP before COMMA,
+         * the LP was part of a parenthesized address expression.
+         * Close the parens and continue as non-paren form. */
+        if (paren && check(p, BTOK_RP) && !check(p, BTOK_COMMA)) {
+            advance(p); /* consume ) — closes the parenthesized address */
+            paren = false;
+        }
+
         consume(p, BTOK_COMMA, "Expected ',' after POKE address");
         AstNode *val = parse_expression(p, PREC_NONE + 1);
+        if (paren) consume(p, BTOK_RP, "Expected ')' after POKE");
         if (addr) ast_add_child(p->cs, s, addr);
         if (val) ast_add_child(p->cs, s, val);
         return s;
@@ -1240,14 +1249,7 @@ static AstNode *parse_statement(Parser *p) {
     if (match(p, BTOK_PLOT)) {
         int ln = p->previous.lineno;
         AstNode *s = make_sentence_node(p, "PLOT", ln);
-        /* Skip optional attributes: INK n; PAPER n; etc. */
-        while (check(p, BTOK_INK) || check(p, BTOK_PAPER) || check(p, BTOK_BRIGHT) ||
-               check(p, BTOK_FLASH) || check(p, BTOK_OVER) || check(p, BTOK_INVERSE)) {
-            advance(p);
-            AstNode *attr_val = parse_expression(p, PREC_NONE + 1);
-            (void)attr_val;
-            match(p, BTOK_SC);
-        }
+        parse_gfx_attributes(p, s);
         AstNode *x = parse_expression(p, PREC_NONE + 1);
         consume(p, BTOK_COMMA, "Expected ',' after PLOT x");
         AstNode *y = parse_expression(p, PREC_NONE + 1);
@@ -1260,14 +1262,7 @@ static AstNode *parse_statement(Parser *p) {
     if (match(p, BTOK_DRAW)) {
         int ln = p->previous.lineno;
         AstNode *s = make_sentence_node(p, "DRAW", ln);
-        /* Skip optional attributes */
-        while (check(p, BTOK_INK) || check(p, BTOK_PAPER) || check(p, BTOK_BRIGHT) ||
-               check(p, BTOK_FLASH) || check(p, BTOK_OVER) || check(p, BTOK_INVERSE)) {
-            advance(p);
-            AstNode *attr_val = parse_expression(p, PREC_NONE + 1);
-            (void)attr_val;
-            match(p, BTOK_SC);
-        }
+        parse_gfx_attributes(p, s);
         AstNode *x = parse_expression(p, PREC_NONE + 1);
         consume(p, BTOK_COMMA, "Expected ',' after DRAW x");
         AstNode *y = parse_expression(p, PREC_NONE + 1);
@@ -1285,14 +1280,7 @@ static AstNode *parse_statement(Parser *p) {
     if (match(p, BTOK_CIRCLE)) {
         int ln = p->previous.lineno;
         AstNode *s = make_sentence_node(p, "CIRCLE", ln);
-        /* Skip optional attributes */
-        while (check(p, BTOK_INK) || check(p, BTOK_PAPER) || check(p, BTOK_BRIGHT) ||
-               check(p, BTOK_FLASH) || check(p, BTOK_OVER) || check(p, BTOK_INVERSE)) {
-            advance(p);
-            AstNode *attr_val = parse_expression(p, PREC_NONE + 1);
-            (void)attr_val;
-            match(p, BTOK_SC);
-        }
+        parse_gfx_attributes(p, s);
         AstNode *x = parse_expression(p, PREC_NONE + 1);
         consume(p, BTOK_COMMA, "Expected ',' in CIRCLE");
         AstNode *y = parse_expression(p, PREC_NONE + 1);
@@ -1500,10 +1488,9 @@ static AstNode *parse_statement(Parser *p) {
             }
 
             /* If followed by an operator, this is an expression-as-statement
-             * e.g. test(1) + test(2) — skip rest of expression */
+             * e.g. test(1) + test(2) — parse remaining binary ops */
             if (get_precedence(p->current.type) > PREC_NONE) {
-                while (!check(p, BTOK_NEWLINE) && !check(p, BTOK_EOF) && !check(p, BTOK_CO))
-                    advance(p);
+                call_node = parse_infix(p, call_node, PREC_NONE + 1);
             }
 
             /* Sub call: ID(args) as statement */
@@ -2273,8 +2260,6 @@ static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function) {
     /* Parse body */
     skip_newlines(p);
     AstNode *body = make_block_node(p, lineno);
-    const char *end_kw = is_function ? "FUNCTION" : "SUB";
-
     while (!check(p, BTOK_EOF)) {
         /* Check for END FUNCTION / END SUB */
         if (check(p, BTOK_END)) {
@@ -2312,7 +2297,6 @@ static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function) {
     decl->type_ = ret_type;
 
     vec_push(p->cs->functions, id_node);
-    (void)end_kw;
 
     return decl;
 }
