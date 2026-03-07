@@ -159,9 +159,11 @@ int asm_instr_bytes(AsmState *as, AsmInstr *instr, uint8_t *out, int out_size)
             int_to_le(arg_vals[argi], arg_width, &out[n]);
             n += arg_width;
             p += 2;
-            /* Skip additional XX for multi-byte args */
-            while (*p == ' ' && *(p+1) == 'X' && *(p+2) == 'X') {
-                p += 3;
+            /* Skip additional XX for multi-byte args (e.g. NN = XX XX = 2 bytes) */
+            for (int skip = 1; skip < arg_width; skip++) {
+                if (*p == ' ' && *(p+1) == 'X' && *(p+2) == 'X') {
+                    p += 3;
+                }
             }
             argi++;
         } else {

@@ -61,13 +61,6 @@ static bool is_temp_label_ref(const char *s)
     return (*p == 'B' || *p == 'F') && *(p + 1) == '\0';
 }
 
-/* Get the base name of a temp label (strip B/F suffix) */
-static const char *temp_label_name(const char *s)
-{
-    /* Returns just the digit part. Caller must handle lifetime. */
-    return s; /* The name property in Python strips B/F */
-}
-
 /* ----------------------------------------------------------------
  * Memory initialization
  * ---------------------------------------------------------------- */
@@ -168,9 +161,8 @@ void mem_declare_label(AsmState *as, const char *label, int lineno,
     if (value_expr == NULL) {
         value = m->index;
     } else {
-        if (!expr_eval(as, value_expr, &value, false)) {
-            /* If can't resolve now, still declare with pending resolution.
-             * For EQU, Python evaluates immediately. */
+        if (!expr_try_eval(as, value_expr, &value)) {
+            /* Can't resolve now — defer to second pass. */
             value = 0;
         }
     }
@@ -245,11 +237,11 @@ void mem_declare_label(AsmState *as, const char *label, int lineno,
         hashmap_set(scope, ex_label, lbl);
     }
 
-    /* Ensure memory slot exists */
-    if (!m->byte_set[m->index] && m->index < MAX_MEM) {
-        m->bytes[m->index] = 0;
-        m->byte_set[m->index] = true;
-    }
+    /* Note: We do NOT set byte_set here for label-only addresses.
+     * In Python, set_memory_slot() does set memory_bytes[org] = 0,
+     * but dump() uses an align buffer that drops trailing label-only
+     * bytes. By not setting byte_set, our simpler dump logic achieves
+     * the same effect — trailing label addresses don't extend output. */
 }
 
 /* ----------------------------------------------------------------
@@ -501,6 +493,10 @@ static void resolve_temp_label(AsmState *as, const char *fname, Label *lbl)
             snprintf(key, sizeof(key), "%s:%d:%s", fname, line, base_name);
             Label *def = hashmap_get(&m->tmp_labels, key);
             if (def && def->defined) {
+                /* Python Label.__eq__ compares name AND namespace */
+                if (def->namespace_ && lbl->namespace_ &&
+                    strcmp(def->namespace_, lbl->namespace_) != 0)
+                    continue;
                 lbl->value = def->value;
                 lbl->defined = true;
                 return;
@@ -515,6 +511,10 @@ static void resolve_temp_label(AsmState *as, const char *fname, Label *lbl)
             snprintf(key, sizeof(key), "%s:%d:%s", fname, line, base_name);
             Label *def = hashmap_get(&m->tmp_labels, key);
             if (def && def->defined) {
+                /* Python Label.__eq__ compares name AND namespace */
+                if (def->namespace_ && lbl->namespace_ &&
+                    strcmp(def->namespace_, lbl->namespace_) != 0)
+                    continue;
                 lbl->value = def->value;
                 lbl->defined = true;
                 return;
@@ -581,14 +581,22 @@ int mem_dump(AsmState *as, int *org_out, uint8_t **data_out, int *data_len)
     }
 
     /* Second pass: re-resolve pending instructions and overwrite memory.
-     * Mirrors Python Memory.dump() which iterates addresses and re-resolves. */
+     * Mirrors Python Memory.dump() which iterates addresses and re-resolves.
+     * Python: a.arg = a.argval(); a.pending = False; tmp = a.bytes() */
     for (int i = min_addr; i <= max_addr; i++) {
         if (as->error_count > 0) break;
 
         AsmInstr *instr = m->instr_at[i];
         if (!instr || !instr->pending) continue;
 
-        /* Re-resolve the instruction */
+        /* Re-resolve args now that all labels are defined */
+        for (int j = 0; j < instr->arg_count; j++) {
+            if (instr->args[j]) {
+                int64_t val;
+                if (expr_try_eval(as, instr->args[j], &val))
+                    instr->resolved_args[j] = val;
+            }
+        }
         instr->pending = false;
         uint8_t buf[256];
         int n = asm_instr_bytes(as, instr, buf, sizeof(buf));

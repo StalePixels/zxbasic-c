@@ -330,6 +330,15 @@ static char *read_file(const char *path)
     size_t nread = fread(buf, 1, (size_t)size, f);
     buf[nread] = '\0';
     fclose(f);
+
+    /* Skip UTF-8 BOM if present */
+    if (nread >= 3 &&
+        (unsigned char)buf[0] == 0xEF &&
+        (unsigned char)buf[1] == 0xBB &&
+        (unsigned char)buf[2] == 0xBF) {
+        memmove(buf, buf + 3, nread - 3 + 1);
+    }
+
     return buf;
 }
 
@@ -1872,11 +1881,17 @@ int preproc_file(PreprocState *pp, const char *filename)
 
         if (curlen > 0) {
             char last = cur[curlen - 1];
-            /* Backslash continuation (for #define) */
+            /* Backslash continuation (for #define and ASM lines) */
             if (last == '\\') {
                 continued = true;
-                /* Replace backslash with newline to preserve line structure */
-                linebuf.data[linebuf.len - 1] = '\n';
+                if (pp->in_asm) {
+                    /* In ASM mode, join lines by removing the backslash */
+                    linebuf.len--;
+                    linebuf.data[linebuf.len] = '\0';
+                } else {
+                    /* Replace backslash with newline to preserve line structure */
+                    linebuf.data[linebuf.len - 1] = '\n';
+                }
             }
             /* Underscore continuation (BASIC line continuation).
              * Only when _ is at end of line AND is not part of an identifier.

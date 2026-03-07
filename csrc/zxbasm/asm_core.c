@@ -116,6 +116,76 @@ int asm_assemble(AsmState *as, const char *input)
         asm_error(as, proc_line, "Missing ENDP to close this scope");
     }
 
+    if (as->error_count > 0) return as->error_count;
+
+    /* Emit #init code (mirrors Python zxbasm.py lines 167-181) */
+    if (as->inits.len > 0) {
+        /* Set org past current end of code */
+        int max_addr = -1;
+        for (int i = 0; i < MAX_MEM; i++) {
+            if (as->mem.byte_set[i]) max_addr = i;
+        }
+        int init_org = max_addr + 1;
+        as->mem.index = init_org;
+        as->mem.org_value = init_org;
+
+        for (int i = 0; i < as->inits.len; i++) {
+            const char *label = as->inits.data[i].label;
+            int line = as->inits.data[i].lineno;
+
+            /* Look up the label */
+            Label *lbl = mem_get_label(as, label, line);
+
+            /* Create CALL NN instruction */
+            AsmInstr *instr = arena_calloc(&as->arena, 1, sizeof(AsmInstr));
+            instr->lineno = 0;
+            instr->type = ASM_NORMAL;
+            const Z80Opcode *op = z80_find_opcode("CALL NN");
+            instr->opcode = op;
+            instr->asm_name = op->asm_name;
+            instr->arg_count = count_arg_slots("CALL NN", instr->arg_bytes, ASM_MAX_ARGS);
+
+            Expr *arg = expr_label(as, lbl, line);
+            instr->args[0] = arg;
+            int64_t val;
+            if (expr_try_eval(as, arg, &val)) {
+                instr->resolved_args[0] = val;
+                instr->pending = false;
+            } else {
+                instr->pending = true;
+            }
+            mem_add_instruction(as, instr);
+        }
+
+        /* Add JP NN to autorun or min_org */
+        AsmInstr *jp_instr = arena_calloc(&as->arena, 1, sizeof(AsmInstr));
+        jp_instr->lineno = 0;
+        jp_instr->type = ASM_NORMAL;
+        const Z80Opcode *jp_op = z80_find_opcode("JP NN");
+        jp_instr->opcode = jp_op;
+        jp_instr->asm_name = jp_op->asm_name;
+        jp_instr->arg_count = count_arg_slots("JP NN", jp_instr->arg_bytes, ASM_MAX_ARGS);
+
+        int64_t jp_target;
+        if (as->has_autorun) {
+            jp_target = as->autorun_addr;
+        } else {
+            /* Find min org */
+            jp_target = 0;
+            for (int i = 0; i < MAX_MEM; i++) {
+                if (as->mem.byte_set[i]) { jp_target = i; break; }
+            }
+        }
+        jp_instr->resolved_args[0] = jp_target;
+        jp_instr->pending = false;
+        /* No expr needed since we have the resolved value */
+        mem_add_instruction(as, jp_instr);
+
+        /* Set autorun to the init block */
+        as->has_autorun = true;
+        as->autorun_addr = init_org;
+    }
+
     return as->error_count;
 }
 
@@ -134,7 +204,9 @@ int asm_generate_binary(AsmState *as, const char *filename, const char *format)
     }
 
     if (!data || data_len == 0) {
-        asm_warning(as, 0, "Nothing to assemble. Exiting...");
+        /* Create empty output file (matches Python behavior) */
+        FILE *f = fopen(filename, "wb");
+        if (f) fclose(f);
         return 0;
     }
 

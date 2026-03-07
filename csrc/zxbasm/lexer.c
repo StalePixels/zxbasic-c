@@ -117,6 +117,13 @@ void lexer_init(Lexer *lex, AsmState *as, const char *input)
     lex->pos = 0;
     lex->lineno = 1;
     lex->in_preproc = false;
+
+    /* Skip UTF-8 BOM if present */
+    if ((unsigned char)input[0] == 0xEF &&
+        (unsigned char)input[1] == 0xBB &&
+        (unsigned char)input[2] == 0xBF) {
+        lex->pos = 3;
+    }
 }
 
 static char lexer_peek(Lexer *lex)
@@ -306,66 +313,33 @@ Token lexer_next(Lexer *lex)
             return tok;
         }
 
-        /* Number: decimal, or hex with trailing 'h', or temp label nF/nB */
+        /* Number: decimal, hex with trailing 'h', or temp label nF/nB.
+         * Python patterns (in priority order):
+         *   HEXA:     [0-9][0-9a-fA-F]*[hH] | $hex | 0xhex
+         *   TMPLABEL: [0-9]+[BbFf]
+         *   INTEGER:  [0-9]+
+         * We must check temp label BEFORE consuming hex digits. */
         if (isdigit((unsigned char)c)) {
             StrBuf sb;
             strbuf_init(&sb);
             strbuf_append_char(&sb, lexer_advance(lex));
 
-            /* Collect digits and underscores and hex chars */
+            /* First: collect only decimal digits */
             while (!lexer_eof(lex) &&
-                   (isxdigit((unsigned char)lexer_peek(lex)) || lexer_peek(lex) == '_')) {
+                   (isdigit((unsigned char)lexer_peek(lex)) || lexer_peek(lex) == '_')) {
                 if (lexer_peek(lex) != '_')
                     strbuf_append_char(&sb, lexer_advance(lex));
                 else
                     lexer_advance(lex);
             }
 
-            const char *numstr = strbuf_cstr(&sb);
-            size_t numlen = strlen(numstr);
-
-            /* Check for trailing 'h' or 'H' (hex) */
-            if (numlen > 0 && (numstr[numlen - 1] == 'h' || numstr[numlen - 1] == 'H')) {
-                /* Hex number with h suffix */
-                char *hex = arena_strndup(&lex->as->arena, numstr, numlen - 1);
-                tok.type = TOK_INTEGER;
-                tok.ival = (int64_t)strtoll(hex, NULL, 16);
-                strbuf_free(&sb);
-                return tok;
-            }
-
-            /* Check for trailing 'b' or 'B' — could be binary or temp label */
-            if (numlen > 0 && (numstr[numlen - 1] == 'b' || numstr[numlen - 1] == 'B')) {
-                /* Check if all preceding chars are 0/1 — then binary */
-                bool is_bin = true;
-                for (size_t i = 0; i < numlen - 1; i++) {
-                    if (numstr[i] != '0' && numstr[i] != '1') {
-                        is_bin = false;
-                        break;
-                    }
-                }
-                if (is_bin && numlen > 1) {
-                    /* Binary number */
-                    char *bin = arena_strndup(&lex->as->arena, numstr, numlen - 1);
-                    tok.type = TOK_INTEGER;
-                    tok.ival = (int64_t)strtoll(bin, NULL, 2);
-                    strbuf_free(&sb);
-                    return tok;
-                }
-                /* Otherwise it's a temporary label reference like "1B" */
-                tok.type = TOK_ID;
-                /* Uppercase the direction char */
-                char *id = arena_strdup(&lex->as->arena, numstr);
-                id[numlen - 1] = (char)toupper((unsigned char)id[numlen - 1]);
-                tok.sval = id;
-                tok.original_id = tok.sval;
-                strbuf_free(&sb);
-                return tok;
-            }
-
-            /* Check for trailing 'f' or 'F' — temp label forward ref */
+            /* Check for temp label suffix b/B/f/F (before trying hex) */
             if (!lexer_eof(lex) &&
-                (lexer_peek(lex) == 'f' || lexer_peek(lex) == 'F')) {
+                (lexer_peek(lex) == 'b' || lexer_peek(lex) == 'B' ||
+                 lexer_peek(lex) == 'f' || lexer_peek(lex) == 'F') &&
+                /* Not followed by alnum (would be hex like 1FAh) */
+                (lex->pos + 1 >= (int)strlen(lex->input) ||
+                 !isalnum((unsigned char)lex->input[lex->pos + 1]))) {
                 strbuf_append_char(&sb, (char)toupper((unsigned char)lexer_advance(lex)));
                 tok.type = TOK_ID;
                 tok.sval = arena_strdup(&lex->as->arena, strbuf_cstr(&sb));
@@ -374,9 +348,55 @@ Token lexer_next(Lexer *lex)
                 return tok;
             }
 
+            /* Now try hex: if next char is a hex letter (a-f), collect hex digits
+             * and look for trailing 'h'. Backtrack if no trailing 'h'. */
+            if (!lexer_eof(lex) && isxdigit((unsigned char)lexer_peek(lex)) &&
+                !isdigit((unsigned char)lexer_peek(lex))) {
+                /* Save position for backtrack */
+                int save_pos = lex->pos;
+                int save_sb_len = (int)sb.len;
+
+                while (!lexer_eof(lex) &&
+                       (isxdigit((unsigned char)lexer_peek(lex)) || lexer_peek(lex) == '_')) {
+                    if (lexer_peek(lex) != '_')
+                        strbuf_append_char(&sb, lexer_advance(lex));
+                    else
+                        lexer_advance(lex);
+                }
+
+                const char *numstr = strbuf_cstr(&sb);
+                size_t numlen = strlen(numstr);
+                if (numlen > 0 && (numstr[numlen - 1] == 'h' || numstr[numlen - 1] == 'H')) {
+                    /* Hex number with h suffix */
+                    char *hex = arena_strndup(&lex->as->arena, numstr, numlen - 1);
+                    tok.type = TOK_INTEGER;
+                    tok.ival = (int64_t)strtoll(hex, NULL, 16);
+                    strbuf_free(&sb);
+                    return tok;
+                }
+
+                /* No trailing h — backtrack, treat as decimal */
+                lex->pos = save_pos;
+                sb.len = (size_t)save_sb_len;
+                sb.data[sb.len] = '\0';
+            }
+
+            /* Check for trailing 'h' or 'H' on pure-decimal digits (like 0201h) */
+            if (!lexer_eof(lex) &&
+                (lexer_peek(lex) == 'h' || lexer_peek(lex) == 'H') &&
+                (lex->pos + 1 >= (int)strlen(lex->input) ||
+                 !isalnum((unsigned char)lex->input[lex->pos + 1]))) {
+                lexer_advance(lex); /* consume 'h' */
+                const char *numstr = strbuf_cstr(&sb);
+                tok.type = TOK_INTEGER;
+                tok.ival = (int64_t)strtoll(numstr, NULL, 16);
+                strbuf_free(&sb);
+                return tok;
+            }
+
             /* Plain decimal integer */
             tok.type = TOK_INTEGER;
-            tok.ival = (int64_t)strtoll(numstr, NULL, 10);
+            tok.ival = (int64_t)strtoll(strbuf_cstr(&sb), NULL, 10);
             strbuf_free(&sb);
             return tok;
         }

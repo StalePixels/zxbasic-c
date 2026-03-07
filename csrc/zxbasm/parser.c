@@ -468,6 +468,50 @@ static char *mnemonic_buf(Parser *p, const char *fmt, ...)
 }
 
 /* ----------------------------------------------------------------
+ * Lookahead: is this '(' starting a memory-indirect address, or
+ * just grouping parens in a larger expression?
+ *
+ * Memory indirect: LD HL,(expr)   — ')' followed by end-of-operand
+ * Grouping:        LD HL,(expr)+1 — ')' followed by operator
+ *
+ * Scans ahead without consuming tokens. Returns true if indirect.
+ * ---------------------------------------------------------------- */
+static bool is_indirect_paren(Parser *p)
+{
+    if (p->cur.type != TOK_LP && p->cur.type != TOK_LB) return false;
+
+    /* Save lexer state */
+    Lexer saved_lex = p->lex;
+    Token saved_cur = p->cur;
+    bool saved_has_peek = p->has_peek;
+    Token saved_peek = p->peek_tok;
+
+    /* Skip past matching paren */
+    TokenType open = p->cur.type;
+    TokenType close = (open == TOK_LP) ? TOK_RP : TOK_RB;
+    int depth = 1;
+    parser_advance(p); /* consume ( */
+    while (p->cur.type != TOK_EOF && depth > 0) {
+        if (p->cur.type == open) depth++;
+        else if (p->cur.type == close) depth--;
+        if (depth > 0) parser_advance(p);
+    }
+    if (depth == 0) parser_advance(p); /* move past ) */
+
+    /* Check what follows — operator means grouping, not indirect */
+    bool indirect = (p->cur.type == TOK_NEWLINE || p->cur.type == TOK_EOF ||
+                     p->cur.type == TOK_COLON || p->cur.type == TOK_COMMA);
+
+    /* Restore state */
+    p->lex = saved_lex;
+    p->cur = saved_cur;
+    p->has_peek = saved_has_peek;
+    p->peek_tok = saved_peek;
+
+    return indirect;
+}
+
+/* ----------------------------------------------------------------
  * Parse (IX+N) / (IY+N) indexed addressing
  * Returns the register name and the offset expression
  * ---------------------------------------------------------------- */
@@ -479,25 +523,18 @@ static bool parse_idx_addr(Parser *p, const char **reg, Expr **offset, bool brac
     *reg = reg_name(regtype);
     parser_advance(p);
 
-    /* Next should be +, -, or an expression starting with +/- */
-    if (p->cur.type == TOK_PLUS) {
-        parser_advance(p);
-        *offset = parse_any_expr(p);
-    } else if (p->cur.type == TOK_MINUS) {
-        parser_advance(p);
-        Expr *e = parse_any_expr(p);
-        *offset = expr_unary(p->as, '-', e, p->cur.lineno);
+    /* Next should be +/- followed by expression, or closing paren for +0 */
+    TokenType close = bracket ? TOK_RB : TOK_RP;
+    if (p->cur.type == close) {
+        /* (IX) or [IX] → offset 0 */
+        *offset = expr_int(p->as, 0, p->cur.lineno);
     } else {
-        /* Expression might start with a sign or just be an expr */
+        /* Parse the full offset expression: handles IX+N, IX-N, IX+A-B etc. */
         *offset = parse_any_expr(p);
     }
 
     /* Expect closing paren/bracket */
-    if (bracket)
-        parser_expect(p, TOK_RB);
-    else
-        parser_expect(p, TOK_RP);
-
+    parser_expect(p, close);
     return true;
 }
 
@@ -560,7 +597,15 @@ static void parse_asm(Parser *p)
                 /* Optionally consume colon */
                 if (p->cur.type == TOK_COLON)
                     parser_advance(p);
-                return;
+                /* If more tokens on this line, continue parsing (e.g. TEST: LD A,5) */
+                if (p->cur.type != TOK_NEWLINE && p->cur.type != TOK_EOF &&
+                    p->cur.type != TOK_COLON) {
+                    t = p->cur;
+                    lineno = t.lineno;
+                    /* Fall through to parse the instruction after the label */
+                } else {
+                    return;
+                }
             }
         }
     }
@@ -632,7 +677,7 @@ static void parse_asm(Parser *p)
                 parser_advance(p);
                 instr = make_instr(p, lineno, mnemonic_buf(p, "LD A,%s", r));
             }
-            else if (src == TOK_LP || src == TOK_LB) {
+            else if ((src == TOK_LP || src == TOK_LB) && is_indirect_paren(p)) {
                 bool bracket = (src == TOK_LB);
                 parser_advance(p);
                 if (p->cur.type == TOK_BC) {
@@ -688,7 +733,8 @@ static void parse_asm(Parser *p)
                 const char *r = reg_name(p->cur.type);
                 parser_advance(p);
                 instr = make_instr(p, lineno, mnemonic_buf(p, "LD SP,%s", r));
-            } else if (p->cur.type == TOK_LP || p->cur.type == TOK_LB) {
+            } else if ((p->cur.type == TOK_LP || p->cur.type == TOK_LB) &&
+                       is_indirect_paren(p)) {
                 bool bracket = (p->cur.type == TOK_LB);
                 parser_advance(p);
                 Expr *addr = parse_any_expr(p);
@@ -772,7 +818,8 @@ static void parse_asm(Parser *p)
             parser_advance(p);
             parser_expect(p, TOK_COMMA);
 
-            if (p->cur.type == TOK_LP || p->cur.type == TOK_LB) {
+            if ((p->cur.type == TOK_LP || p->cur.type == TOK_LB) &&
+                is_indirect_paren(p)) {
                 bool bracket = (p->cur.type == TOK_LB);
                 parser_advance(p);
                 Expr *addr = parse_any_expr(p);
@@ -883,6 +930,30 @@ static void parse_asm(Parser *p)
     if (t.type == TOK_PUSH || t.type == TOK_POP) {
         const char *op = t.sval;
         parser_advance(p);
+
+        /* PUSH/POP NAMESPACE */
+        if (p->cur.type == TOK_NAMESPACE) {
+            parser_advance(p);
+            Memory *m = &p->as->mem;
+            if (t.type == TOK_PUSH) {
+                vec_push(m->namespace_stack, m->namespace_);
+                if (p->cur.type == TOK_ID || p->cur.type == TOK_INTEGER) {
+                    m->namespace_ = normalize_namespace(p->as, p->cur.sval ? p->cur.sval : ".");
+                    parser_advance(p);
+                }
+            } else {
+                /* POP NAMESPACE */
+                if (m->namespace_stack.len == 0) {
+                    asm_error(p->as, lineno,
+                        "Stack underflow. No more Namespaces to pop. Current namespace is %s",
+                        m->namespace_);
+                } else {
+                    m->namespace_ = vec_pop(m->namespace_stack);
+                }
+            }
+            return;
+        }
+
         if (p->cur.type == TOK_AF) {
             parser_advance(p);
             instr = make_instr(p, lineno, mnemonic_buf(p, "%s AF", op));
@@ -905,43 +976,12 @@ static void parse_asm(Parser *p)
                     ff, lineno),
                 lineno);
             instr = make_instr_expr(p, lineno, "PUSH NN", swapped);
-        } else if (t.type == TOK_PUSH && p->cur.type == TOK_NAMESPACE) {
-            /* PUSH NAMESPACE [id] */
-            parser_advance(p);
-            Memory *m = &p->as->mem;
-            vec_push(m->namespace_stack, m->namespace_);
-            if (p->cur.type == TOK_ID) {
-                m->namespace_ = normalize_namespace(p->as, p->cur.sval);
-                parser_advance(p);
-            }
-            return;
         } else {
             asm_error(p->as, lineno, "Syntax error");
             parser_skip_to_newline(p);
             return;
         }
         if (instr) mem_add_instruction(p->as, instr);
-        return;
-    }
-
-    /* POP NAMESPACE */
-    if (t.type == TOK_POP) {
-        parser_advance(p);
-        if (p->cur.type == TOK_NAMESPACE) {
-            parser_advance(p);
-            Memory *m = &p->as->mem;
-            if (m->namespace_stack.len == 0) {
-                asm_error(p->as, lineno,
-                    "Stack underflow. No more Namespaces to pop. Current namespace is %s",
-                    m->namespace_);
-            } else {
-                m->namespace_ = vec_pop(m->namespace_stack);
-            }
-            return;
-        }
-        /* Already handled POP AF/reg16 above, so this shouldn't happen normally */
-        asm_error(p->as, lineno, "Syntax error");
-        parser_skip_to_newline(p);
         return;
     }
 
