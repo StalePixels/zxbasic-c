@@ -1007,19 +1007,18 @@ bool check_pending_calls(CompilerState *cs) {
         AstNode *callee = call->children[0];
         if (!callee || callee->tag != AST_ID) continue;
 
-        const char *name = callee->u.id.name;
-        AstNode *entry = symboltable_lookup(cs->symbol_table, name);
-
-        if (!entry) {
-            zxbc_error(cs, call->lineno, "Undeclared function \"%s\"", name);
-            result = false;
+        /* Use the callee node directly — it was resolved during parsing.
+         * Skip non-callable entries (arrays, variables). */
+        SymbolClass cls = callee->u.id.class_;
+        if (cls == CLASS_array || cls == CLASS_var || cls == CLASS_const) {
             continue;
         }
 
         /* Check if forward-declared but never implemented */
-        if (entry->u.id.forwarded) {
-            const char *kind = (entry->u.id.class_ == CLASS_sub) ? "sub" : "function";
-            zxbc_error(cs, call->lineno, "%s '%s' declared but not implemented", kind, name);
+        if (callee->u.id.forwarded) {
+            const char *kind = (cls == CLASS_sub) ? "sub" : "function";
+            zxbc_error(cs, call->lineno, "%s '%s' declared but not implemented",
+                       kind, callee->u.id.name);
             result = false;
         }
     }

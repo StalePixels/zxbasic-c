@@ -95,9 +95,10 @@ int main(int argc, char *argv[]) {
     if (cs.error_count > 0)
         rc = 1;
 
-    /* Post-parse validation: check GOTO/GOSUB label targets */
+    /* Post-parse validation: check GOTO/GOSUB label targets and pending calls */
     if (rc == 0 && ast) {
         check_pending_labels(&cs, ast);
+        check_pending_calls(&cs);
         if (cs.error_count > 0)
             rc = 1;
     }

@@ -561,6 +561,7 @@ AstNode *parse_primary(Parser *p) {
                 ast_add_child(p->cs, call, entry);
                 ast_add_child(p->cs, call, args);
                 call->type_ = entry->type_;
+                vec_push(p->cs->function_calls, call);
                 return call;
             }
             /* SUB used in expression context — error (matching Python p_id_expr) */
@@ -734,6 +735,10 @@ static AstNode *parse_call_or_array(Parser *p, const char *name, int lineno, boo
     }
     ast_add_child(p->cs, n, entry);
     ast_add_child(p->cs, n, arglist);
+
+    /* Track for post-parse validation (check_pending_calls) */
+    vec_push(p->cs->function_calls, n);
+
     return n;
 }
 
@@ -2078,7 +2083,16 @@ static AstNode *parse_dim_statement(Parser *p) {
         }
 
         AstNode *decl = ast_new(p->cs, AST_ARRAYDECL, lineno);
-        AstNode *id_node = symboltable_declare(p->cs->symbol_table, p->cs, name, lineno, CLASS_array);
+        /* Strip deprecated suffix for symbol table key (a$ → a, matching access_id) */
+        const char *dim_name = name;
+        size_t dim_nlen = strlen(name);
+        char dim_stripped[256];
+        if (dim_nlen > 0 && dim_nlen < sizeof(dim_stripped) && is_deprecated_suffix(name[dim_nlen - 1])) {
+            memcpy(dim_stripped, name, dim_nlen - 1);
+            dim_stripped[dim_nlen - 1] = '\0';
+            dim_name = dim_stripped;
+        }
+        AstNode *id_node = symboltable_declare(p->cs->symbol_table, p->cs, dim_name, lineno, CLASS_array);
         id_node->type_ = type;
         ast_add_child(p->cs, decl, id_node);
         ast_add_child(p->cs, decl, bounds);
@@ -2122,18 +2136,34 @@ static AstNode *parse_dim_statement(Parser *p) {
     }
 
     if (!type) {
-        type = type_new_ref(p->cs, p->cs->default_type, lineno, true);
-        /* Strict mode: error on implicit type in DIM */
-        if (p->cs->opts.strict) {
-            for (int i = 0; i < name_count; i++)
-                zxbc_error(p->cs, lineno, "strict mode: missing type declaration for '%s'", names[i]);
+        /* Check for deprecated suffix ($%&!) to infer type */
+        size_t slen = strlen(name);
+        if (slen > 0 && is_deprecated_suffix(name[slen - 1])) {
+            BasicType bt = suffix_to_type(name[slen - 1]);
+            type = p->cs->symbol_table->basic_types[bt];
+        } else {
+            type = type_new_ref(p->cs, p->cs->default_type, lineno, true);
+            /* Strict mode: error on implicit type in DIM */
+            if (p->cs->opts.strict) {
+                for (int i = 0; i < name_count; i++)
+                    zxbc_error(p->cs, lineno, "strict mode: missing type declaration for '%s'", names[i]);
+            }
         }
     }
 
     if (name_count == 1) {
         AstNode *decl = ast_new(p->cs, AST_VARDECL, lineno);
         SymbolClass cls = is_const ? CLASS_const : CLASS_var;
-        AstNode *id_node = symboltable_declare(p->cs->symbol_table, p->cs, name, lineno, cls);
+        /* Strip deprecated suffix for symbol table key */
+        const char *decl_name = name;
+        size_t decl_nlen = strlen(name);
+        char decl_stripped[256];
+        if (decl_nlen > 0 && decl_nlen < sizeof(decl_stripped) && is_deprecated_suffix(name[decl_nlen - 1])) {
+            memcpy(decl_stripped, name, decl_nlen - 1);
+            decl_stripped[decl_nlen - 1] = '\0';
+            decl_name = decl_stripped;
+        }
+        AstNode *id_node = symboltable_declare(p->cs->symbol_table, p->cs, decl_name, lineno, cls);
         /* Check for duplicate declaration */
         if (id_node->u.id.declared && id_node->lineno != lineno) {
             zxbc_error(p->cs, lineno, "Variable '%s' already declared at %s:%d",
@@ -2152,7 +2182,16 @@ static AstNode *parse_dim_statement(Parser *p) {
     SymbolClass cls = is_const ? CLASS_const : CLASS_var;
     for (int i = 0; i < name_count; i++) {
         AstNode *decl = ast_new(p->cs, AST_VARDECL, lineno);
-        AstNode *id_node = symboltable_declare(p->cs->symbol_table, p->cs, names[i], lineno, cls);
+        /* Strip deprecated suffix for symbol table key */
+        const char *mn = names[i];
+        size_t ml = strlen(mn);
+        char ms[256];
+        if (ml > 0 && ml < sizeof(ms) && is_deprecated_suffix(mn[ml - 1])) {
+            memcpy(ms, mn, ml - 1);
+            ms[ml - 1] = '\0';
+            mn = ms;
+        }
+        AstNode *id_node = symboltable_declare(p->cs->symbol_table, p->cs, mn, lineno, cls);
         id_node->type_ = type;
         ast_add_child(p->cs, decl, id_node);
         decl->type_ = type;
