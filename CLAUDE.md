@@ -41,7 +41,8 @@ cd csrc/build && cmake .. && make
 3. **Do not modify `tests/`** — those are shared test fixtures (synced from upstream).
 4. **NEVER push to `python-upstream` or `boriel-basic/zxbasic`** — that is Boriel's repo. We are read-only consumers. All our work goes to `origin` (`StalePixels/zxbasic-c`) only.
 5. **No external dependencies** — the Python original has zero; the C port should match.
-6. **See `docs/c-port-plan.md`** for the full phased implementation plan, architecture mapping, and test strategy.
+6. **Battle-tested over hand-rolled** — when cross-platform portability shims or utilities are needed, use a proven, permissively-licensed library (e.g. ya_getopt for getopt_long) rather than writing a homebrew implementation. Tried-and-tested > vibe-coded.
+7. **See `docs/c-port-plan.md`** for the full phased implementation plan, architecture mapping, and test strategy.
 
 ## Architecture Decisions
 

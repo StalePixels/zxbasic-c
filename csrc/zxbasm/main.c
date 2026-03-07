@@ -13,6 +13,7 @@
 #include "zxbpp.h"
 
 #include "compat.h"
+#include "cwalk.h"
 #include "ya_getopt.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -40,8 +41,18 @@ static void usage(const char *progname)
 /* Generate default output filename: basename without extension + ".bin" */
 static char *default_output(const char *input, const char *ext)
 {
-    char *tmp = strdup(input);
-    char *base = basename(tmp);
+    const char *base_ptr;
+    size_t base_len;
+    cwk_path_get_basename(input, &base_ptr, &base_len);
+    if (!base_ptr || base_len == 0) {
+        base_ptr = input;
+        base_len = strlen(input);
+    }
+
+    /* Copy basename so we can strip extension */
+    char *base = malloc(base_len + 1);
+    memcpy(base, base_ptr, base_len);
+    base[base_len] = '\0';
 
     /* Strip extension */
     char *dot = strrchr(base, '.');
@@ -50,12 +61,14 @@ static char *default_output(const char *input, const char *ext)
     size_t len = strlen(base) + strlen(ext) + 2;
     char *out = malloc(len);
     snprintf(out, len, "%s.%s", base, ext);
-    free(tmp);
+    free(base);
     return out;
 }
 
 int main(int argc, char *argv[])
 {
+    cwk_path_set_style(CWK_STYLE_UNIX);
+
     const char *output_file = NULL;
     const char *error_file = NULL;
     const char *input_file = NULL;

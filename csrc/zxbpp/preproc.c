@@ -19,6 +19,7 @@
 #include <string.h>
 #include <stdarg.h>
 #include "compat.h"
+#include "cwalk.h"
 
 /* Forward declarations */
 static void process_line(PreprocState *pp, const char *line);
@@ -226,11 +227,13 @@ static char *expand_builtin(PreprocState *pp, const char *name)
     if (strcmp(name, "__BASE_FILE__") == 0) {
         /* basename only */
         if (!pp->current_file) return arena_strdup(&pp->arena, "\"\"");
-        char *tmp = arena_strdup(&pp->arena, pp->current_file);
-        char *base = basename(tmp);
+        const char *base_ptr;
+        size_t base_len;
+        cwk_path_get_basename(pp->current_file, &base_ptr, &base_len);
+        if (!base_ptr) { base_ptr = pp->current_file; base_len = strlen(pp->current_file); }
         StrBuf sb;
         strbuf_init(&sb);
-        strbuf_printf(&sb, "\"%s\"", base);
+        strbuf_printf(&sb, "\"%.*s\"", (int)base_len, base_ptr);
         char *result = arena_strdup(&pp->arena, strbuf_cstr(&sb));
         strbuf_free(&sb);
         return result;
@@ -350,9 +353,18 @@ static char *resolve_include(PreprocState *pp, const char *name, bool is_system)
 
     /* For local includes ("file"), try current file's directory first */
     if (!is_system && pp->current_file) {
-        char *dir_tmp = arena_strdup(&pp->arena, pp->current_file);
-        char *dir = dirname(dir_tmp);
-        snprintf(path, sizeof(path), "%s/%s", dir, name);
+        size_t dir_len;
+        cwk_path_get_dirname(pp->current_file, &dir_len);
+        /* dir_len includes trailing separator; if 0, use "." */
+        if (dir_len > 0) {
+            /* Strip trailing separator for snprintf */
+            size_t d = dir_len;
+            if (d > 1 && (pp->current_file[d-1] == '/' || pp->current_file[d-1] == '\\'))
+                d--;
+            snprintf(path, sizeof(path), "%.*s/%s", (int)d, pp->current_file, name);
+        } else {
+            snprintf(path, sizeof(path), "./%s", name);
+        }
         if (access(path, R_OK) == 0) {
             /* Normalize: strip leading "./" */
             const char *normalized = path;

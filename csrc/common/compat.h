@@ -2,7 +2,8 @@
  * Platform compatibility — Windows (MSVC) vs POSIX.
  *
  * Simple #define mappings for MSVC equivalents of POSIX functions.
- * For getopt, we use ya_getopt (BSD-licensed, bundled in common/).
+ * Path manipulation uses cwalk (MIT-licensed, bundled in common/).
+ * CLI option parsing uses ya_getopt (BSD-licensed, bundled in common/).
  */
 #ifndef COMPAT_H
 #define COMPAT_H
@@ -51,36 +52,11 @@
     }
     #define getcwd compat_getcwd
 
-    /* dirname: return directory portion of path */
-    static inline char *compat_dirname(char *path) {
-        if (!path || !*path) return ".";
-        char *sep = strrchr(path, '/');
-        char *sep2 = strrchr(path, '\\');
-        if (sep2 && (!sep || sep2 > sep)) sep = sep2;
-        if (!sep) return ".";
-        if (sep == path) { path[1] = '\0'; return path; }
-        *sep = '\0';
-        return path;
-    }
-
-    /* basename: return filename portion of path */
-    static inline char *compat_basename(char *path) {
-        if (!path || !*path) return ".";
-        char *sep = strrchr(path, '/');
-        char *sep2 = strrchr(path, '\\');
-        if (sep2 && (!sep || sep2 > sep)) sep = sep2;
-        return sep ? sep + 1 : path;
-    }
-
-    #define dirname  compat_dirname
-    #define basename compat_basename
-
 #else
     /* POSIX */
     #include <unistd.h>
     #include <limits.h>
     #include <strings.h>
-    #include <libgen.h>
 #endif
 
 #endif /* COMPAT_H */
