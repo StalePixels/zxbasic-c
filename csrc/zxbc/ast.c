@@ -4,6 +4,7 @@
  * Ported from src/ast/tree.py, src/symbols/symbol_.py
  */
 #include "zxbc.h"
+#include <stdio.h>
 #include <string.h>
 
 /* ----------------------------------------------------------------
@@ -38,6 +39,44 @@ void ast_add_child(CompilerState *cs, AstNode *parent, AstNode *child) {
 
     child->parent = parent;
     parent->children[parent->child_count++] = child;
+}
+
+/* Create a NUMBER node with auto type inference from value
+ * Matches Python's SymbolNUMBER auto-typing logic */
+AstNode *ast_number(CompilerState *cs, double value, int lineno) {
+    AstNode *n = ast_new(cs, AST_NUMBER, lineno);
+    n->u.number.value = value;
+
+    SymbolTable *st = cs->symbol_table;
+    if (value == (int64_t)value) {
+        int64_t iv = (int64_t)value;
+        if (iv >= 0 && iv <= 255)
+            n->type_ = st->basic_types[TYPE_ubyte];
+        else if (iv >= -128 && iv <= 127)
+            n->type_ = st->basic_types[TYPE_byte];
+        else if (iv >= 0 && iv <= 65535)
+            n->type_ = st->basic_types[TYPE_uinteger];
+        else if (iv >= -32768 && iv <= 32767)
+            n->type_ = st->basic_types[TYPE_integer];
+        else if (iv >= 0 && iv <= 4294967295LL)
+            n->type_ = st->basic_types[TYPE_ulong];
+        else if (iv >= -2147483648LL && iv <= 2147483647LL)
+            n->type_ = st->basic_types[TYPE_long];
+        else
+            n->type_ = st->basic_types[TYPE_float];
+    } else {
+        n->type_ = st->basic_types[TYPE_float];
+    }
+
+    /* Set t to string representation of value */
+    char buf[64];
+    if (value == (int64_t)value)
+        snprintf(buf, sizeof(buf), "%lld", (long long)(int64_t)value);
+    else
+        snprintf(buf, sizeof(buf), "%g", value);
+    n->t = arena_strdup(&cs->arena, buf);
+
+    return n;
 }
 
 /* ----------------------------------------------------------------

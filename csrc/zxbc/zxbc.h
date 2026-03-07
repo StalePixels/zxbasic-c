@@ -76,7 +76,7 @@ static inline const char *ast_tag_name(AstTag tag) {
         "VARDECL", "ARRAYDECL", "ARRAYACCESS", "ARRAYLOAD",
         "ARGUMENT", "ARGLIST", "PARAMLIST", "BLOCK", "SENTENCE",
         "BOUND", "BOUNDLIST", "ASM", "CONSTEXPR", "STRSLICE",
-        "TYPE", "BASICTYPE", "TYPEALIAS", "TYPEREF",
+        "ARRAYINIT", "TYPE", "BASICTYPE", "TYPEALIAS", "TYPEREF",
     };
     return (tag >= 0 && tag < AST_COUNT) ? names[tag] : "UNKNOWN";
 }
@@ -223,6 +223,9 @@ AstNode *ast_new(CompilerState *cs, AstTag tag, int lineno);
 
 /* Append a child to a node */
 void ast_add_child(CompilerState *cs, AstNode *parent, AstNode *child);
+
+/* Create a NUMBER node with auto type inference from value */
+AstNode *ast_number(CompilerState *cs, double value, int lineno);
 
 /* ----------------------------------------------------------------
  * Type system operations
