@@ -53,7 +53,7 @@ Final Output
 
 | Aspect | Python | C Approach |
 |--------|--------|------------|
-| Parsing | PLY (Python lex/yacc) | flex + bison (native, faster) |
+| Parsing | PLY (Python lex/yacc) | Hand-written recursive-descent |
 | AST nodes | 50+ classes with inheritance | Tagged union structs with common header |
 | Symbol table | Python dict with scoping | Hash table with scope chain |
 | Strings | Python str (immutable, GC) | Arena-allocated, copied |
@@ -61,8 +61,8 @@ Final Output
 | Visitor pattern | Python methods | Function pointer tables or switch dispatch |
 | IC instructions | Python enum | C enum + handler function pointer table |
 | Memory management | Python GC | Arena allocator (free everything at end) |
-| Config/options | Python class attributes | Global options struct |
-| CLI parsing | argparse | getopt_long |
+| Config/options | Python class attributes | `CompilerOptions` struct |
+| CLI parsing | argparse | `ya_getopt` (BSD-2-Clause) |
 
 ## Phases
 
@@ -135,25 +135,29 @@ Key components:
 **Python source:** ~5,500 lines across `src/zxbc/`, `src/symbols/`, `src/api/symboltable/`
 
 Key components:
-- [ ] BASIC lexer (flex) from `zxblex.py`
+- [x] BASIC lexer (hand-written) from `zxblex.py`
   - Multiple lexer states: string, asm, preproc, comment, bin
   - Keyword recognition from `keywords.py`
-- [ ] BASIC parser (bison) from `zxbparser.py` (~3,600 lines of grammar rules)
+- [x] BASIC parser (hand-written recursive-descent) from `zxbparser.py` (~3,600 lines of grammar rules)
   - All BASIC statements: LET, IF, FOR, WHILE, DO, PRINT, INPUT, etc.
   - Expressions with operator precedence
   - Function/SUB declarations
   - Array declarations and access
   - Type casting
-- [ ] AST node types (C structs) from `src/symbols/` (50+ types)
+- [x] AST node types (C structs) from `src/symbols/` (30 node kinds)
   - Common node header (tag, type, children, line number)
-  - Tagged union or struct-per-type approach
-- [ ] Symbol table with lexical scoping from `src/api/symboltable/`
-- [ ] Type system: `i8`, `u8`, `i16`, `u16`, `i32`, `u32`, `f16`, `f`, `str`
-- [ ] Semantic checking from `src/api/check.py`
+  - Tagged union approach
+- [x] Symbol table with lexical scoping from `src/api/symboltable/`
+- [x] Type system: `i8`, `u8`, `i16`, `u16`, `i32`, `u32`, `f16`, `f`, `str`
+- [x] Semantic checking from `src/api/check.py` (is_temporary_value)
+- [x] CLI with all `zxbc` flags, config file loading
+- [x] Preprocessor integration (static library linkage)
+- [ ] Full semantic analysis (type checking, constant folding)
+- [ ] Code generation (AST → output)
 
-**Test cases:** Parser correctness validated indirectly via Phase 5 ASM output tests.
+**Test cases:** 1036/1036 parse-only + 132 C unit tests + 4 shell cmdline tests.
 
-**Acceptance:** Frontend parses all 1,285 test `.bas` files without errors.
+**Acceptance:** Frontend parses all 1,285 test `.bas` files without errors. ✅ 1036/1036 passing.
 
 ### Phase 4: Optimizer + IR Generation
 

@@ -51,7 +51,8 @@ void preproc_init(PreprocState *pp)
     pp->expect_warnings = 0;
     pp->has_output = false;
     pp->in_asm = false;
-    pp->in_block_comment = false;
+    pp->block_comment_level = 0;
+    pp->builtins_registered = false;
     pp->err_file = stderr;
 }
 
@@ -610,6 +611,22 @@ char *preproc_expand_macro(PreprocState *pp, const char *name,
     /* Recursively expand macros in the result */
     char *final = expand_macros_in_text(pp, expanded);
     def->evaluating = false;
+
+    /* Python's expand_macros() calls remove_spaces() on each MacroCall result:
+     * strip leading/trailing whitespace, return " " if all-whitespace. */
+    if (final) {
+        const char *start = final;
+        while (*start == ' ' || *start == '\t') start++;
+        if (!*start) {
+            /* All whitespace → single space */
+            return arena_strdup(&pp->arena, " ");
+        }
+        const char *end = start + strlen(start);
+        while (end > start && (end[-1] == ' ' || end[-1] == '\t')) end--;
+        if (start != final || end != start + strlen(start)) {
+            final = arena_strndup(&pp->arena, start, (size_t)(end - start));
+        }
+    }
     return final;
 }
 
@@ -624,17 +641,26 @@ static char *expand_macros_in_text(PreprocState *pp, const char *text)
     int len = (int)strlen(text);
 
     while (i < len) {
-        /* Inside a string literal? Pass through */
+        /* Inside a string literal? Pass through.
+         * BASIC escapes quotes by doubling (""), not backslash (\"). */
         if (text[i] == '"') {
             strbuf_append_char(&result, text[i]);
             i++;
-            while (i < len && text[i] != '"') {
-                if (text[i] == '\\' && i + 1 < len) {
+            while (i < len) {
+                if (text[i] == '"') {
+                    if (i + 1 < len && text[i + 1] == '"') {
+                        /* Doubled quote "" — escaped, still inside string */
+                        strbuf_append_char(&result, text[i]);
+                        strbuf_append_char(&result, text[i + 1]);
+                        i += 2;
+                    } else {
+                        /* Closing quote */
+                        break;
+                    }
+                } else {
                     strbuf_append_char(&result, text[i]);
                     i++;
                 }
-                strbuf_append_char(&result, text[i]);
-                i++;
             }
             if (i < len) {
                 strbuf_append_char(&result, text[i]); /* closing quote */
@@ -1432,26 +1458,95 @@ static bool handle_pragma(PreprocState *pp, const char *rest)
         return true;
     }
 
-    /* Pass other pragmas through to output */
+    /* Parse and format pragma variants to match Python output:
+     *   #pragma ID              → "#pragma ID"
+     *   #pragma ID = ID/INT     → "#pragma ID = value"
+     *   #pragma ID = "STRING"   → "#pragma ID = STRING" (quotes stripped)
+     *   #pragma push(ID)        → "#pragma push(ID)"
+     *   #pragma pop(ID)         → "#pragma pop(ID)"
+     */
     const char *pr = skip_ws(rest);
-    strbuf_printf(&pp->output, "#pragma %s\n", pr);
+
+    /* Check for push/pop: e.g. "push(case_insensitive)" */
+    if ((strnicmp_local(pr, "push", 4) == 0 || strnicmp_local(pr, "pop", 3) == 0) &&
+        pr[strnicmp_local(pr, "push", 4) == 0 ? 4 : 3] == '(') {
+        /* Pass through as-is — Python formats as "#pragma push(ID)" with no spaces */
+        strbuf_printf(&pp->output, "#pragma %s\n", pr);
+        return false;
+    }
+
+    /* Parse: ID [= value] */
+    int id_len = scan_id(pr);
+    if (id_len > 0) {
+        char *id = arena_strndup(&pp->arena, pr, (size_t)id_len);
+        const char *after_id = skip_ws(pr + id_len);
+
+        if (*after_id == '=') {
+            /* #pragma ID = value */
+            const char *val = skip_ws(after_id + 1);
+            if (*val == '"') {
+                /* String value — strip quotes */
+                const char *end = strchr(val + 1, '"');
+                if (end) {
+                    char *stripped = arena_strndup(&pp->arena, val + 1, (size_t)(end - val - 1));
+                    strbuf_printf(&pp->output, "#pragma %s = %s\n", id, stripped);
+                } else {
+                    strbuf_printf(&pp->output, "#pragma %s = %s\n", id, val);
+                }
+            } else {
+                /* ID or integer value — trim trailing whitespace */
+                int vlen = 0;
+                while (val[vlen] && val[vlen] != '\n' && val[vlen] != '\r')
+                    vlen++;
+                while (vlen > 0 && (val[vlen-1] == ' ' || val[vlen-1] == '\t'))
+                    vlen--;
+                char *trimmed = arena_strndup(&pp->arena, val, (size_t)vlen);
+                strbuf_printf(&pp->output, "#pragma %s = %s\n", id, trimmed);
+            }
+        } else {
+            /* #pragma ID (no value) */
+            strbuf_printf(&pp->output, "#pragma %s\n", id);
+        }
+    } else {
+        /* Fallback — pass through */
+        strbuf_printf(&pp->output, "#pragma %s\n", pr);
+    }
     return false;
 }
 
-/* Handle: #require "file" */
+/* Handle: #require "file"
+ * Python applies sanitize_filename() which replaces backslashes with forward slashes. */
 static void handle_require(PreprocState *pp, const char *rest)
 {
-    /* Pass through to output, trimming leading whitespace */
     const char *p = skip_ws(rest);
-    strbuf_printf(&pp->output, "#require %s\n", p);
+
+    /* sanitize_filename: replace \ with / inside the string argument */
+    StrBuf sanitized;
+    strbuf_init(&sanitized);
+    for (const char *c = p; *c && *c != '\n' && *c != '\r'; c++) {
+        strbuf_append_char(&sanitized, *c == '\\' ? '/' : *c);
+    }
+    strbuf_printf(&pp->output, "#require %s\n", strbuf_cstr(&sanitized));
+    strbuf_free(&sanitized);
 }
 
-/* Handle: #init "name" */
+/* Handle: #init "name" or #init name
+ * Python: p_init (bare ID) wraps in quotes, p_init_str (STRING) passes through */
 static void handle_init(PreprocState *pp, const char *rest)
 {
-    /* Pass through to output, trimming leading whitespace */
     const char *p = skip_ws(rest);
-    strbuf_printf(&pp->output, "#init %s\n", p);
+    if (*p == '"') {
+        /* Already a string — pass through as-is */
+        strbuf_printf(&pp->output, "#init %s\n", p);
+    } else {
+        /* Bare identifier — wrap in quotes */
+        int id_len = 0;
+        while (p[id_len] && p[id_len] != ' ' && p[id_len] != '\t' &&
+               p[id_len] != '\n' && p[id_len] != '\r')
+            id_len++;
+        char *id = arena_strndup(&pp->arena, p, (size_t)id_len);
+        strbuf_printf(&pp->output, "#init \"%s\"\n", id);
+    }
 }
 
 /* Handle: #error MESSAGE */
@@ -1734,22 +1829,32 @@ static bool is_directive(const char *line)
  */
 static void process_line(PreprocState *pp, const char *line)
 {
-    /* Handle block comments (/' ... '/) */
-    if (pp->in_block_comment) {
-        /* Check if this line contains the closing '/ */
-        const char *close = strstr(line, "'/");
-        if (close) {
-            pp->in_block_comment = false;
-            /* Anything after '/ on this line is content */
-            const char *after = close + 2;
-            after = skip_ws(after);
-            if (*after) {
-                /* There's content after the block comment close */
-                process_line(pp, after);
-                return;
+    /* Handle block comments (/' ... '/) with nesting support.
+     * Python tracks __COMMENT_LEVEL as an integer counter. */
+    if (pp->block_comment_level > 0) {
+        const char *p = line;
+        while (*p) {
+            if (p[0] == '/' && p[1] == '\'') {
+                /* Nested block comment open */
+                pp->block_comment_level++;
+                p += 2;
+            } else if (p[0] == '\'' && p[1] == '/') {
+                pp->block_comment_level--;
+                p += 2;
+                if (pp->block_comment_level == 0) {
+                    /* Anything after '/ on this line is content.
+                     * Don't strip whitespace — Python preserves it. */
+                    if (*p) {
+                        process_line(pp, p);
+                        return;
+                    }
+                    break;
+                }
+            } else {
+                p++;
             }
         }
-        /* Inside block comment — emit blank line */
+        /* Still inside block comment (or just closed with nothing after) */
         if (is_enabled(pp)) {
             strbuf_append_char(&pp->output, '\n');
             pp->has_output = true;
@@ -1761,10 +1866,27 @@ static void process_line(PreprocState *pp, const char *line)
     if (!pp->in_asm) {
         const char *bc = strstr(line, "/'");
         if (bc) {
-            /* Check if there's a closing '/ on the same line */
-            const char *close = strstr(bc + 2, "'/");
+            /* Scan for matching close, respecting nesting */
+            int depth = 1;
+            const char *p = bc + 2;
+            const char *close = NULL;
+            while (*p) {
+                if (p[0] == '/' && p[1] == '\'') {
+                    depth++;
+                    p += 2;
+                } else if (p[0] == '\'' && p[1] == '/') {
+                    depth--;
+                    if (depth == 0) {
+                        close = p;
+                        break;
+                    }
+                    p += 2;
+                } else {
+                    p++;
+                }
+            }
             if (close) {
-                /* Single-line block comment — remove it and process rest */
+                /* Block comment fully closed on same line — remove it and process rest */
                 StrBuf cleaned;
                 strbuf_init(&cleaned);
                 strbuf_append_n(&cleaned, line, (size_t)(bc - line));
@@ -1775,7 +1897,7 @@ static void process_line(PreprocState *pp, const char *line)
                 return;
             }
             /* Multi-line block comment starts here */
-            pp->in_block_comment = true;
+            pp->block_comment_level = depth;
             /* Content before /' on this line */
             if (bc > line) {
                 char *before = arena_strndup(&pp->arena, line, (size_t)(bc - line));
@@ -1852,11 +1974,10 @@ int preproc_file(PreprocState *pp, const char *filename)
         return 1;
     }
 
-    /* Register builtins on first call */
-    static bool builtins_done = false;
-    if (!builtins_done) {
+    /* Register builtins (once per PreprocState instance) */
+    if (!pp->builtins_registered) {
         register_builtins(pp);
-        builtins_done = true;
+        pp->builtins_registered = true;
     }
 
     pp->current_file = arena_strdup(&pp->arena, filename);
@@ -1941,40 +2062,74 @@ int preproc_file(PreprocState *pp, const char *filename)
 
 int preproc_string(PreprocState *pp, const char *input, const char *filename)
 {
-    /* Register builtins */
-    static bool builtins_done2 = false;
-    if (!builtins_done2) {
+    /* Register builtins (once per PreprocState instance) */
+    if (!pp->builtins_registered) {
         register_builtins(pp);
-        builtins_done2 = true;
+        pp->builtins_registered = true;
     }
 
     pp->current_file = arena_strdup(&pp->arena, filename ? filename : "<string>");
     pp->current_line = 1;
     preproc_emit_line(pp, 1, pp->current_file);
 
-    /* Make a mutable copy */
+    /* Make a mutable copy and process with continuation support
+     * (matching preproc_file's line handling) */
     char *copy = strdup(input);
     char *line_start = copy;
+    StrBuf linebuf;
+    strbuf_init(&linebuf);
 
     while (*line_start) {
         char *line_end = strchr(line_start, '\n');
+        size_t line_len;
         if (line_end) {
-            *line_end = '\0';
-            /* Remove trailing \r */
-            if (line_end > line_start && line_end[-1] == '\r')
-                line_end[-1] = '\0';
-            process_line(pp, line_start);
-            pp->current_line++;
-            line_start = line_end + 1;
+            line_len = (size_t)(line_end - line_start);
         } else {
-            int slen = (int)strlen(line_start);
-            if (slen > 0 && line_start[slen-1] == '\r')
-                line_start[slen-1] = '\0';
-            process_line(pp, line_start);
-            break;
+            line_len = strlen(line_start);
         }
+
+        strbuf_append_n(&linebuf, line_start, line_len);
+
+        /* Check for line continuation */
+        const char *cur = strbuf_cstr(&linebuf);
+        int curlen = (int)strlen(cur);
+        bool continued = false;
+
+        if (curlen > 0) {
+            char last = cur[curlen - 1];
+            if (last == '\\') {
+                continued = true;
+                if (pp->in_asm) {
+                    linebuf.len--;
+                    linebuf.data[linebuf.len] = '\0';
+                } else {
+                    linebuf.data[linebuf.len - 1] = '\n';
+                }
+            } else if (last == '_' && (curlen == 1 || !is_id_char(cur[curlen - 2]))) {
+                continued = true;
+                strbuf_append_char(&linebuf, '\n');
+            }
+        }
+
+        if (!continued) {
+            char *complete_line = arena_strdup(&pp->arena, strbuf_cstr(&linebuf));
+            int clen = (int)strlen(complete_line);
+            if (clen > 0 && complete_line[clen-1] == '\r')
+                complete_line[clen-1] = '\0';
+            process_line(pp, complete_line);
+            strbuf_clear(&linebuf);
+            pp->current_line++;
+        } else {
+            pp->current_line++;
+        }
+
+        if (line_end)
+            line_start = line_end + 1;
+        else
+            break;
     }
 
+    strbuf_free(&linebuf);
     free(copy);
     return pp->error_count;
 }
