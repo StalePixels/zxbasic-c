@@ -22,7 +22,9 @@
     #define strcasecmp   _stricmp
     #define getcwd       _getcwd
     #define strdup       _strdup
+    #define access       _access
     #define PATH_MAX     _MAX_PATH
+    #define R_OK         4
 
     /* realpath: MSVC has _fullpath */
     static inline char *realpath(const char *path, char *resolved) {

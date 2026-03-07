@@ -12,11 +12,11 @@
 #include "zxbasm.h"
 #include "zxbpp.h"
 
-#include <getopt.h>
+#include "compat.h"
+#include "getopt_port.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <libgen.h>
 
 static void usage(const char *progname)
 {

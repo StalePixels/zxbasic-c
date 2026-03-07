@@ -8,7 +8,7 @@
  */
 #include "zxbpp.h"
 
-#include <getopt.h>
+#include "getopt_port.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
