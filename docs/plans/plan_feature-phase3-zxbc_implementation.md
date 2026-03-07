@@ -31,11 +31,15 @@ A test "passes" when C and Python produce the **same exit code**. Not "C exits 0
 | Metric | Count | Notes |
 |--------|-------|-------|
 | Total test files | 1036 | `tests/functional/arch/zx48k/*.bas` |
-| Exit code matches Python | **914** (88%) | C and Python agree |
-| Mismatches (C=0, Python=1) | **122** | C missing semantic errors that Python catches |
-| Mismatches (C=1, Python=0) | **0** | No false positives |
+| Exit code matches Python | **980** (94.6%) | C and Python agree |
+| False negatives (C=0, Python=1) | **56** | C missing semantic errors that Python catches |
+| False positives (C=1, Python=0) | **0** | No regressions |
 
-The 122 mismatches are all cases where Python detects a semantic error (undeclared variable, type mismatch, parameter count, etc.) but C only does syntax parsing and doesn't catch it. These represent the remaining work.
+Of the 56 remaining false negatives:
+- **7 unfixable**: 3 Python bugs (chr, chr1, const6), 4 POKE COMMA (need ARRAY_ID token)
+- **49 need semantic analysis**: type checking (11), argument validation (12), array semantics (7), constant evaluation (8), declaration/scope (4), syntax edge cases (7)
+
+The theoretical maximum without full semantic analysis is ~987/1036.
 
 ### Previous Metric (Superseded)
 
