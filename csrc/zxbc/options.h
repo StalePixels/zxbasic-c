@@ -72,6 +72,10 @@ typedef struct CompilerOptions {
     /* Warnings */
     int expected_warnings;
     bool hide_warning_codes;
+    char **disabled_warnings;    /* -W codes to disable */
+    int disabled_warning_count;
+    char **enabled_warnings;     /* +W codes to enable */
+    int enabled_warning_count;
 
     /* Optimization */
     OptStrategy opt_strategy;

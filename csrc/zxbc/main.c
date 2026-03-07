@@ -57,6 +57,8 @@ static void print_usage(const char *prog) {
         "  --headerless            Omit prologue/epilogue\n"
         "  -N, --zxnext            Enable ZX Next opcodes\n"
         "  --arch ARCH             Target architecture (zx48k, zxnext)\n"
+        "  -W, --disable-warning N Disable warning WXXX\n"
+        "  +W, --enable-warning N  Enable warning WXXX\n"
         "  --expect-warnings N     Silence first N warnings\n"
         "  --hide-warning-codes    Hide WXXX codes\n"
         "  -F, --config-file FILE  Load config from file\n"
@@ -86,6 +88,7 @@ enum {
     OPT_APPEND_BIN,
     OPT_APPEND_HEADLESS_BIN,
     OPT_OPT_STRATEGY,
+    OPT_DISABLE_WARNING,
 };
 
 static const struct option long_options[] = {
@@ -129,6 +132,7 @@ static const struct option long_options[] = {
     { "opt-strategy",          ya_required_argument, NULL, OPT_OPT_STRATEGY },
     { "append-binary",         ya_required_argument, NULL, OPT_APPEND_BIN },
     { "append-headless-binary",ya_required_argument, NULL, OPT_APPEND_HEADLESS_BIN },
+    { "disable-warning",       ya_required_argument, NULL, OPT_DISABLE_WARNING },
     { NULL, 0, NULL, 0 },
 };
 
@@ -144,7 +148,26 @@ int main(int argc, char *argv[]) {
 
     ya_opterr = 0;  /* We handle errors ourselves */
 
-    while ((opt = ya_getopt_long(argc, argv, "hdO:o:f:TtAEBaS:e:ZH:D:M:iI:NF:",
+    /* Pre-scan for +W (enable-warning) — ya_getopt doesn't support + prefix.
+     * Python uses argparse prefix_chars="-+" for this. We extract +W args
+     * and build a filtered argv for ya_getopt. */
+    {
+        int new_argc = 0;
+        for (int i = 0; i < argc; i++) {
+            if (i > 0 && argv[i][0] == '+' && argv[i][1] == 'W') {
+                const char *code = argv[i] + 2;
+                if (!code[0] && i + 1 < argc) code = argv[++i]; /* +W NNN */
+                cs.opts.enabled_warnings = realloc(cs.opts.enabled_warnings,
+                    sizeof(char *) * (cs.opts.enabled_warning_count + 1));
+                cs.opts.enabled_warnings[cs.opts.enabled_warning_count++] = (char *)code;
+            } else {
+                argv[new_argc++] = argv[i];
+            }
+        }
+        argc = new_argc;
+    }
+
+    while ((opt = ya_getopt_long(argc, argv, "hdO:o:f:TtAEBaS:e:ZH:D:M:iI:NF:W:",
                                   long_options, NULL)) != -1) {
         switch (opt) {
             case 'h':
@@ -258,6 +281,12 @@ int main(int argc, char *argv[]) {
                 printf("zxbc %s\n", ZXBASIC_C_VERSION);
                 compiler_destroy(&cs);
                 return 0;
+            case 'W':
+            case OPT_DISABLE_WARNING:
+                cs.opts.disabled_warnings = realloc(cs.opts.disabled_warnings,
+                    sizeof(char *) * (cs.opts.disabled_warning_count + 1));
+                cs.opts.disabled_warnings[cs.opts.disabled_warning_count++] = ya_optarg;
+                break;
             case OPT_OPT_STRATEGY:
                 if (strcmp(ya_optarg, "size") == 0)
                     cs.opts.opt_strategy = OPT_STRATEGY_SIZE;

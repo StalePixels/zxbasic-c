@@ -119,6 +119,7 @@ Port the BASIC compiler frontend from Python to C, as defined in [Phase 3 of c-p
 - Pratt parser for expressions handles all 13 precedence levels with constant folding.
 - Keywords can be used as identifiers in parameter names (ZX BASIC allows this).
 - Single-line IF handles colon-separated statements and inline END IF.
+- **zxbpp_lib is a static library** linked into both zxbpp and zxbc. Acceptable for now (~200K duplication). May move to shared library (.so) for final distribution to reduce package size.
 
 ## Blockers
 
