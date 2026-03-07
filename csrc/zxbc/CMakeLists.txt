@@ -15,7 +15,7 @@ target_include_directories(zxbc PRIVATE
     ${CMAKE_SOURCE_DIR}/common
 )
 
-target_link_libraries(zxbc PRIVATE zxbasic_common)
+target_link_libraries(zxbc PRIVATE zxbpp_lib)
 
 # Link math library on Unix
 if(UNIX)

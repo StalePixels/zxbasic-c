@@ -75,7 +75,7 @@ Port the BASIC compiler frontend from Python to C, as defined in [Phase 3 of c-p
 - [x] --parse-only mode for testing
 
 #### Testing
-- [x] Parse-only mode (1030/1036 = 99.4% of .bas files parse successfully)
+- [x] Parse-only mode (1036/1036 = 100% of .bas files parse successfully)
 - [ ] Test harness script
 - [ ] Python comparison script
 
@@ -108,6 +108,9 @@ Port the BASIC compiler frontend from Python to C, as defined in [Phase 3 of c-p
 - Removed unused `end_kw` variable from function/sub parser.
 - Updated CLAUDE.md with rules 8 & 9: no voiding parsed values, no speculative parsing.
 - Test count: 1020 → 1030/1036 (99.4%). Remaining 6 are preprocessor-dependent.
+- Integrated zxbpp as a library (zxbpp_lib) into zxbc — preprocessor runs before parser.
+- Added stdlib/runtime include paths matching Python's get_include_path().
+- Test count: 1030 → **1036/1036 (100%)**. All .bas files parse successfully.
 
 ## Decisions & Notes
 

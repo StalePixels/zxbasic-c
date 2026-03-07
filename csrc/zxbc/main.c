@@ -6,6 +6,7 @@
 #include "zxbc.h"
 #include "parser.h"
 #include "errmsg.h"
+#include "zxbpp.h"
 #include "ya_getopt.h"
 #include "compat.h"
 #include "cwalk.h"
@@ -296,38 +297,54 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    /* TODO: Phase 3 implementation continues here:
-     * 1. Read input file
-     * 2. Run preprocessor (zxbpp)
-     * 3. Lex and parse
-     * 4. Build AST
-     * 5. Semantic checks
-     *
-     * For now, just verify the infrastructure works.
-     */
-
     if (cs.opts.debug_level > 0) {
         zxbc_info(&cs, "Input file: %s", cs.opts.input_filename);
         zxbc_info(&cs, "Output format: %s", cs.opts.output_file_type);
         zxbc_info(&cs, "Optimization level: %d", cs.opts.optimization_level);
     }
 
-    /* Read input file */
-    FILE *f = fopen(cs.opts.input_filename, "r");
-    if (!f) {
-        fprintf(stderr, "Error: cannot open input file '%s'\n", cs.opts.input_filename);
+    /* Run preprocessor (matching Python: zxbpp.main([filename]))
+     * Python sets include paths to: src/lib/arch/<arch>/stdlib, .../runtime
+     * We resolve these relative to the executable's location. */
+    PreprocState pp;
+    preproc_init(&pp);
+    pp.debug_level = cs.opts.debug_level;
+
+    /* Add standard library include paths.
+     * Python: get_include_path() => os.path.join(os.path.dirname(__file__), "..", "lib", "arch", arch)
+     * In the installed layout, the lib dir is at ../lib/arch/<arch>/ relative to the binary's src/ root.
+     * For development, we use the Python source tree's library files. */
+    {
+        const char *arch = cs.opts.architecture ? cs.opts.architecture : "zx48k";
+        char stdlib_path[PATH_MAX];
+        char runtime_path[PATH_MAX];
+
+        /* Try relative to the source tree root (development layout) */
+        snprintf(stdlib_path, sizeof(stdlib_path), "src/lib/arch/%s/stdlib", arch);
+        snprintf(runtime_path, sizeof(runtime_path), "src/lib/arch/%s/runtime", arch);
+        if (access(stdlib_path, R_OK) == 0) {
+            vec_push(pp.include_paths, arena_strdup(&pp.arena, stdlib_path));
+            vec_push(pp.include_paths, arena_strdup(&pp.arena, runtime_path));
+        }
+    }
+
+    if (cs.opts.include_path)
+        vec_push(pp.include_paths, cs.opts.include_path);
+
+    int pp_rc = preproc_file(&pp, cs.opts.input_filename);
+    if (pp_rc != 0 || pp.error_count > 0) {
+        fprintf(stderr, "zxbc: preprocessing failed\n");
+        preproc_destroy(&pp);
         compiler_destroy(&cs);
         return 1;
     }
 
-    fseek(f, 0, SEEK_END);
-    long fsize = ftell(f);
-    fseek(f, 0, SEEK_SET);
+    char *source = arena_strdup(&cs.arena, strbuf_cstr(&pp.output));
+    preproc_destroy(&pp);
 
-    char *source = arena_alloc(&cs.arena, fsize + 1);
-    size_t nread = fread(source, 1, fsize, f);
-    source[nread] = '\0';
-    fclose(f);
+    if (cs.opts.debug_level > 1) {
+        zxbc_info(&cs, "Preprocessed source (%zu bytes)", strlen(source));
+    }
 
     /* Parse */
     Parser parser;
