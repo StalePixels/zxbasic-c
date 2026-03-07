@@ -848,7 +848,7 @@ static AstNode *parse_while_statement(Parser *p);
 static AstNode *parse_do_statement(Parser *p);
 static AstNode *parse_dim_statement(Parser *p);
 static AstNode *parse_print_statement(Parser *p);
-static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function);
+static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function, bool is_declare);
 
 /* Graphics attributes for PLOT/DRAW/CIRCLE: INK/PAPER/BRIGHT/FLASH/OVER/INVERSE expr ;
  * Python grammar: attr_list : attr SC | attr_list attr SC
@@ -1230,10 +1230,10 @@ static AstNode *parse_statement(Parser *p) {
 
     /* FUNCTION / SUB declarations */
     if (check(p, BTOK_FUNCTION)) {
-        return parse_sub_or_func_decl(p, true);
+        return parse_sub_or_func_decl(p, true, false);
     }
     if (check(p, BTOK_SUB)) {
-        return parse_sub_or_func_decl(p, false);
+        return parse_sub_or_func_decl(p, false, false);
     }
 
     /* DECLARE (forward declaration) */
@@ -1243,8 +1243,7 @@ static AstNode *parse_statement(Parser *p) {
             parser_error(p, "Expected FUNCTION or SUB after DECLARE");
             return NULL;
         }
-        /* For now, parse and discard — forward decl handling */
-        return parse_sub_or_func_decl(p, is_func);
+        return parse_sub_or_func_decl(p, is_func, true);
     }
 
     /* EXIT DO/FOR/WHILE */
@@ -2238,7 +2237,7 @@ static AstNode *parse_print_statement(Parser *p) {
 /* ----------------------------------------------------------------
  * FUNCTION / SUB declaration
  * ---------------------------------------------------------------- */
-static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function) {
+static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function, bool is_declare) {
     if (is_function) {
         consume(p, BTOK_FUNCTION, "Expected FUNCTION");
     } else {
@@ -2327,9 +2326,13 @@ static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function) {
 
     /* Check for duplicate definition or class mismatch */
     if (id_node->u.id.declared && id_node->lineno != lineno) {
-        /* Already fully declared — duplicate */
-        if (id_node->u.id.class_ == CLASS_function || id_node->u.id.class_ == CLASS_sub) {
+        if (is_declare) {
+            /* Duplicate DECLARE — always an error */
+            zxbc_error(p->cs, lineno, "duplicated declaration for %s '%s'",
+                       symbolclass_to_string(cls), func_name);
+        } else if (id_node->u.id.class_ == CLASS_function || id_node->u.id.class_ == CLASS_sub) {
             if (!id_node->u.id.forwarded) {
+                /* Already fully defined — duplicate */
                 zxbc_error(p->cs, lineno, "Duplicate function name '%s', previously defined at %d",
                            func_name, id_node->lineno);
             }
@@ -2344,6 +2347,25 @@ static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function) {
     id_node->u.id.class_ = cls;
     id_node->u.id.convention = conv;
     id_node->type_ = ret_type;
+
+    if (is_declare) {
+        /* Forward declaration — no body to parse */
+        id_node->u.id.forwarded = true;
+
+        /* Create a minimal FUNCDECL node with empty body */
+        AstNode *decl = ast_new(p->cs, AST_FUNCDECL, lineno);
+        AstNode *body = make_block_node(p, lineno);
+        ast_add_child(p->cs, decl, id_node);
+        ast_add_child(p->cs, decl, params);
+        ast_add_child(p->cs, decl, body);
+        decl->type_ = ret_type;
+
+        vec_push(p->cs->functions, id_node);
+        return decl;
+    }
+
+    /* Full definition — clear forwarded flag if this was previously declared */
+    id_node->u.id.forwarded = false;
 
     /* Enter function body scope */
     symboltable_enter_scope(p->cs->symbol_table, p->cs);
