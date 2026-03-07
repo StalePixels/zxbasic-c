@@ -1278,6 +1278,10 @@ static AstNode *parse_statement(Parser *p) {
     /* DATA */
     if (match(p, BTOK_DATA)) {
         int ln = p->previous.lineno;
+        /* DATA not allowed inside functions/subs (matching Python) */
+        if (p->cs->function_level.len > 0) {
+            zxbc_error(p->cs, ln, "DATA not allowed within Functions nor Subs");
+        }
         AstNode *s = make_sentence_node(p, "DATA", ln);
         do {
             AstNode *expr = parse_expression(p, PREC_NONE + 1);
@@ -2106,6 +2110,11 @@ static AstNode *parse_dim_statement(Parser *p) {
         AstNode *decl = ast_new(p->cs, AST_VARDECL, lineno);
         SymbolClass cls = is_const ? CLASS_const : CLASS_var;
         AstNode *id_node = symboltable_declare(p->cs->symbol_table, p->cs, name, lineno, cls);
+        /* Check for duplicate declaration */
+        if (id_node->u.id.declared && id_node->lineno != lineno) {
+            zxbc_error(p->cs, lineno, "Variable '%s' already declared at %s:%d",
+                       name, p->cs->current_file, id_node->lineno);
+        }
         id_node->type_ = type;
         ast_add_child(p->cs, decl, id_node);
         if (at_expr) ast_add_child(p->cs, decl, at_expr);
