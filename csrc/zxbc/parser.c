@@ -542,20 +542,19 @@ AstNode *parse_primary(Parser *p) {
             return parse_call_or_array(p, name, lineno);
         }
 
-        /* Simple variable reference */
+        /* Variable reference — resolve via symbol table (auto-declares if implicit) */
+        AstNode *entry = symboltable_access_var(p->cs->symbol_table, p->cs,
+                                                 name, lineno, NULL);
+        if (entry) {
+            entry->u.id.accessed = true;
+            return entry;
+        }
+
+        /* access_var returned NULL (error) — create placeholder */
         AstNode *n = ast_new(p->cs, AST_ID, lineno);
         n->u.id.name = arena_strdup(&p->cs->arena, name);
-
-        /* Look up in symbol table for type info */
-        AstNode *entry = symboltable_get_entry(p->cs->symbol_table, name);
-        if (entry && entry->type_) {
-            n->type_ = entry->type_;
-            n->u.id.class_ = entry->u.id.class_;
-        } else {
-            /* Undeclared — will be created as implicit variable later */
-            n->type_ = p->cs->default_type;
-            n->u.id.class_ = CLASS_unknown;
-        }
+        n->type_ = p->cs->default_type;
+        n->u.id.class_ = CLASS_unknown;
         return n;
     }
 
@@ -661,33 +660,43 @@ static AstNode *parse_call_or_array(Parser *p, const char *name, int lineno) {
         return n;
     }
 
-    /* Check symbol table to determine if this is a function or array */
-    AstNode *entry = symboltable_get_entry(p->cs->symbol_table, name);
+    /* Resolve via symbol table: auto-declares if needed (matching Python's access_call) */
+    AstNode *entry = symboltable_access_call(p->cs->symbol_table, p->cs, name, lineno, NULL);
 
     if (entry && entry->u.id.class_ == CLASS_array) {
         /* Array access */
         AstNode *n = ast_new(p->cs, AST_ARRAYACCESS, lineno);
-        AstNode *id_node = ast_new(p->cs, AST_ID, lineno);
-        id_node->u.id.name = arena_strdup(&p->cs->arena, name);
-        id_node->type_ = entry->type_;
-        ast_add_child(p->cs, n, id_node);
+        entry->u.id.accessed = true;
+        ast_add_child(p->cs, n, entry);
         for (int i = 0; i < arglist->child_count; i++)
             ast_add_child(p->cs, n, arglist->children[i]);
         n->type_ = entry->type_;
         return n;
     }
 
+    if (entry && entry->u.id.class_ == CLASS_var && type_is_string(entry->type_)) {
+        /* String slicing: name(expr) */
+        AstNode *n = ast_new(p->cs, AST_STRSLICE, lineno);
+        entry->u.id.accessed = true;
+        ast_add_child(p->cs, n, entry);
+        for (int i = 0; i < arglist->child_count; i++)
+            ast_add_child(p->cs, n, arglist->children[i]);
+        n->type_ = p->cs->symbol_table->basic_types[TYPE_string];
+        return n;
+    }
+
     /* Function call */
     AstNode *n = ast_new(p->cs, AST_FUNCCALL, lineno);
-    AstNode *id_node = ast_new(p->cs, AST_ID, lineno);
-    id_node->u.id.name = arena_strdup(&p->cs->arena, name);
     if (entry) {
-        id_node->type_ = entry->type_;
+        entry->u.id.accessed = true;
         n->type_ = entry->type_;
     } else {
+        /* access_call returned NULL (error already reported) — create placeholder */
+        entry = ast_new(p->cs, AST_ID, lineno);
+        entry->u.id.name = arena_strdup(&p->cs->arena, name);
         n->type_ = p->cs->default_type;
     }
-    ast_add_child(p->cs, n, id_node);
+    ast_add_child(p->cs, n, entry);
     ast_add_child(p->cs, n, arglist);
     return n;
 }

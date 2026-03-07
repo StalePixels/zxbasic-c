@@ -764,8 +764,9 @@ AstNode *symboltable_access_var(SymbolTable *st, CompilerState *cs,
     AstNode *result = symboltable_access_id(st, cs, name, lineno, default_type, CLASS_var);
     if (!result) return NULL;
 
-    /* Check class */
-    if (result->u.id.class_ != CLASS_unknown && result->u.id.class_ != CLASS_var) {
+    /* Check class — const is also readable as a var */
+    if (result->u.id.class_ != CLASS_unknown && result->u.id.class_ != CLASS_var &&
+        result->u.id.class_ != CLASS_const) {
         err_unexpected_class(cs, lineno, name,
                              symbolclass_to_string(result->u.id.class_),
                              symbolclass_to_string(CLASS_var));
