@@ -1,10 +1,13 @@
 /*
- * Platform compatibility shims for Windows (MSVC) vs POSIX.
+ * Platform compatibility — Windows (MSVC) vs POSIX.
+ *
+ * Simple #define mappings for MSVC equivalents of POSIX functions.
+ * For getopt, we use ya_getopt (BSD-licensed, bundled in common/).
  */
 #ifndef COMPAT_H
 #define COMPAT_H
 
-/* GCC/Clang format attribute — no-op on MSVC */
+/* GCC/Clang printf format checking — no-op on MSVC */
 #if defined(__GNUC__) || defined(__clang__)
     #define PRINTF_FMT(fmtarg, firstva) __attribute__((format(printf, fmtarg, firstva)))
 #else
@@ -12,29 +15,45 @@
 #endif
 
 #ifdef _MSC_VER
-    /* MSVC doesn't have these POSIX functions */
     #include <string.h>
     #include <direct.h>
     #include <io.h>
     #include <stdlib.h>
 
+    /* POSIX → MSVC function mappings */
     #define strncasecmp  _strnicmp
     #define strcasecmp   _stricmp
-    #define getcwd       _getcwd
     #define strdup       _strdup
-    #define access       _access
     #define PATH_MAX     _MAX_PATH
+
+    /* access() and R_OK */
+    #define access       _access
     #define R_OK         4
 
-    /* realpath: MSVC has _fullpath */
+    /* realpath → _fullpath, with backslash normalization */
     static inline char *realpath(const char *path, char *resolved) {
-        return _fullpath(resolved, path, PATH_MAX);
+        char *result = _fullpath(resolved, path, PATH_MAX);
+        if (result) {
+            for (char *p = result; *p; p++)
+                if (*p == '\\') *p = '/';
+        }
+        return result;
     }
 
-    /* dirname/basename: simple implementations for MSVC */
+    /* getcwd → _getcwd, with backslash normalization */
+    static inline char *compat_getcwd(char *buf, int size) {
+        char *result = _getcwd(buf, size);
+        if (result) {
+            for (char *p = result; *p; p++)
+                if (*p == '\\') *p = '/';
+        }
+        return result;
+    }
+    #define getcwd compat_getcwd
+
+    /* dirname: return directory portion of path */
     static inline char *compat_dirname(char *path) {
         if (!path || !*path) return ".";
-        /* Find last separator */
         char *sep = strrchr(path, '/');
         char *sep2 = strrchr(path, '\\');
         if (sep2 && (!sep || sep2 > sep)) sep = sep2;
@@ -44,6 +63,7 @@
         return path;
     }
 
+    /* basename: return filename portion of path */
     static inline char *compat_basename(char *path) {
         if (!path || !*path) return ".";
         char *sep = strrchr(path, '/');
@@ -54,7 +74,9 @@
 
     #define dirname  compat_dirname
     #define basename compat_basename
+
 #else
+    /* POSIX */
     #include <unistd.h>
     #include <limits.h>
     #include <strings.h>

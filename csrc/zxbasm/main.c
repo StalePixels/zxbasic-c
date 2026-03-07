@@ -13,7 +13,7 @@
 #include "zxbpp.h"
 
 #include "compat.h"
-#include "getopt_port.h"
+#include "ya_getopt.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
