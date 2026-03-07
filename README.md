@@ -23,8 +23,9 @@ The toolchain being ported — `zxbc` (compiler), `zxbasm` (assembler), and `zxb
 suite of 1,285+ functional tests.
 
 The practical end-goal: a C implementation of the compiler suitable for **embedding on
-[NextPi](https://www.specnext.com/)** and similar resource-constrained platforms where
-a full modern Python runtime is undesirable.
+[NextPi](https://www.specnext.com/)** and similar resource-constrained platforms. The
+NextPi ships with a lightweight Python 2 install, but ZX BASIC requires Python 3.11+ —
+far too heavy for the hardware. Native C binaries sidestep the problem entirely.
 
 ## 📊 Current Status
 
@@ -135,7 +136,8 @@ The compiler frontend (`zxbc`) still requires Python — for now. 😏
 
 The big picture: a fully native C compiler toolchain that runs on the
 [NextPi](https://www.specnext.com/) — a Raspberry Pi accelerator board for the
-ZX Spectrum Next. No Python runtime needed, just a single binary.
+ZX Spectrum Next. The NextPi has a lightweight Python 2, but ZX BASIC needs
+Python 3.11+ which is impractical on that hardware. Native C binaries solve this.
 
 Here's how we get there, one step at a time:
 
@@ -159,7 +161,7 @@ Here's how we get there, one step at a time:
  Phase 6  ⏳  Integration — All output formats (.tap, .tzx, .sna, .z80)
     │         Full CLI compatibility with zxbc
     │
-    🏁  Single static binary: zxbasic for NextPi and embedded platforms
+    🏁  Native binaries for NextPi and embedded platforms — no Python needed
 ```
 
 Each phase is independently useful — you don't have to wait for the whole thing.
