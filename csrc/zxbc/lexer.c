@@ -341,7 +341,7 @@ static bool is_label(BLexer *lex, int tok_pos, BTokenType tok_type, const char *
 
     /* Check if there's only whitespace before this token on the line */
     int c = tok_pos - 1;
-    while (c > 0 && (lex->input[c] == ' ' || lex->input[c] == '\t'))
+    while (c >= 0 && lex->input[c] != '\n' && (lex->input[c] == ' ' || lex->input[c] == '\t'))
         c--;
 
     int i = tok_pos;
@@ -837,48 +837,8 @@ static BToken lex_bin_state(BLexer *lex) {
         return make_num_tok(lex, (double)val);
     }
 
-    /* Newline */
-    if (c == '\n' || (c == '\r' && peek2(lex) == '\n')) {
-        if (c == '\r') advance(lex);
-        advance(lex);
-        lex->lineno++;
-        lex->labels_allowed = true;
-        lex->state = BLEXST_INITIAL;
-        BToken t = make_tok(lex, BTOK_NEWLINE);
-        return t;
-    }
-
-    /* Block comment start */
-    if (c == '/' && peek2(lex) == '\'') {
-        advance(lex); advance(lex);
-        lex->comment_level++;
-        push_state(lex, BLEXST_COMMENT);
-        return lex_comment(lex);
-    }
-
-    /* Line continuation */
-    if ((c == '_' || c == '\\') && lex->pos + 1 < lex->len) {
-        /* Check if rest of line is whitespace/comment then newline */
-        int save = lex->pos;
-        advance(lex);
-        while (peek(lex) == ' ' || peek(lex) == '\t') advance(lex);
-        /* Optional REM or ' comment */
-        if (peek(lex) == '\'') {
-            while (!at_end(lex) && peek(lex) != '\n') advance(lex);
-        } else if (match_word_ci(lex, "rem")) {
-            while (!at_end(lex) && peek(lex) != '\n') advance(lex);
-        }
-        if (peek(lex) == '\r') advance(lex);
-        if (peek(lex) == '\n') {
-            advance(lex);
-            lex->lineno++;
-            lex->labels_allowed = false;
-            return blexer_next(lex);
-        }
-        lex->pos = save;
-    }
-
-    /* Any non-binary char: return 0 and go back to INITIAL */
+    /* Any non-binary char (newline, comment, etc.): BIN alone = 0.
+     * Don't consume the character — it will be handled in INITIAL state. */
     lex->state = BLEXST_INITIAL;
     return make_num_tok(lex, 0);
 }

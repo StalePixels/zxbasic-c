@@ -271,6 +271,13 @@ static TypeInfo *parse_typedef(Parser *p) {
     if (!match(p, BTOK_AS)) return NULL;
     TypeInfo *t = parse_type_name(p);
     if (!t) {
+        /* Accept any identifier as a type name (forward ref / user type) */
+        if (check(p, BTOK_ID) && p->current.sval) {
+            const char *name = p->current.sval;
+            advance(p);
+            t = type_new(p->cs, name, p->previous.lineno);
+            return t;
+        }
         parser_error(p, "Expected type name after AS");
         return NULL;
     }
@@ -749,10 +756,78 @@ static AstNode *parse_call_or_array(Parser *p, const char *name, int lineno) {
     return n;
 }
 
+/* Parse postfix indexing/slicing: expr(...) */
+static AstNode *parse_postfix(Parser *p, AstNode *left) {
+    while (check(p, BTOK_LP)) {
+        int lineno = p->current.lineno;
+        advance(p); /* consume ( */
+
+        /* Parse argument list — may contain TO for string slicing */
+        AstNode *arglist = ast_new(p->cs, AST_ARGLIST, lineno);
+        bool has_to = false;
+
+        if (!check(p, BTOK_RP)) {
+            do {
+                /* TO without lower bound */
+                if (check(p, BTOK_TO)) {
+                    has_to = true;
+                    advance(p);
+                    AstNode *upper = NULL;
+                    if (!check(p, BTOK_RP) && !check(p, BTOK_COMMA))
+                        upper = parse_expression(p, PREC_NONE + 1);
+                    AstNode *slice = ast_new(p->cs, AST_STRSLICE, lineno);
+                    if (upper) ast_add_child(p->cs, slice, upper);
+                    ast_add_child(p->cs, arglist, slice);
+                    continue;
+                }
+                AstNode *arg_expr = parse_expression(p, PREC_NONE + 1);
+                if (match(p, BTOK_TO)) {
+                    has_to = true;
+                    AstNode *upper = NULL;
+                    if (!check(p, BTOK_RP) && !check(p, BTOK_COMMA))
+                        upper = parse_expression(p, PREC_NONE + 1);
+                    AstNode *slice = ast_new(p->cs, AST_STRSLICE, arg_expr ? arg_expr->lineno : lineno);
+                    if (arg_expr) ast_add_child(p->cs, slice, arg_expr);
+                    if (upper) ast_add_child(p->cs, slice, upper);
+                    ast_add_child(p->cs, arglist, slice);
+                } else if (arg_expr) {
+                    AstNode *arg = ast_new(p->cs, AST_ARGUMENT, arg_expr->lineno);
+                    arg->u.argument.byref = false;
+                    ast_add_child(p->cs, arg, arg_expr);
+                    arg->type_ = arg_expr->type_;
+                    ast_add_child(p->cs, arglist, arg);
+                }
+            } while (match(p, BTOK_COMMA));
+        }
+        consume(p, BTOK_RP, "Expected ')' after postfix index");
+
+        if (has_to) {
+            /* String slice */
+            AstNode *n = ast_new(p->cs, AST_STRSLICE, lineno);
+            ast_add_child(p->cs, n, left);
+            for (int i = 0; i < arglist->child_count; i++)
+                ast_add_child(p->cs, n, arglist->children[i]);
+            n->type_ = p->cs->symbol_table->basic_types[TYPE_string];
+            left = n;
+        } else {
+            /* Array access or function call on expression result */
+            AstNode *n = ast_new(p->cs, AST_ARRAYACCESS, lineno);
+            ast_add_child(p->cs, n, left);
+            for (int i = 0; i < arglist->child_count; i++)
+                ast_add_child(p->cs, n, arglist->children[i]);
+            left = n;
+        }
+    }
+    return left;
+}
+
 /* Parse expression with Pratt algorithm */
 AstNode *parse_expression(Parser *p, Precedence min_prec) {
     AstNode *left = parse_primary(p);
     if (!left) return NULL;
+
+    /* Handle postfix indexing/slicing: expr(...) */
+    left = parse_postfix(p, left);
 
     while (!check(p, BTOK_EOF) && !check(p, BTOK_NEWLINE) && !check(p, BTOK_CO)) {
         Precedence prec = get_precedence(p->current.type);
@@ -1006,13 +1081,13 @@ static AstNode *parse_statement(Parser *p) {
     /* END */
     if (match(p, BTOK_END)) {
         int ln = p->previous.lineno;
-        /* Check for END IF, END SUB, END FUNCTION */
-        if (check(p, BTOK_IF) || check(p, BTOK_SUB) || check(p, BTOK_FUNCTION)) {
-            /* These are handled by their respective parsers; push back */
-            /* Actually we don't push back in a hand-written parser — just return */
-            AstNode *s = make_sentence_node(p, "END", ln);
-            ast_add_child(p->cs, s, make_number(p, 0, ln, p->cs->symbol_table->basic_types[TYPE_uinteger]));
-            return s;
+        /* Check for END IF, END SUB, END FUNCTION — consume and return NOP
+         * (these are handled by their respective block parsers; if we see them
+         * here, they're orphaned and should be silently consumed) */
+        if (check(p, BTOK_IF) || check(p, BTOK_SUB) || check(p, BTOK_FUNCTION) ||
+            check(p, BTOK_WHILE)) {
+            advance(p); /* consume the keyword */
+            return make_nop(p);
         }
         AstNode *s = make_sentence_node(p, "END", ln);
         if (!check(p, BTOK_NEWLINE) && !check(p, BTOK_EOF) && !check(p, BTOK_CO)) {
@@ -1068,18 +1143,59 @@ static AstNode *parse_statement(Parser *p) {
         return s;
     }
 
-    /* POKE [type] addr, val  or  POKE(addr, val) */
+    /* POKE [type] addr, val  —  various forms from Python grammar:
+     *   POKE expr, expr
+     *   POKE LP expr, expr RP
+     *   POKE type expr, expr
+     *   POKE LP type expr, expr RP
+     *   POKE type, expr, expr
+     *   POKE LP type, expr, expr RP
+     */
     if (match(p, BTOK_POKE)) {
         int ln = p->previous.lineno;
         AstNode *s = make_sentence_node(p, "POKE", ln);
-        /* Optional type: POKE UInteger addr, val */
-        TypeInfo *poke_type = parse_type_name(p);
+        TypeInfo *poke_type = NULL;
+
+        if (check(p, BTOK_LP)) {
+            /* Speculative parse: try POKE(... RP) form.
+             * Save state, consume (, try to parse args, check for closing ).
+             * If RP found at end, it's the paren form. Otherwise restore. */
+            int save_pos = p->lexer.pos;
+            BToken save_cur = p->current;
+            bool save_err = p->had_error;
+            bool save_panic = p->panic_mode;
+
+            advance(p); /* consume ( */
+            poke_type = parse_type_name(p);
+            if (poke_type) match(p, BTOK_COMMA); /* optional comma after type */
+
+            AstNode *try_addr = parse_expression(p, PREC_NONE + 1);
+            if (try_addr && match(p, BTOK_COMMA)) {
+                AstNode *try_val = parse_expression(p, PREC_NONE + 1);
+                if (try_val && check(p, BTOK_RP)) {
+                    /* Paren form succeeded */
+                    advance(p); /* consume ) */
+                    if (try_addr) ast_add_child(p->cs, s, try_addr);
+                    if (try_val) ast_add_child(p->cs, s, try_val);
+                    return s;
+                }
+            }
+            /* Paren form failed — restore and try without parens */
+            p->current = save_cur;
+            p->lexer.pos = save_pos;
+            p->had_error = save_err;
+            p->panic_mode = save_panic;
+            poke_type = NULL;
+        }
+
+        /* Non-paren form: POKE [type] addr, val */
+        poke_type = parse_type_name(p);
         (void)poke_type;
-        bool paren = match(p, BTOK_LP);
+        if (poke_type) match(p, BTOK_COMMA); /* optional comma after type */
+
         AstNode *addr = parse_expression(p, PREC_NONE + 1);
         consume(p, BTOK_COMMA, "Expected ',' after POKE address");
         AstNode *val = parse_expression(p, PREC_NONE + 1);
-        if (paren) consume(p, BTOK_RP, "Expected ')' after POKE");
         if (addr) ast_add_child(p->cs, s, addr);
         if (val) ast_add_child(p->cs, s, val);
         return s;
@@ -1165,10 +1281,18 @@ static AstNode *parse_statement(Parser *p) {
         return s;
     }
 
-    /* CIRCLE x, y, r */
+    /* CIRCLE [attributes;] x, y, r */
     if (match(p, BTOK_CIRCLE)) {
         int ln = p->previous.lineno;
         AstNode *s = make_sentence_node(p, "CIRCLE", ln);
+        /* Skip optional attributes */
+        while (check(p, BTOK_INK) || check(p, BTOK_PAPER) || check(p, BTOK_BRIGHT) ||
+               check(p, BTOK_FLASH) || check(p, BTOK_OVER) || check(p, BTOK_INVERSE)) {
+            advance(p);
+            AstNode *attr_val = parse_expression(p, PREC_NONE + 1);
+            (void)attr_val;
+            match(p, BTOK_SC);
+        }
         AstNode *x = parse_expression(p, PREC_NONE + 1);
         consume(p, BTOK_COMMA, "Expected ',' in CIRCLE");
         AstNode *y = parse_expression(p, PREC_NONE + 1);
@@ -1359,9 +1483,11 @@ static AstNode *parse_statement(Parser *p) {
         bool was_let = p->cs->let_assignment;
         p->cs->let_assignment = false;
 
-        /* Array element assignment: ID(index) = expr */
+        /* Array element assignment: ID(index) = expr or ID(i)(j TO k) = expr */
         if (check(p, BTOK_LP)) {
             AstNode *call_node = parse_call_or_array(p, name, ln);
+            /* Handle chained postfix: a$(b)(1 TO 5) */
+            call_node = parse_postfix(p, call_node);
 
             /* Check if followed by = (assignment to array element or func return) */
             if (match(p, BTOK_EQ) || was_let) {
@@ -1371,6 +1497,13 @@ static AstNode *parse_statement(Parser *p) {
                 ast_add_child(p->cs, s, call_node);
                 if (expr) ast_add_child(p->cs, s, expr);
                 return s;
+            }
+
+            /* If followed by an operator, this is an expression-as-statement
+             * e.g. test(1) + test(2) — skip rest of expression */
+            if (get_precedence(p->current.type) > PREC_NONE) {
+                while (!check(p, BTOK_NEWLINE) && !check(p, BTOK_EOF) && !check(p, BTOK_CO))
+                    advance(p);
             }
 
             /* Sub call: ID(args) as statement */
@@ -1403,6 +1536,28 @@ static AstNode *parse_statement(Parser *p) {
         if (!check(p, BTOK_NEWLINE) && !check(p, BTOK_EOF) && !check(p, BTOK_CO)) {
             AstNode *arglist = ast_new(p->cs, AST_ARGLIST, ln);
             do {
+                /* Check for named argument: name := expr */
+                if ((check(p, BTOK_ID) || is_name_token(p))) {
+                    int save_pos = p->lexer.pos;
+                    BToken save_cur = p->current;
+                    const char *arg_name = get_name_token(p);
+                    advance(p);
+                    if (check(p, BTOK_WEQ)) {
+                        advance(p); /* consume := */
+                        AstNode *arg_expr = parse_expression(p, PREC_NONE + 1);
+                        if (arg_expr) {
+                            AstNode *arg = ast_new(p->cs, AST_ARGUMENT, arg_expr->lineno);
+                            arg->u.argument.name = arena_strdup(&p->cs->arena, arg_name);
+                            ast_add_child(p->cs, arg, arg_expr);
+                            arg->type_ = arg_expr->type_;
+                            ast_add_child(p->cs, arglist, arg);
+                        }
+                        continue;
+                    }
+                    /* Not named arg — restore */
+                    p->current = save_cur;
+                    p->lexer.pos = save_pos;
+                }
                 AstNode *arg_expr = parse_expression(p, PREC_NONE + 1);
                 if (arg_expr) {
                     AstNode *arg = ast_new(p->cs, AST_ARGUMENT, arg_expr->lineno);
@@ -1414,6 +1569,38 @@ static AstNode *parse_statement(Parser *p) {
             ast_add_child(p->cs, s, arglist);
         }
         return s;
+    }
+
+    /* Standalone NUMBER at start of statement — treat as label
+     * (handles indented line numbers like "   0 REM ...") */
+    if (check(p, BTOK_NUMBER)) {
+        advance(p);
+        double numval = p->previous.numval;
+        int ln = p->previous.lineno;
+        if (numval == (int)numval) {
+            char label_buf[32];
+            snprintf(label_buf, sizeof(label_buf), "%d", (int)numval);
+            AstNode *lbl_sent = make_sentence_node(p, "LABEL", ln);
+            AstNode *lbl_id = ast_new(p->cs, AST_ID, ln);
+            lbl_id->u.id.name = arena_strdup(&p->cs->arena, label_buf);
+            lbl_id->u.id.class_ = CLASS_label;
+            ast_add_child(p->cs, lbl_sent, lbl_id);
+            match(p, BTOK_CO);
+            /* Parse trailing statement if any */
+            if (!check(p, BTOK_NEWLINE) && !check(p, BTOK_EOF)) {
+                AstNode *stmt = parse_statement(p);
+                if (stmt) {
+                    AstNode *block = make_block_node(p, ln);
+                    ast_add_child(p->cs, block, lbl_sent);
+                    ast_add_child(p->cs, block, stmt);
+                    return block;
+                }
+            }
+            return lbl_sent;
+        }
+        /* Non-integer number — error */
+        parser_error(p, "Unexpected number");
+        return NULL;
     }
 
     /* Empty statement */
@@ -1435,20 +1622,18 @@ static AstNode *parse_if_statement(Parser *p) {
     int lineno = p->previous.lineno;
 
     AstNode *condition = parse_expression(p, PREC_NONE + 1);
-    bool has_then = match(p, BTOK_THEN);
-    if (!has_then) {
-        /* Sinclair-style IF without THEN: IF cond stmt */
-        if (check(p, BTOK_NEWLINE) || check(p, BTOK_EOF)) {
-            parser_error(p, "Expected THEN after IF condition");
-        }
-        /* else: treat as single-line IF without THEN */
-    }
+    match(p, BTOK_THEN); /* optional — Sinclair BASIC allows IF without THEN */
 
     /* Single-line IF: IF cond THEN stmt [:stmt...] [ELSE stmt [:stmt...]]
-     * Note: THEN followed by : is still single-line (: is statement separator) */
+     * Note: THEN: is still single-line (: is statement separator) */
     if (!check(p, BTOK_NEWLINE) && !check(p, BTOK_EOF)) {
         /* Skip leading colon(s) after THEN */
         while (match(p, BTOK_CO)) {}
+
+        /* If after THEN and colons we hit a newline, this is either:
+         * - Empty single-line IF (no END IF follows), or
+         * - Multi-line IF (END IF follows on a subsequent line)
+         * We handle both via the continuation check below. */
         AstNode *then_block = make_block_node(p, lineno);
         AstNode *else_block = NULL;
         bool ended = false;
@@ -1490,6 +1675,42 @@ static AstNode *parse_if_statement(Parser *p) {
                 if (!match(p, BTOK_CO)) break;
             }
         }
+        /* After single-line IF, check for END IF / ELSE on next line */
+        if (!ended) {
+            skip_newlines(p);
+            if (check(p, BTOK_ENDIF)) {
+                advance(p);
+                ended = true;
+            } else if (check(p, BTOK_END)) {
+                int sp = p->lexer.pos;
+                BToken sc = p->current;
+                advance(p);
+                if (check(p, BTOK_IF)) {
+                    advance(p);
+                    ended = true;
+                } else {
+                    p->current = sc;
+                    p->lexer.pos = sp;
+                }
+            } else if (check(p, BTOK_ELSE) || check(p, BTOK_ELSEIF)) {
+                /* ELSE/ELSEIF on next line — treat as continuation */
+                if (!else_block && match(p, BTOK_ELSE)) {
+                    else_block = make_block_node(p, lineno);
+                    skip_newlines(p);
+                    while (!check(p, BTOK_EOF) && !check(p, BTOK_ENDIF) && !check(p, BTOK_END)) {
+                        AstNode *stmt = parse_statement(p);
+                        if (stmt) ast_add_child(p->cs, else_block, stmt);
+                        while (match(p, BTOK_NEWLINE) || match(p, BTOK_CO)) {}
+                    }
+                    if (match(p, BTOK_ENDIF)) { ended = true; }
+                    else if (check(p, BTOK_END)) {
+                        advance(p);
+                        if (check(p, BTOK_IF)) { advance(p); ended = true; }
+                    }
+                }
+            }
+        }
+
         AstNode *s = make_sentence_node(p, "IF", lineno);
         if (condition) ast_add_child(p->cs, s, condition);
         ast_add_child(p->cs, s, then_block);
