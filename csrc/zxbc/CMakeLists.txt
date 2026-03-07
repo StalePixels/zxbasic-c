@@ -6,6 +6,7 @@ add_executable(zxbc
     ast.c
     errmsg.c
     options.c
+    lexer.c
 )
 
 target_include_directories(zxbc PRIVATE
