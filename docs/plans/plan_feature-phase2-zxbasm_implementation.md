@@ -2,7 +2,7 @@
 
 **Branch:** `feature/phase2-zxbasm`
 **Started:** 2026-03-06
-**Status:** Core Complete (61/61 tests pass, Python-identical output)
+**Status:** Complete (merged to main)
 
 ## Plan
 
