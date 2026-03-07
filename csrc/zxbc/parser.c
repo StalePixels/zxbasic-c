@@ -671,9 +671,15 @@ static AstNode *parse_call_or_array(Parser *p, const char *name, int lineno, boo
     /* String slice: name$(from TO to) */
     if (has_to) {
         AstNode *n = ast_new(p->cs, AST_STRSLICE, lineno);
-        AstNode *id_node = ast_new(p->cs, AST_ID, lineno);
-        id_node->u.id.name = arena_strdup(&p->cs->arena, name);
-        id_node->type_ = p->cs->symbol_table->basic_types[TYPE_string];
+        /* Look up through symbol table — respects explicit mode */
+        AstNode *id_node = symboltable_access_var(p->cs->symbol_table, p->cs, name, lineno,
+                                                   p->cs->symbol_table->basic_types[TYPE_string]);
+        if (!id_node) {
+            /* access_var already reported the error (e.g. undeclared in explicit mode) */
+            id_node = ast_new(p->cs, AST_ID, lineno);
+            id_node->u.id.name = arena_strdup(&p->cs->arena, name);
+            id_node->type_ = p->cs->symbol_table->basic_types[TYPE_string];
+        }
         ast_add_child(p->cs, n, id_node);
         for (int i = 0; i < arglist->child_count; i++)
             ast_add_child(p->cs, n, arglist->children[i]);

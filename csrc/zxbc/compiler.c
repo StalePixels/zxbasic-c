@@ -768,10 +768,12 @@ AstNode *symboltable_access_id(SymbolTable *st, CompilerState *cs,
         }
     }
 
-    /* Check --explicit mode */
-    if (cs->opts.explicit_ && !default_type) {
-        if (!symboltable_check_is_declared(st, lookup_name, lineno, "identifier", true, cs))
-            return NULL;
+    /* Check --explicit mode: report error but continue (matching Python).
+     * Use "variable" classname for var/unknown context, "identifier" for others. */
+    if (cs->opts.explicit_) {
+        const char *classname = (default_class == CLASS_var || default_class == CLASS_unknown)
+                                ? "variable" : "identifier";
+        symboltable_check_is_declared(st, lookup_name, lineno, classname, true, cs);
     }
 
     AstNode *result = symboltable_lookup(st, lookup_name);
