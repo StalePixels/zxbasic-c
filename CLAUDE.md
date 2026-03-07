@@ -129,10 +129,24 @@ Each component has its own input/output file types:
 |-----------|-------|-----------------|----------|
 | zxbpp | `.bi` | `.out` (stdout), `.err` (errors) | `tests/functional/zxbpp/` |
 | zxbasm | `.asm` | `.bin` (binary) | `tests/functional/asm/` |
-| zxbc | `.bas` | varies (`.asm`, `.bin`, `.tap`, etc.) | `tests/functional/arch/` |
+| zxbc | `.bas` | `.asm` (assembly output) | `tests/functional/arch/zx48k/` |
 
 - C binaries must accept **identical CLI flags** as the Python originals
 - Python test runner: `tests/functional/test.py` (used by pytest via `test_prepro.py`, `test_asm.py`, `test_basic.py`)
+
+### Beyond Functional Tests — Full Test Inventory
+
+The Python project has unit and integration tests beyond the functional `.bas`/`.bi`/`.asm` files. **All of these must be matched by the C port.** Don't assume functional tests are sufficient.
+
+| Suite | Location | What it tests | Files |
+|-------|----------|---------------|-------|
+| CLI / flags | `tests/cmdline/` | `--parse-only`, `--org` hex, `-F` config file, cmdline-overrides-config | `test_zxb.py` + fixtures |
+| API / config | `tests/api/` | arg parser defaults, type checking, symbol table, config, utils | 5 test files |
+| AST nodes | `tests/symbols/` | Node construction for all 20 AST node types | 20 test files |
+| Backend | `tests/arch/zx48k/backend/` | Memory cell operations | 1 test file |
+| Optimizer | `tests/arch/zx48k/optimizer/` | Basic blocks, CPU state, optimizer passes | 6 test files |
+| Peephole | `tests/arch/zx48k/peephole/` | Pattern matching, evaluation, templates | 4 test files |
+| Compiler | `tests/zxbc/` | Parser table generation | 1 test file |
 
 ## Keeping Things Up To Date
 
