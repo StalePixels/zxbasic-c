@@ -18,9 +18,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
-#include <libgen.h>
-#include <limits.h>
-#include <unistd.h>
+#include "compat.h"
 
 /* Forward declarations */
 static void process_line(PreprocState *pp, const char *line);

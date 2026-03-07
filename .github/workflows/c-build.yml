@@ -13,9 +13,11 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            artifact: zxbpp-linux-x86_64
+            artifact: linux-x86_64
           - os: macos-latest
-            artifact: zxbpp-macos-arm64
+            artifact: macos-arm64
+          - os: windows-latest
+            artifact: windows-x86_64
 
     runs-on: ${{ matrix.os }}
 
@@ -26,26 +28,59 @@ jobs:
       - name: Configure CMake
         run: cmake -S csrc -B csrc/build -DCMAKE_BUILD_TYPE=Release
 
-      - name: Build
+      - name: Build (Unix)
+        if: runner.os != 'Windows'
         run: cmake --build csrc/build -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
 
-      - name: Run zxbpp tests
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        run: cmake --build csrc/build --config Release -j $env:NUMBER_OF_PROCESSORS
+
+      - name: Run zxbpp tests (Unix)
+        if: runner.os != 'Windows'
         run: ./csrc/tests/run_zxbpp_tests.sh ./csrc/build/zxbpp/zxbpp tests/functional/zxbpp
 
-      - name: Run zxbasm tests
+      - name: Run zxbasm tests (Unix)
+        if: runner.os != 'Windows'
         run: ./csrc/tests/run_zxbasm_tests.sh ./csrc/build/zxbasm/zxbasm tests/functional/asm
 
-      - name: Upload zxbpp binary
+      - name: Run zxbpp tests (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: ./csrc/tests/run_zxbpp_tests.sh ./csrc/build/zxbpp/Release/zxbpp.exe tests/functional/zxbpp
+
+      - name: Run zxbasm tests (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: ./csrc/tests/run_zxbasm_tests.sh ./csrc/build/zxbasm/Release/zxbasm.exe tests/functional/asm
+
+      - name: Upload zxbpp binary (Unix)
+        if: runner.os != 'Windows'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}-zxbpp
           path: csrc/build/zxbpp/zxbpp
 
-      - name: Upload zxbasm binary
+      - name: Upload zxbasm binary (Unix)
+        if: runner.os != 'Windows'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}-zxbasm
           path: csrc/build/zxbasm/zxbasm
+
+      - name: Upload zxbpp binary (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}-zxbpp
+          path: csrc/build/zxbpp/Release/zxbpp.exe
+
+      - name: Upload zxbasm binary (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}-zxbasm
+          path: csrc/build/zxbasm/Release/zxbasm.exe
 
   # Compare against Python ground truth (single platform is sufficient)
   python-comparison:

@@ -13,6 +13,10 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # Warning flags
 if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
     add_compile_options(-Wall -Wextra -Wpedantic -Wno-unused-parameter)
+elseif(MSVC)
+    add_compile_options(/W3)
+    # Suppress MSVC warnings about fopen, sprintf, etc.
+    add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
 endif()
 
 # Flex and bison will be needed for later phases (assembler, compiler).
