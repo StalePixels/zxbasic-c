@@ -302,6 +302,40 @@ TypeInfo *symboltable_get_type(SymbolTable *st, const char *name);
 /* Check module (matching Python's api/check.py) */
 bool is_temporary_value(const AstNode *node);
 
+/* AST node predicates — matching check.is_number(), is_const(), etc. */
+bool check_is_number(const AstNode *node);    /* NUMBER or CONST with numeric type */
+bool check_is_const(const AstNode *node);     /* CONST (declared constant) */
+bool check_is_CONST(const AstNode *node);     /* CONSTEXPR (compile-time expression) */
+bool check_is_static(const AstNode *node);    /* CONSTEXPR, NUMBER, or CONST */
+bool check_is_numeric(const AstNode *a, const AstNode *b); /* both have numeric type */
+bool check_is_string_node(const AstNode *a, const AstNode *b); /* both are STRING constants */
+bool check_is_null(const AstNode *node);      /* NULL, NOP, or empty BLOCK */
+
+/* Type promotion — matching check.common_type() */
+TypeInfo *check_common_type(CompilerState *cs, const AstNode *a, const AstNode *b);
+
+/* Semantic node creation — matching Python's SymbolTYPECAST/BINARY/UNARY.make_node() */
+AstNode *make_typecast(CompilerState *cs, TypeInfo *new_type, AstNode *node, int lineno);
+AstNode *make_binary_node(CompilerState *cs, const char *operator, AstNode *left,
+                          AstNode *right, int lineno, TypeInfo *type_);
+AstNode *make_unary_node(CompilerState *cs, const char *operator, AstNode *operand,
+                         int lineno);
+
+/* Symbol table access methods — matching Python's symboltable.access_*() */
+AstNode *symboltable_access_id(SymbolTable *st, CompilerState *cs,
+                                const char *name, int lineno,
+                                TypeInfo *default_type, SymbolClass default_class);
+AstNode *symboltable_access_var(SymbolTable *st, CompilerState *cs,
+                                 const char *name, int lineno, TypeInfo *default_type);
+AstNode *symboltable_access_call(SymbolTable *st, CompilerState *cs,
+                                  const char *name, int lineno, TypeInfo *type_);
+AstNode *symboltable_access_func(SymbolTable *st, CompilerState *cs,
+                                  const char *name, int lineno, TypeInfo *default_type);
+AstNode *symboltable_access_array(SymbolTable *st, CompilerState *cs,
+                                   const char *name, int lineno, TypeInfo *default_type);
+AstNode *symboltable_access_label(SymbolTable *st, CompilerState *cs,
+                                   const char *name, int lineno);
+
 /* ----------------------------------------------------------------
  * Compiler state — the main context struct
  *

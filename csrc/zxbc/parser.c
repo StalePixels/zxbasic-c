@@ -7,7 +7,6 @@
 #include "parser.h"
 #include "errmsg.h"
 
-#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -195,45 +194,6 @@ static AstNode *block_append(Parser *p, AstNode *block, AstNode *stmt) {
  * ---------------------------------------------------------------- */
 
 /* Get the common type for binary operations */
-static TypeInfo *common_type(Parser *p, TypeInfo *a, TypeInfo *b) {
-    if (!a || !b) return p->cs->default_type;
-
-    const TypeInfo *fa = a->final_type ? a->final_type : a;
-    const TypeInfo *fb = b->final_type ? b->final_type : b;
-
-    if (fa->tag != AST_BASICTYPE || fb->tag != AST_BASICTYPE)
-        return p->cs->default_type;
-
-    BasicType ta = fa->basic_type;
-    BasicType tb = fb->basic_type;
-
-    if (ta == TYPE_unknown && tb == TYPE_unknown) return p->cs->default_type;
-    if (ta == TYPE_unknown) return b;
-    if (tb == TYPE_unknown) return a;
-    if (ta == tb) return a;
-
-    /* Float wins over everything numeric */
-    if (ta == TYPE_float || tb == TYPE_float)
-        return p->cs->symbol_table->basic_types[TYPE_float];
-    /* Fixed wins over integers */
-    if (ta == TYPE_fixed || tb == TYPE_fixed)
-        return p->cs->symbol_table->basic_types[TYPE_fixed];
-    /* String stays string */
-    if (ta == TYPE_string || tb == TYPE_string)
-        return p->cs->symbol_table->basic_types[TYPE_string];
-
-    /* Both integral: return the larger one, prefer signed */
-    int sa = basictype_size(ta);
-    int sb = basictype_size(tb);
-    if (sa > sb) return a;
-    if (sb > sa) return b;
-
-    /* Same size: prefer signed */
-    if (basictype_is_signed(ta)) return a;
-    if (basictype_is_signed(tb)) return b;
-    return a;
-}
-
 /* Parse a type name token (BYTE, UBYTE, INTEGER, etc.) */
 static TypeInfo *parse_type_name(Parser *p) {
     BTokenType tt = p->current.type;
@@ -318,7 +278,7 @@ static const char *operator_name(BTokenType type) {
     switch (type) {
         case BTOK_PLUS:  return "PLUS";
         case BTOK_MINUS: return "MINUS";
-        case BTOK_MUL:   return "MUL";
+        case BTOK_MUL:   return "MULT";
         case BTOK_DIV:   return "DIV";
         case BTOK_MOD:   return "MOD";
         case BTOK_POW:   return "POW";
@@ -483,19 +443,7 @@ AstNode *parse_primary(Parser *p) {
     if (match(p, BTOK_MINUS)) {
         int lineno = p->previous.lineno;
         AstNode *operand = parse_expression(p, PREC_UNARY);
-        if (!operand) return NULL;
-
-        /* Constant folding */
-        if (operand->tag == AST_NUMBER) {
-            operand->u.number.value = -operand->u.number.value;
-            return operand;
-        }
-
-        AstNode *n = ast_new(p->cs, AST_UNARY, lineno);
-        n->u.unary.operator = arena_strdup(&p->cs->arena, "MINUS");
-        ast_add_child(p->cs, n, operand);
-        n->type_ = operand->type_;
-        return n;
+        return make_unary_node(p->cs, "MINUS", operand, lineno);
     }
 
     /* Unary plus (no-op) */
@@ -507,26 +455,14 @@ AstNode *parse_primary(Parser *p) {
     if (match(p, BTOK_NOT)) {
         int lineno = p->previous.lineno;
         AstNode *operand = parse_expression(p, PREC_NOT);
-        if (!operand) return NULL;
-
-        AstNode *n = ast_new(p->cs, AST_UNARY, lineno);
-        n->u.unary.operator = arena_strdup(&p->cs->arena, "NOT");
-        ast_add_child(p->cs, n, operand);
-        n->type_ = operand->type_;
-        return n;
+        return make_unary_node(p->cs, "NOT", operand, lineno);
     }
 
     /* BNOT (bitwise) */
     if (match(p, BTOK_BNOT)) {
         int lineno = p->previous.lineno;
         AstNode *operand = parse_expression(p, PREC_BNOT_ADD);
-        if (!operand) return NULL;
-
-        AstNode *n = ast_new(p->cs, AST_UNARY, lineno);
-        n->u.unary.operator = arena_strdup(&p->cs->arena, "BNOT");
-        ast_add_child(p->cs, n, operand);
-        n->type_ = operand->type_;
-        return n;
+        return make_unary_node(p->cs, "BNOT", operand, lineno);
     }
 
     /* CAST(type, expr) */
@@ -840,69 +776,12 @@ static AstNode *parse_infix(Parser *p, AstNode *left, Precedence min_prec) {
         AstNode *right = parse_expression(p, next_prec);
         if (!right) return left;
 
-        /* Constant folding for numeric operations */
-        if (left->tag == AST_NUMBER && right->tag == AST_NUMBER) {
-            double lv = left->u.number.value;
-            double rv = right->u.number.value;
-            double result = 0;
-            bool folded = true;
-
-            switch (op_type) {
-                case BTOK_PLUS:  result = lv + rv; break;
-                case BTOK_MINUS: result = lv - rv; break;
-                case BTOK_MUL:   result = lv * rv; break;
-                case BTOK_DIV:
-                    if (rv == 0) { folded = false; break; }
-                    result = lv / rv;
-                    break;
-                case BTOK_MOD:
-                    if (rv == 0) { folded = false; break; }
-                    result = fmod(lv, rv);
-                    break;
-                case BTOK_POW:   result = pow(lv, rv); break;
-                case BTOK_EQ:    result = (lv == rv) ? 1 : 0; break;
-                case BTOK_NE:    result = (lv != rv) ? 1 : 0; break;
-                case BTOK_LT:    result = (lv < rv) ? 1 : 0; break;
-                case BTOK_GT:    result = (lv > rv) ? 1 : 0; break;
-                case BTOK_LE:    result = (lv <= rv) ? 1 : 0; break;
-                case BTOK_GE:    result = (lv >= rv) ? 1 : 0; break;
-                case BTOK_AND:   result = ((int64_t)lv && (int64_t)rv) ? 1 : 0; break;
-                case BTOK_OR:    result = ((int64_t)lv || (int64_t)rv) ? 1 : 0; break;
-                case BTOK_BAND:  result = (double)((int64_t)lv & (int64_t)rv); break;
-                case BTOK_BOR:   result = (double)((int64_t)lv | (int64_t)rv); break;
-                case BTOK_BXOR:  result = (double)((int64_t)lv ^ (int64_t)rv); break;
-                case BTOK_SHL:   result = (double)((int64_t)lv << (int64_t)rv); break;
-                case BTOK_SHR:   result = (double)((int64_t)lv >> (int64_t)rv); break;
-                default: folded = false; break;
-            }
-            if (folded) {
-                left->u.number.value = result;
-                /* Update type to common type */
-                left->type_ = common_type(p, left->type_, right->type_);
-                continue;
-            }
-        }
-
-        /* Create binary node */
-        AstNode *binary = ast_new(p->cs, AST_BINARY, lineno);
-        binary->u.binary.operator = arena_strdup(&p->cs->arena, operator_name(op_type));
-        ast_add_child(p->cs, binary, left);
-        ast_add_child(p->cs, binary, right);
-        binary->type_ = common_type(p, left->type_, right->type_);
-
-        /* Comparison operators always return boolean */
-        switch (op_type) {
-            case BTOK_EQ: case BTOK_NE: case BTOK_LT:
-            case BTOK_GT: case BTOK_LE: case BTOK_GE:
-            case BTOK_AND: case BTOK_OR: case BTOK_XOR:
-            case BTOK_NOT:
-                binary->type_ = p->cs->symbol_table->basic_types[TYPE_boolean];
-                break;
-            default:
-                break;
-        }
-
-        left = binary;
+        /* Use semantic make_binary_node for type coercion, constant folding,
+         * CONSTEXPR wrapping, and string concatenation */
+        const char *op_name = operator_name(op_type);
+        AstNode *result = make_binary_node(p->cs, op_name, left, right, lineno, NULL);
+        if (!result) return left; /* error already reported */
+        left = result;
     }
 
     return left;
