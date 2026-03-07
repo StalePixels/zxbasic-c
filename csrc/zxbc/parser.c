@@ -563,6 +563,11 @@ AstNode *parse_primary(Parser *p) {
                 call->type_ = entry->type_;
                 return call;
             }
+            /* SUB used in expression context — error (matching Python p_id_expr) */
+            if (entry->u.id.class_ == CLASS_sub) {
+                zxbc_error(p->cs, lineno, "'%s' is a SUB not a FUNCTION", name);
+                return NULL;
+            }
             return entry;
         }
 
@@ -1439,6 +1444,16 @@ static AstNode *parse_statement(Parser *p) {
             if (p->previous.type != BTOK_EQ) {
                 consume(p, BTOK_EQ, "Expected '=' in assignment");
             }
+            /* Check if target is assignable (not const/function/sub) */
+            AstNode *existing = symboltable_lookup(p->cs->symbol_table, name);
+            if (existing) {
+                if (existing->u.id.class_ == CLASS_const) {
+                    zxbc_error(p->cs, ln, "'%s' is a CONST, not a VAR", name);
+                } else if (existing->u.id.class_ == CLASS_sub) {
+                    zxbc_error(p->cs, ln, "Cannot assign a value to '%s'. It's not a variable", name);
+                }
+                /* Note: CLASS_function is valid LHS — sets return value */
+            }
             AstNode *expr = parse_expression(p, PREC_NONE + 1);
             AstNode *s = make_sentence_node(p, "LET", ln);
             AstNode *var = ast_new(p->cs, AST_ID, ln);
@@ -2212,6 +2227,15 @@ static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function) {
      * This enables recursive calls — the function name is visible from inside. */
     SymbolClass cls = is_function ? CLASS_function : CLASS_sub;
     AstNode *id_node = symboltable_declare(p->cs->symbol_table, p->cs, func_name, lineno, cls);
+
+    /* Check for class mismatch with previous declaration (DECLARE FUNCTION vs SUB) */
+    if (id_node->u.id.class_ != CLASS_unknown && id_node->u.id.class_ != cls) {
+        zxbc_error(p->cs, lineno, "'%s' is a %s, not a %s", func_name,
+                   symbolclass_to_string(id_node->u.id.class_),
+                   symbolclass_to_string(cls));
+    }
+
+    id_node->u.id.class_ = cls;
     id_node->u.id.convention = conv;
     id_node->type_ = ret_type;
 
