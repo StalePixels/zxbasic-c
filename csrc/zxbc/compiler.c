@@ -863,20 +863,27 @@ AstNode *symboltable_access_call(SymbolTable *st, CompilerState *cs,
         return symboltable_access_func(st, cs, name, lineno, NULL);
     }
 
-    /* Check if callable: function/sub/array/string */
+    /* Check if callable: function/sub/array are always callable.
+     * CLASS_unknown might be a forward-declared function — allow it.
+     * Variables/constants are only callable if they're strings (string slicing). */
     SymbolClass cls = entry->u.id.class_;
-    if (cls == CLASS_function || cls == CLASS_sub || cls == CLASS_array ||
-        cls == CLASS_unknown) {
+    if (cls == CLASS_function || cls == CLASS_sub || cls == CLASS_array) {
         return entry;
     }
 
-    /* Variables/constants are callable if they're strings (string slicing) */
-    if ((cls == CLASS_var || cls == CLASS_const) && type_is_string(entry->type_)) {
-        return entry;
+    /* Variables/constants: callable only if string type (slicing) */
+    if (cls == CLASS_var || cls == CLASS_const) {
+        if (type_is_string(entry->type_)) {
+            return entry;
+        }
+        err_not_array_nor_func(cs, lineno, name);
+        return NULL;
     }
 
-    err_not_array_nor_func(cs, lineno, name);
-    return NULL;
+    /* CLASS_unknown: could be a forward-declared function. Allow it —
+     * matching Python's make_call/CALL.make_node which uses access_func
+     * (not access_call) for statement-level calls. */
+    return entry;
 }
 
 AstNode *symboltable_access_array(SymbolTable *st, CompilerState *cs,

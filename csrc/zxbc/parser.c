@@ -306,7 +306,7 @@ static bool is_right_assoc(BTokenType type) {
 }
 
 /* Forward declarations for expression parsing */
-static AstNode *parse_call_or_array(Parser *p, const char *name, int lineno);
+static AstNode *parse_call_or_array(Parser *p, const char *name, int lineno, bool expr_context);
 static AstNode *parse_arglist(Parser *p);
 
 /* Parse builtin function: ABS, SIN, COS, etc. */
@@ -503,7 +503,7 @@ AstNode *parse_primary(Parser *p) {
         /* Check for array/call access: @name(...) */
         AstNode *operand;
         if (check(p, BTOK_LP)) {
-            operand = parse_call_or_array(p, name, lineno);
+            operand = parse_call_or_array(p, name, lineno, true);
         } else {
             operand = ast_new(p->cs, AST_ID, lineno);
             operand->u.id.name = arena_strdup(&p->cs->arena, name);
@@ -541,7 +541,7 @@ AstNode *parse_primary(Parser *p) {
 
         /* Check for function call or array access: ID(...) */
         if (check(p, BTOK_LP)) {
-            return parse_call_or_array(p, name, lineno);
+            return parse_call_or_array(p, name, lineno, true);
         }
 
         /* Variable reference — resolve via symbol table (auto-declares if implicit)
@@ -599,7 +599,7 @@ AstNode *parse_primary(Parser *p) {
 }
 
 /* Parse function call or array access: name(...) */
-static AstNode *parse_call_or_array(Parser *p, const char *name, int lineno) {
+static AstNode *parse_call_or_array(Parser *p, const char *name, int lineno, bool expr_context) {
     consume(p, BTOK_LP, "Expected '('");
 
     /* Parse argument list */
@@ -683,6 +683,15 @@ static AstNode *parse_call_or_array(Parser *p, const char *name, int lineno) {
 
     /* Resolve via symbol table: auto-declares if needed (matching Python's access_call) */
     AstNode *entry = symboltable_access_call(p->cs->symbol_table, p->cs, name, lineno, NULL);
+
+    /* In Python, newly implicitly declared CLASS_unknown entries have callable=False.
+     * Only access_func (used for statement-level sub calls) sets callable=True.
+     * In expression context, CLASS_unknown non-string entries are not callable.
+     * In statement context (could be a forward sub call), they're allowed. */
+    if (expr_context && entry && entry->u.id.class_ == CLASS_unknown && !type_is_string(entry->type_)) {
+        err_not_array_nor_func(p->cs, lineno, name);
+        return NULL;
+    }
 
     if (entry && entry->u.id.class_ == CLASS_array) {
         /* Array access */
@@ -1019,12 +1028,15 @@ static AstNode *parse_statement(Parser *p) {
     /* END */
     if (match(p, BTOK_END)) {
         int ln = p->previous.lineno;
-        /* Check for END IF, END SUB, END FUNCTION — consume and return NOP
-         * (these are handled by their respective block parsers; if we see them
-         * here, they're orphaned and should be silently consumed) */
-        if (check(p, BTOK_IF) || check(p, BTOK_SUB) || check(p, BTOK_FUNCTION) ||
-            check(p, BTOK_WHILE)) {
-            advance(p); /* consume the keyword */
+        /* END IF / END SUB / END FUNCTION / END WHILE at top level = syntax error.
+         * These should only appear inside their respective blocks. */
+        if (check(p, BTOK_IF)) {
+            advance(p);
+            zxbc_error(p->cs, ln, "Syntax Error. Unexpected token 'IF' <IF>");
+            return make_nop(p);
+        }
+        if (check(p, BTOK_SUB) || check(p, BTOK_FUNCTION) || check(p, BTOK_WHILE)) {
+            advance(p);
             return make_nop(p);
         }
         AstNode *s = make_sentence_node(p, "END", ln);
@@ -1412,7 +1424,7 @@ static AstNode *parse_statement(Parser *p) {
 
         /* Array element assignment: ID(index) = expr or ID(i)(j TO k) = expr */
         if (check(p, BTOK_LP)) {
-            AstNode *call_node = parse_call_or_array(p, name, ln);
+            AstNode *call_node = parse_call_or_array(p, name, ln, false);
             /* Handle chained postfix: a$(b)(1 TO 5) */
             call_node = parse_postfix(p, call_node);
 
@@ -1444,26 +1456,44 @@ static AstNode *parse_statement(Parser *p) {
             if (p->previous.type != BTOK_EQ) {
                 consume(p, BTOK_EQ, "Expected '=' in assignment");
             }
-            /* Check if target is assignable (not const/function/sub) */
-            AstNode *existing = symboltable_lookup(p->cs->symbol_table, name);
-            if (existing) {
-                if (existing->u.id.class_ == CLASS_const) {
+            /* Resolve target via symbol table (triggers explicit mode check) */
+            AstNode *var = symboltable_access_id(p->cs->symbol_table, p->cs,
+                                                  name, ln, NULL, CLASS_var);
+            if (var) {
+                /* Check if target is assignable */
+                if (var->u.id.class_ == CLASS_const) {
                     zxbc_error(p->cs, ln, "'%s' is a CONST, not a VAR", name);
-                } else if (existing->u.id.class_ == CLASS_sub) {
+                } else if (var->u.id.class_ == CLASS_sub) {
                     zxbc_error(p->cs, ln, "Cannot assign a value to '%s'. It's not a variable", name);
+                } else if (var->u.id.class_ == CLASS_function) {
+                    zxbc_error(p->cs, ln, "'%s' is a FUNCTION, not a VAR", name);
                 }
-                /* Note: CLASS_function is valid LHS — sets return value */
+                if (var->u.id.class_ == CLASS_unknown)
+                    var->u.id.class_ = CLASS_var;
+            } else {
+                /* access_id returned NULL (explicit mode error already reported) */
+                var = ast_new(p->cs, AST_ID, ln);
+                var->u.id.name = arena_strdup(&p->cs->arena, name);
+                var->u.id.class_ = CLASS_unknown;
             }
             AstNode *expr = parse_expression(p, PREC_NONE + 1);
             AstNode *s = make_sentence_node(p, "LET", ln);
-            AstNode *var = ast_new(p->cs, AST_ID, ln);
-            var->u.id.name = arena_strdup(&p->cs->arena, name);
             ast_add_child(p->cs, s, var);
             if (expr) ast_add_child(p->cs, s, expr);
             return s;
         }
 
-        /* Sub call without parentheses: ID expr, expr, ... */
+        /* Sub call without parentheses: ID expr, expr, ...
+         * Check if the identifier is callable (sub/function/unknown).
+         * Variables and constants can't be called. */
+        {
+            AstNode *entry = symboltable_lookup(p->cs->symbol_table, name);
+            if (entry && entry->u.id.class_ == CLASS_var) {
+                zxbc_error(p->cs, ln, "'%s' is a VAR, not a FUNCTION", name);
+            } else if (entry && entry->u.id.class_ == CLASS_const) {
+                zxbc_error(p->cs, ln, "'%s' is a CONST, not a FUNCTION", name);
+            }
+        }
         AstNode *s = make_sentence_node(p, "CALL", ln);
         AstNode *id_node = ast_new(p->cs, AST_ID, ln);
         id_node->u.id.name = arena_strdup(&p->cs->arena, name);
@@ -1611,8 +1641,11 @@ static AstNode *parse_if_statement(Parser *p) {
                 if (!match(p, BTOK_CO)) break;
             }
         }
-        /* After single-line IF, check for END IF / ELSE on next line */
-        if (!ended) {
+        /* After single-line IF, check for END IF / ELSE on next line.
+         * Only do this if the then-block is empty (i.e. THEN followed by newline
+         * with no inline statements). If there were inline statements after THEN:,
+         * this is a complete single-line IF — don't look for END IF. */
+        if (!ended && then_block->child_count == 0 && !else_block) {
             skip_newlines(p);
             if (check(p, BTOK_ENDIF)) {
                 advance(p);
@@ -1748,6 +1781,7 @@ static AstNode *parse_for_statement(Parser *p) {
     }
     advance(p);
     const char *var_name = p->previous.sval;
+    int var_lineno = p->previous.lineno;
 
     consume(p, BTOK_EQ, "Expected '=' in FOR");
     AstNode *start_expr = parse_expression(p, PREC_NONE + 1);
@@ -1757,6 +1791,22 @@ static AstNode *parse_for_statement(Parser *p) {
     AstNode *step_expr = NULL;
     if (match(p, BTOK_STEP)) {
         step_expr = parse_expression(p, PREC_NONE + 1);
+    }
+
+    /* Validate the FOR variable (matching Python's access_var in p_for_sentence_start) */
+    {
+        AstNode *var = symboltable_access_id(p->cs->symbol_table, p->cs,
+                                              var_name, var_lineno, NULL, CLASS_var);
+        if (var) {
+            if (var->u.id.class_ == CLASS_const)
+                zxbc_error(p->cs, var_lineno, "'%s' is a CONST, not a VAR", var_name);
+            else if (var->u.id.class_ == CLASS_function)
+                zxbc_error(p->cs, var_lineno, "'%s' is a FUNCTION, not a VAR", var_name);
+            else if (var->u.id.class_ == CLASS_sub)
+                zxbc_error(p->cs, var_lineno, "Cannot assign a value to '%s'. It's not a variable", var_name);
+            if (var->u.id.class_ == CLASS_unknown)
+                var->u.id.class_ = CLASS_var;
+        }
     }
 
     /* Push loop info */
