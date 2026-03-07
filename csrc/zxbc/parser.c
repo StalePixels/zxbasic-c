@@ -2325,7 +2325,16 @@ static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function) {
     SymbolClass cls = is_function ? CLASS_function : CLASS_sub;
     AstNode *id_node = symboltable_declare(p->cs->symbol_table, p->cs, func_name, lineno, cls);
 
-    /* Check for class mismatch with previous declaration (DECLARE FUNCTION vs SUB) */
+    /* Check for duplicate definition or class mismatch */
+    if (id_node->u.id.declared && id_node->lineno != lineno) {
+        /* Already fully declared — duplicate */
+        if (id_node->u.id.class_ == CLASS_function || id_node->u.id.class_ == CLASS_sub) {
+            if (!id_node->u.id.forwarded) {
+                zxbc_error(p->cs, lineno, "Duplicate function name '%s', previously defined at %d",
+                           func_name, id_node->lineno);
+            }
+        }
+    }
     if (id_node->u.id.class_ != CLASS_unknown && id_node->u.id.class_ != cls) {
         zxbc_error(p->cs, lineno, "'%s' is a %s, not a %s", func_name,
                    symbolclass_to_string(id_node->u.id.class_),
