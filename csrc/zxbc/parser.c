@@ -876,7 +876,8 @@ static AstNode *parse_statement(Parser *p) {
         if (!check(p, BTOK_NEWLINE) && !check(p, BTOK_EOF) &&
             !check(p, BTOK_LOOP) && !check(p, BTOK_NEXT) &&
             !check(p, BTOK_WEND) && !check(p, BTOK_ELSE) &&
-            !check(p, BTOK_ELSEIF) && !check(p, BTOK_ENDIF)) {
+            !check(p, BTOK_ELSEIF) && !check(p, BTOK_ENDIF) &&
+            !check(p, BTOK_END)) {
             AstNode *stmt = parse_statement(p);
             AstNode *block = make_block_node(p, lineno);
             AstNode *lbl_sent = make_sentence_node(p, "LABEL", lineno);
@@ -1023,6 +1024,15 @@ static AstNode *parse_statement(Parser *p) {
         return s;
     }
 
+    /* ERROR expr */
+    if (match(p, BTOK_ERROR_KW)) {
+        int ln = p->previous.lineno;
+        AstNode *s = make_sentence_node(p, "ERROR", ln);
+        AstNode *code = parse_expression(p, PREC_NONE + 1);
+        if (code) ast_add_child(p->cs, s, code);
+        return s;
+    }
+
     /* STOP */
     if (match(p, BTOK_STOP)) {
         int ln = p->previous.lineno;
@@ -1058,16 +1068,18 @@ static AstNode *parse_statement(Parser *p) {
         return s;
     }
 
-    /* POKE [type] addr, val */
+    /* POKE [type] addr, val  or  POKE(addr, val) */
     if (match(p, BTOK_POKE)) {
         int ln = p->previous.lineno;
         AstNode *s = make_sentence_node(p, "POKE", ln);
         /* Optional type: POKE UInteger addr, val */
         TypeInfo *poke_type = parse_type_name(p);
-        (void)poke_type; /* used later for typed poke */
+        (void)poke_type;
+        bool paren = match(p, BTOK_LP);
         AstNode *addr = parse_expression(p, PREC_NONE + 1);
         consume(p, BTOK_COMMA, "Expected ',' after POKE address");
         AstNode *val = parse_expression(p, PREC_NONE + 1);
+        if (paren) consume(p, BTOK_RP, "Expected ')' after POKE");
         if (addr) ast_add_child(p->cs, s, addr);
         if (val) ast_add_child(p->cs, s, val);
         return s;
@@ -1233,14 +1245,9 @@ static AstNode *parse_statement(Parser *p) {
         AstNode *block = make_block_node(p, ln);
         do {
             AstNode *s = make_sentence_node(p, "READ", ln);
-            if (check(p, BTOK_ID) || check(p, BTOK_ARRAY_ID)) {
-                advance(p);
-                AstNode *var = ast_new(p->cs, AST_ID, p->previous.lineno);
-                var->u.id.name = arena_strdup(&p->cs->arena, p->previous.sval);
-                ast_add_child(p->cs, s, var);
-            } else {
-                parser_error(p, "Expected variable name in READ");
-            }
+            /* Can read into variable, array element, or expression */
+            AstNode *target = parse_expression(p, PREC_NONE + 1);
+            if (target) ast_add_child(p->cs, s, target);
             ast_add_child(p->cs, block, s);
         } while (match(p, BTOK_COMMA));
         return block;
@@ -1428,10 +1435,20 @@ static AstNode *parse_if_statement(Parser *p) {
     int lineno = p->previous.lineno;
 
     AstNode *condition = parse_expression(p, PREC_NONE + 1);
-    consume(p, BTOK_THEN, "Expected THEN after IF condition");
+    bool has_then = match(p, BTOK_THEN);
+    if (!has_then) {
+        /* Sinclair-style IF without THEN: IF cond stmt */
+        if (check(p, BTOK_NEWLINE) || check(p, BTOK_EOF)) {
+            parser_error(p, "Expected THEN after IF condition");
+        }
+        /* else: treat as single-line IF without THEN */
+    }
 
-    /* Single-line IF: IF cond THEN stmt [:stmt...] [ELSE stmt [:stmt...]] */
-    if (!check(p, BTOK_NEWLINE) && !check(p, BTOK_EOF) && !check(p, BTOK_CO)) {
+    /* Single-line IF: IF cond THEN stmt [:stmt...] [ELSE stmt [:stmt...]]
+     * Note: THEN followed by : is still single-line (: is statement separator) */
+    if (!check(p, BTOK_NEWLINE) && !check(p, BTOK_EOF)) {
+        /* Skip leading colon(s) after THEN */
+        while (match(p, BTOK_CO)) {}
         AstNode *then_block = make_block_node(p, lineno);
         AstNode *else_block = NULL;
         bool ended = false;
@@ -1498,7 +1515,7 @@ static AstNode *parse_if_statement(Parser *p) {
     while (match(p, BTOK_ELSEIF)) {
         int elif_line = p->previous.lineno;
         AstNode *elif_cond = parse_expression(p, PREC_NONE + 1);
-        consume(p, BTOK_THEN, "Expected THEN after ELSEIF condition");
+        match(p, BTOK_THEN); /* THEN is optional after ELSEIF */
         skip_newlines(p);
 
         AstNode *elif_body = make_block_node(p, elif_line);
@@ -1636,12 +1653,25 @@ static AstNode *parse_while_statement(Parser *p) {
     skip_newlines(p);
     AstNode *body = make_block_node(p, lineno);
     while (!check(p, BTOK_EOF) && !check(p, BTOK_WEND)) {
+        /* Check for END WHILE */
+        if (check(p, BTOK_END)) {
+            int save_pos = p->lexer.pos;
+            BToken save_cur = p->current;
+            advance(p);
+            if (check(p, BTOK_WHILE)) {
+                advance(p);
+                goto while_done;
+            }
+            p->current = save_cur;
+            p->lexer.pos = save_pos;
+        }
         AstNode *stmt = parse_statement(p);
         if (stmt) ast_add_child(p->cs, body, stmt);
         while (match(p, BTOK_NEWLINE) || match(p, BTOK_CO)) {}
     }
 
     consume(p, BTOK_WEND, "Expected WEND");
+while_done:;
 
     if (p->cs->loop_stack.len > 0)
         vec_pop(p->cs->loop_stack);
@@ -1781,6 +1811,11 @@ static AstNode *parse_dim_statement(Parser *p) {
             } else {
                 init = parse_expression(p, PREC_NONE + 1);
             }
+        }
+
+        /* AT can also come after initializer: DIM a(3) => {1,2,3} AT $C000 */
+        if (!arr_at_expr && match(p, BTOK_AT)) {
+            arr_at_expr = parse_expression(p, PREC_NONE + 1);
         }
 
         AstNode *decl = ast_new(p->cs, AST_ARRAYDECL, lineno);
@@ -2004,11 +2039,11 @@ static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function) {
         consume(p, BTOK_RP, "Expected ')' after parameters");
     }
 
-    /* Return type (FUNCTION only) */
+    /* Return type (FUNCTION, or SUB with AS = error but parseable) */
     TypeInfo *ret_type = NULL;
-    if (is_function) {
+    if (is_function || check(p, BTOK_AS)) {
         ret_type = parse_typedef(p);
-        if (!ret_type) ret_type = type_new_ref(p->cs, p->cs->default_type, lineno, true);
+        if (!ret_type && is_function) ret_type = type_new_ref(p->cs, p->cs->default_type, lineno, true);
     }
 
     /* Enter scope */
