@@ -7,6 +7,7 @@ add_executable(zxbc
     errmsg.c
     options.c
     lexer.c
+    parser.c
 )
 
 target_include_directories(zxbc PRIVATE

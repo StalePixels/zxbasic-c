@@ -4,6 +4,7 @@
  * Ported from src/zxbc/zxbc.py and src/zxbc/args_parser.py
  */
 #include "zxbc.h"
+#include "parser.h"
 #include "errmsg.h"
 #include "ya_getopt.h"
 #include "compat.h"
@@ -328,16 +329,28 @@ int main(int argc, char *argv[]) {
     source[nread] = '\0';
     fclose(f);
 
-    (void)source;
-    (void)parse_only;
+    /* Parse */
+    Parser parser;
+    parser_init(&parser, &cs, source);
+    AstNode *ast = parser_parse(&parser);
 
-    /* Placeholder: parsing not yet implemented */
-    fprintf(stderr, "zxbc: compilation not yet implemented (Phase 3 in progress)\n");
+    int rc = 0;
+    if (parser.had_error || !ast) {
+        rc = 1;
+    } else if (parse_only) {
+        /* --parse-only: just report success */
+        if (cs.opts.debug_level > 0)
+            zxbc_info(&cs, "Parse OK (%d top-level statements)", ast->child_count);
+    } else {
+        /* TODO: semantic checks, code generation */
+        fprintf(stderr, "zxbc: code generation not yet implemented (Phase 3 in progress)\n");
+        rc = 1;
+    }
 
     /* Cleanup */
     if (cs.opts.stderr_f)
         fclose(cs.opts.stderr_f);
 
     compiler_destroy(&cs);
-    return 1;  /* Return error until parsing is implemented */
+    return rc;
 }

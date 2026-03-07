@@ -49,7 +49,7 @@ cd csrc/build && cmake .. && make
 | Aspect | Python Original | C Approach |
 |--------|----------------|------------|
 | Parsing (zxbpp) | PLY lex/yacc | Hand-written recursive-descent |
-| Parsing (zxbasm, zxbc) | PLY lex/yacc | flex + bison |
+| Parsing (zxbasm, zxbc) | PLY lex/yacc | Hand-written recursive-descent |
 | AST nodes | 50+ classes with inheritance | Tagged union structs with common header |
 | Memory | Python GC | Arena allocator (allocate during compilation, free all at end) |
 | Strings | Python str (immutable) | `StrBuf` (growable) + arena-allocated `char*` |

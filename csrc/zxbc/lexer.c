@@ -345,7 +345,7 @@ static bool is_label(BLexer *lex, int tok_pos, BTokenType tok_type, const char *
         c--;
 
     int i = tok_pos;
-    while (i > 0 && lex->input[i] != '\n')
+    while (i >= 0 && lex->input[i] != '\n')
         i--;
 
     int column = c - i;

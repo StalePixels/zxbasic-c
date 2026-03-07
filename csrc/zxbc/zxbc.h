@@ -61,6 +61,7 @@ typedef enum {
     AST_ASM,
     AST_CONSTEXPR,
     AST_STRSLICE,
+    AST_ARRAYINIT,
     AST_TYPE,
     AST_BASICTYPE,
     AST_TYPEALIAS,
