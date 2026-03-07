@@ -32,11 +32,20 @@ jobs:
       - name: Run zxbpp tests
         run: ./csrc/tests/run_zxbpp_tests.sh ./csrc/build/zxbpp/zxbpp tests/functional/zxbpp
 
-      - name: Upload binary
+      - name: Run zxbasm tests
+        run: ./csrc/tests/run_zxbasm_tests.sh ./csrc/build/zxbasm/zxbasm tests/functional/asm
+
+      - name: Upload zxbpp binary
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
+          name: ${{ matrix.artifact }}-zxbpp
           path: csrc/build/zxbpp/zxbpp
+
+      - name: Upload zxbasm binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}-zxbasm
+          path: csrc/build/zxbasm/zxbasm
 
   # Compare against Python ground truth (single platform is sufficient)
   python-comparison:
@@ -58,8 +67,11 @@ jobs:
           cmake -S csrc -B csrc/build -DCMAKE_BUILD_TYPE=Release
           cmake --build csrc/build -j$(nproc)
 
-      - name: Compare Python vs C output
+      - name: Compare Python vs C output (zxbpp)
         run: ./csrc/tests/compare_python_c.sh ./csrc/build/zxbpp/zxbpp tests/functional/zxbpp
+
+      - name: Compare Python vs C output (zxbasm)
+        run: ./csrc/tests/compare_python_c_asm.sh ./csrc/build/zxbasm/zxbasm tests/functional/asm
 
   # Create release binaries when a tag is pushed
   release:

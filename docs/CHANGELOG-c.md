@@ -3,6 +3,34 @@
 All notable changes to the C port. Versioning tracks upstream
 [boriel-basic/zxbasic](https://github.com/boriel-basic/zxbasic) with a `+cN` suffix.
 
+## [1.18.7+c2] — 2026-03-07
+
+Phase 2 — Z80 Assembler (`zxbasm`).
+
+### Added
+
+- **zxbasm** — Complete C port of the Z80 assembler
+  - Hand-written recursive-descent parser (~1,750 lines of C)
+  - Drop-in CLI replacement: same flags as Python `zxbasm`
+  - Full Z80 instruction set: 827 opcodes via static lookup table
+  - ZX Next extended opcodes (LDIX, NEXTREG, MUL, BSLA, etc.)
+  - Two-pass assembly with forward reference resolution
+  - Temporary labels (nB/nF) with namespace-aware resolution
+  - PROC/ENDP scoping with LOCAL labels
+  - PUSH/POP NAMESPACE directives
+  - `#init` directive (emits CALL+JP init trampoline)
+  - EQU, DEFL, ORG, ALIGN, DS/DEFS, DB/DEFB, DW/DEFW
+  - INCBIN (binary file inclusion)
+  - Expression evaluation: arithmetic, bitwise, comparisons
+  - Preprocessor integration (reuses C zxbpp binary)
+  - UTF-8 BOM handling
+  - Raw binary (.bin) output format
+  - **61/61 tests passing** — byte-for-byte identical to Python
+- **Test harnesses** — `csrc/tests/`
+  - `run_zxbasm_tests.sh` — standalone test runner (61/61 passing)
+  - `compare_python_c_asm.sh` — Python ground-truth comparison (61/61 identical)
+- **CI** — Added zxbasm test steps and Python comparison
+
 ## [1.18.7+c1] — 2026-03-06
 
 First release 🎉 — Phase 0 (Infrastructure) + Phase 1 (Preprocessor).
