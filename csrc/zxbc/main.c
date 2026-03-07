@@ -99,6 +99,12 @@ int main(int argc, char *argv[]) {
     if (rc == 0 && ast) {
         check_pending_labels(&cs, ast);
         check_pending_calls(&cs);
+
+        /* Check READ without DATA (matches Python translator check) */
+        if (cs.data_is_used && cs.datas.len == 0) {
+            zxbc_error(&cs, 0, "No DATA defined");
+        }
+
         if (cs.error_count > 0)
             rc = 1;
     }

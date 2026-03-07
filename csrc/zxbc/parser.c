@@ -1297,13 +1297,14 @@ static AstNode *parse_statement(Parser *p) {
             AstNode *expr = parse_expression(p, PREC_NONE + 1);
             if (expr) ast_add_child(p->cs, s, expr);
         } while (match(p, BTOK_COMMA));
-        p->cs->data_is_used = true;
+        vec_push(p->cs->datas, s);
         return s;
     }
 
     /* READ */
     if (match(p, BTOK_READ)) {
         int ln = p->previous.lineno;
+        p->cs->data_is_used = true;  /* Track that READ is used (matches Python) */
         AstNode *block = make_block_node(p, ln);
         do {
             AstNode *s = make_sentence_node(p, "READ", ln);
@@ -2318,6 +2319,7 @@ static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function, bool is_decl
 
     /* Parameters */
     AstNode *params = ast_new(p->cs, AST_PARAMLIST, lineno);
+    bool had_optional_param = false;
     if (match(p, BTOK_LP)) {
         if (!check(p, BTOK_RP)) {
             do {
@@ -2352,6 +2354,10 @@ static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function, bool is_decl
                 AstNode *default_val = NULL;
                 if (match(p, BTOK_EQ)) {
                     default_val = parse_expression(p, PREC_NONE + 1);
+                    had_optional_param = true;
+                } else if (had_optional_param) {
+                    zxbc_error(p->cs, param_line,
+                               "Can't declare mandatory param '%s' after optional param", param_name);
                 }
 
                 AstNode *param_node = ast_new(p->cs, AST_ARGUMENT, param_line);
