@@ -335,10 +335,8 @@ int asm_assemble(AsmState *as, const char *input);
 int asm_generate_binary(AsmState *as, const char *filename, const char *format);
 
 /* Error/warning reporting (matches Python's errmsg format) */
-void asm_error(AsmState *as, int lineno, const char *fmt, ...)
-    __attribute__((format(printf, 3, 4)));
-void asm_warning(AsmState *as, int lineno, const char *fmt, ...)
-    __attribute__((format(printf, 3, 4)));
+void asm_error(AsmState *as, int lineno, const char *fmt, ...) PRINTF_FMT(3, 4);
+void asm_warning(AsmState *as, int lineno, const char *fmt, ...) PRINTF_FMT(3, 4);
 
 /* Memory operations */
 void mem_init(Memory *m, Arena *arena);

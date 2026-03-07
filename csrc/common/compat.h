@@ -4,6 +4,13 @@
 #ifndef COMPAT_H
 #define COMPAT_H
 
+/* GCC/Clang format attribute — no-op on MSVC */
+#if defined(__GNUC__) || defined(__clang__)
+    #define PRINTF_FMT(fmtarg, firstva) __attribute__((format(printf, fmtarg, firstva)))
+#else
+    #define PRINTF_FMT(fmtarg, firstva)
+#endif
+
 #ifdef _MSC_VER
     /* MSVC doesn't have these POSIX functions */
     #include <string.h>
@@ -14,6 +21,7 @@
     #define strncasecmp  _strnicmp
     #define strcasecmp   _stricmp
     #define getcwd       _getcwd
+    #define strdup       _strdup
     #define PATH_MAX     _MAX_PATH
 
     /* realpath: MSVC has _fullpath */
