@@ -1308,9 +1308,16 @@ static AstNode *parse_statement(Parser *p) {
         AstNode *block = make_block_node(p, ln);
         do {
             AstNode *s = make_sentence_node(p, "READ", ln);
-            /* Can read into variable, array element, or expression */
             AstNode *target = parse_expression(p, PREC_NONE + 1);
-            if (target) ast_add_child(p->cs, s, target);
+            if (target) {
+                /* Validate READ target is a variable or array element */
+                if (target->tag == AST_ID && target->u.id.class_ == CLASS_array) {
+                    zxbc_error(p->cs, ln, "Cannot read '%s'. It's an array", target->u.id.name);
+                } else if (target->tag != AST_ID && target->tag != AST_ARRAYACCESS) {
+                    zxbc_error(p->cs, ln, "Syntax error. Can only read a variable or an array element");
+                }
+                ast_add_child(p->cs, s, target);
+            }
             ast_add_child(p->cs, block, s);
         } while (match(p, BTOK_COMMA));
         return block;
