@@ -2300,8 +2300,21 @@ static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function, bool is_decl
         parser_error(p, "Expected function/sub name");
         return NULL;
     }
-    const char *func_name = get_name_token(p);
+    const char *func_name_raw = get_name_token(p);
     advance(p);
+
+    /* Strip deprecated suffix for symbol table key (matching access_id) */
+    const char *func_name = func_name_raw;
+    size_t fn_len = strlen(func_name_raw);
+    char fn_stripped[256];
+    TypeInfo *fn_suffix_type = NULL;
+    if (fn_len > 0 && fn_len < sizeof(fn_stripped) && is_deprecated_suffix(func_name_raw[fn_len - 1])) {
+        BasicType bt = suffix_to_type(func_name_raw[fn_len - 1]);
+        fn_suffix_type = p->cs->symbol_table->basic_types[bt];
+        memcpy(fn_stripped, func_name_raw, fn_len - 1);
+        fn_stripped[fn_len - 1] = '\0';
+        func_name = fn_stripped;
+    }
 
     /* Parameters */
     AstNode *params = ast_new(p->cs, AST_PARAMLIST, lineno);
@@ -2358,9 +2371,14 @@ static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function, bool is_decl
     if (is_function || check(p, BTOK_AS)) {
         ret_type = parse_typedef(p);
         if (!ret_type && is_function) {
-            ret_type = type_new_ref(p->cs, p->cs->default_type, lineno, true);
-            if (p->cs->opts.strict)
-                zxbc_error(p->cs, lineno, "strict mode: missing type declaration for '%s'", func_name);
+            /* Use suffix type if available (e.g. test$ → string) */
+            if (fn_suffix_type) {
+                ret_type = fn_suffix_type;
+            } else {
+                ret_type = type_new_ref(p->cs, p->cs->default_type, lineno, true);
+                if (p->cs->opts.strict)
+                    zxbc_error(p->cs, lineno, "strict mode: missing type declaration for '%s'", func_name);
+            }
         }
     }
 
@@ -2389,6 +2407,20 @@ static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function, bool is_decl
                    symbolclass_to_string(cls));
     }
 
+    /* Check type mismatch between forward declaration and full definition.
+     * Matches Python zxbparser.py line 2961: if the new type is implicit and
+     * the forward declaration already has a known type, keep the declaration's type. */
+    if (!is_declare && id_node->u.id.forwarded && ret_type && id_node->type_) {
+        bool new_is_implicit = (ret_type->tag == AST_TYPEREF && ret_type->implicit);
+        if (new_is_implicit && id_node->type_->basic_type != TYPE_unknown) {
+            /* Keep forward declaration's type — don't override with implicit */
+            ret_type = id_node->type_;
+        } else if (!new_is_implicit && !type_equal(id_node->type_, ret_type)) {
+            zxbc_error(p->cs, lineno, "Function '%s' (previously declared at %d) type mismatch",
+                       func_name, id_node->lineno);
+        }
+    }
+
     id_node->u.id.class_ = cls;
     id_node->u.id.convention = conv;
     id_node->type_ = ret_type;
@@ -2407,6 +2439,37 @@ static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function, bool is_decl
 
         vec_push(p->cs->functions, id_node);
         return decl;
+    }
+
+    /* Check parameter mismatch between forward declaration and full definition.
+     * Matches Python zxbparser.py lines 2971-2990. */
+    if (id_node->u.id.forwarded && id_node->parent && id_node->parent->tag == AST_FUNCDECL
+        && id_node->parent->child_count >= 2) {
+        AstNode *old_params = id_node->parent->children[1];  /* DECLARE's param list */
+        if (old_params && params) {
+            if (old_params->child_count != params->child_count) {
+                zxbc_error(p->cs, lineno, "Parameter mismatch in %s '%s' (previously declared at %d)",
+                           symbolclass_to_string(cls), func_name, id_node->lineno);
+            } else {
+                for (int pi = 0; pi < old_params->child_count; pi++) {
+                    AstNode *a = old_params->children[pi];
+                    AstNode *b = params->children[pi];
+                    if (a && b) {
+                        /* Check type and byref match */
+                        bool type_mismatch = false;
+                        if (a->type_ && b->type_ && !type_equal(a->type_, b->type_)) {
+                            type_mismatch = true;
+                        }
+                        bool byref_mismatch = (a->u.argument.byref != b->u.argument.byref);
+                        if (type_mismatch || byref_mismatch) {
+                            zxbc_error(p->cs, lineno, "Parameter mismatch in %s '%s' (previously declared at %d)",
+                                       symbolclass_to_string(cls), func_name, id_node->lineno);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /* Full definition — clear forwarded flag if this was previously declared */

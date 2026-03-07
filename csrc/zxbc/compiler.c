@@ -1007,20 +1007,50 @@ bool check_pending_calls(CompilerState *cs) {
         AstNode *callee = call->children[0];
         if (!callee || callee->tag != AST_ID) continue;
 
-        /* Use the callee node directly — it was resolved during parsing.
-         * Skip non-callable entries (arrays, variables). */
-        SymbolClass cls = callee->u.id.class_;
+        /* Look up the callee in the global scope — the callee pointer may be
+         * orphaned if it was created in a function scope that has since exited. */
+        const char *name = callee->u.id.name;
+
+        /* Strip deprecated suffix for lookup */
+        size_t len = strlen(name);
+        char stripped[256];
+        const char *lookup_name = name;
+        if (len > 0 && len < sizeof(stripped) && is_deprecated_suffix(name[len - 1])) {
+            memcpy(stripped, name, len - 1);
+            stripped[len - 1] = '\0';
+            lookup_name = stripped;
+        }
+
+        /* Try global scope lookup first, then fall back to callee node */
+        AstNode *entry = hashmap_get(&cs->symbol_table->global_scope->symbols, lookup_name);
+        if (!entry) entry = callee;
+
+        SymbolClass cls = entry->u.id.class_;
+
+        /* Skip non-callable entries (arrays, variables) */
         if (cls == CLASS_array || cls == CLASS_var || cls == CLASS_const) {
             continue;
         }
 
+        /* Check if a SUB is being used as a FUNCTION (in expression context) */
+        if (call->tag == AST_FUNCCALL && cls == CLASS_sub) {
+            zxbc_error(cs, call->lineno, "'%s' is a SUB, not a FUNCTION", name);
+            result = false;
+            continue;
+        }
+
         /* Check if forward-declared but never implemented */
-        if (callee->u.id.forwarded) {
+        if (entry->u.id.forwarded) {
             const char *kind = (cls == CLASS_sub) ? "sub" : "function";
             zxbc_error(cs, call->lineno, "%s '%s' declared but not implemented",
-                       kind, callee->u.id.name);
+                       kind, name);
             result = false;
         }
+
+        /* Note: CLASS_unknown entries that were never declared as function/sub
+         * could be undeclared functions OR implicit string variables used with
+         * subscripts. Without full type checking, we can't distinguish them,
+         * so we defer this check to the semantic analysis phase. */
     }
 
     return result;
