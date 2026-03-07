@@ -52,7 +52,7 @@ Port the BASIC compiler frontend from Python to C, as defined in [Phase 3 of c-p
 - [x] ASM inline blocks
 - [x] Preprocessor directives (#line, #init, #require, #pragma)
 - [x] Builtin functions with optional parens and multi-arg (PEEK type, CHR$, LBOUND)
-- [x] POKE with type and optional parens
+- [x] POKE with type, optional parens, speculative parse for all grammar forms
 - [x] Print attributes (INK, PAPER, BRIGHT, FLASH, OVER, INVERSE, BOLD, ITALIC)
 - [x] ON GOTO/GOSUB, SAVE/LOAD/VERIFY, ERROR
 - [x] Named arguments (name:=expr)
@@ -74,7 +74,7 @@ Port the BASIC compiler frontend from Python to C, as defined in [Phase 3 of c-p
 - [x] --parse-only mode for testing
 
 #### Testing
-- [x] Parse-only mode (984/1036 = 95% of .bas files parse successfully)
+- [x] Parse-only mode (1020/1036 = 98.5% of .bas files parse successfully)
 - [ ] Test harness script
 - [ ] Python comparison script
 
@@ -88,6 +88,15 @@ Port the BASIC compiler frontend from Python to C, as defined in [Phase 3 of c-p
 - Implemented full recursive descent parser with Pratt expression parsing (~2000 lines).
 - Iterative parser improvement: 658 → 832 → 889 → 918 → 929 → 955 → 962 → 973 → 984/1036 tests passing.
 - Remaining 52 failures: ~25 need preprocessor (#include/#define), ~12 are double-index string slicing (complex), ~15 are edge cases.
+
+### 2026-03-07 (session 2)
+- Parser improvements: 984 → 1020/1036 (98.5%).
+- Fixed lexer: indented label detection, BIN without digits returns 0.
+- Redesigned POKE handler with speculative parse for all Python grammar forms.
+- Fixed IF THEN: edge cases (THEN: newline, END IF continuation).
+- Added expression-as-statement, named args in sub calls without parens.
+- NUMBER at statement start treated as label, AS with unknown ID as type.
+- Remaining 16 failures: 7 preprocessor-dependent, 7 expected errors, 2 real gaps (single-line FOR, no-parens function call in expression).
 
 ## Decisions & Notes
 
@@ -107,3 +116,4 @@ ab28fe0b - feat: zxbc skeleton — types, AST, symbol table, options, errmsg, CL
 c2b8a8ac - feat: BASIC lexer with all states, keywords, number formats
 e1f5ef92 - feat: BASIC parser — recursive descent with Pratt expressions (955/1036)
 166bdf7d - fix: parser improvements — 984/1036 tests pass (95%)
+2c9a253c - fix: parser improvements — 1020/1036 tests pass (98.5%)
