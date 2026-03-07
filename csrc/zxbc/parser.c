@@ -2024,10 +2024,17 @@ static AstNode *parse_dim_statement(Parser *p) {
 
         TypeInfo *type = parse_typedef(p);
         if (!type) {
-            type = type_new_ref(p->cs, p->cs->default_type, lineno, true);
-            /* Strict mode: error on implicit type in DIM */
-            if (p->cs->opts.strict)
-                zxbc_error(p->cs, lineno, "strict mode: missing type declaration for '%s'", name);
+            /* Check for deprecated suffix ($%&!) to infer type */
+            size_t nlen = strlen(name);
+            if (nlen > 0 && is_deprecated_suffix(name[nlen - 1])) {
+                BasicType bt = suffix_to_type(name[nlen - 1]);
+                type = p->cs->symbol_table->basic_types[bt];
+            } else {
+                type = type_new_ref(p->cs, p->cs->default_type, lineno, true);
+                /* Strict mode: error on implicit type in DIM */
+                if (p->cs->opts.strict)
+                    zxbc_error(p->cs, lineno, "strict mode: missing type declaration for '%s'", name);
+            }
         }
 
         /* DIM array AT expr */
@@ -2048,9 +2055,21 @@ static AstNode *parse_dim_statement(Parser *p) {
             }
         }
 
-        /* AT can also come after initializer: DIM a(3) => {1,2,3} AT $C000 */
-        if (!arr_at_expr && match(p, BTOK_AT)) {
-            arr_at_expr = parse_expression(p, PREC_NONE + 1);
+        /* Check: cannot initialize array of type string */
+        if (init && type && type_is_string(type)) {
+            zxbc_error(p->cs, lineno, "Cannot initialize array of type string");
+        }
+
+        /* AT after initializer is not allowed (Python: either => or AT, not both) */
+        if (!arr_at_expr && check(p, BTOK_AT)) {
+            if (init) {
+                zxbc_error(p->cs, lineno, "Syntax Error. Unexpected token 'AT' <AT>");
+                advance(p); /* consume AT */
+                parse_expression(p, PREC_NONE + 1); /* consume the address */
+            } else {
+                advance(p); /* consume AT */
+                arr_at_expr = parse_expression(p, PREC_NONE + 1);
+            }
         }
 
         AstNode *decl = ast_new(p->cs, AST_ARRAYDECL, lineno);
