@@ -4,6 +4,7 @@
 # See the file CONTRIBUTORS.md for copyright details.
 # See https://www.gnu.org/licenses/agpl-3.0.html for details.
 # --------------------------------------------------------------------
+import math
 
 from src.api import check, errmsg
 from src.api.errmsg import error
@@ -34,7 +35,7 @@ class SymbolTYPECAST(Symbol):
         self.children[0] = operand_
 
     @classmethod
-    def make_node(cls, new_type: SymbolTYPE, node: Symbol, lineno: int):
+    def make_node(cls, new_type: SymbolTYPE, node: Symbol | None, lineno: int) -> Symbol | None:
         """Creates a node containing the type cast of
         the given one. If new_type == node.type, then
         nothing is done, and the same node is
@@ -42,7 +43,7 @@ class SymbolTYPECAST(Symbol):
 
         Returns None on failure (and calls syntax_error)
         """
-        assert isinstance(new_type, SymbolTYPE)
+        assert isinstance(new_type, SymbolTYPE), f"{new_type} is not a SymbolTYPE"
 
         # None (null) means the given AST node is empty (usually an error)
         if node is None:
@@ -83,7 +84,7 @@ class SymbolTYPECAST(Symbol):
 
         # It's a number. So let's convert it directly
         if check.is_const(node):
-            node = SymbolNUMBER(node.value, node.lineno, node.type_)
+            node = SymbolNUMBER(node.value, node.lineno, node.type_.final)
 
         if new_type == TYPE.boolean:
             node.value = int(bool(node.value))
@@ -91,7 +92,8 @@ class SymbolTYPECAST(Symbol):
         elif new_type.is_basic and not TYPE.is_integral(new_type):  # not an integer
             node.value = float(node.value)
         else:  # It's an integer
-            new_val = int(node.value) & ((1 << (8 * new_type.size)) - 1)  # Mask it
+            # ZX Spectrum ROM always truncates to -Infinity, so we do the same using floor()
+            new_val = math.floor(node.value) & ((1 << (8 * new_type.size)) - 1)  # Mask it
 
             if node.value >= 0 and node.value != new_val:
                 errmsg.warning_conversion_lose_digits(node.lineno)
