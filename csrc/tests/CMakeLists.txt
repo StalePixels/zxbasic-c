@@ -83,13 +83,11 @@ add_test(
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/..
 )
 
-# ---- Command-line tests (shell scripts) ----
-
-# cmdline tests — matches tests/cmdline/test_zxb.py
-add_test(
-    NAME cmdline_tests
-    COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/run_cmdline_tests.sh
-        $<TARGET_FILE:zxbc>
-        ${CMAKE_SOURCE_DIR}/../tests/cmdline
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/..
-)
+# NOTE: Round 0 (Sprint 11) deleted csrc/tests/run_cmdline_tests.sh
+# along with the other fuzzy harnesses — the 4 shell-driven cmdline
+# tests it ran were syntax-only flag-acceptance checks (the fuzzy
+# harness audit at docs/captures/zxbasic-c/test-infra-trust.md flagged
+# them as "test_compile_only passes if zxbc is replaced with a do-
+# nothing script"). The C test_cmdline binary's 15 value-verifying
+# tests (registered above as cmdline_value_tests) are the real
+# replacement.

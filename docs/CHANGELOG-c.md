@@ -28,15 +28,28 @@ Phase 3 — BASIC Compiler Frontend (`zxbc`).
   - `symboltable_check_is_declared()` / `check_is_undeclared()` — scope-aware lookup
   - `is_temporary_value()` — matches Python's `api/check.py`
 - **`ast_number()`** — NUMBER node creation with auto type inference from value
-- **C unit test suite** — 132 tests across 7 programs + 4 shell tests
-  - `test_utils` (14) — matches `tests/api/test_utils.py`
+- **C-internal regression checks** — 117 `TEST(...)` declarations across 6 .c files
+  + 15 value-verifying tests in the `test_cmdline` binary; **132 total** when
+  the `test_cmdline` count is added in (matching the original "132 passing"
+  badge claim once the breakdown is reconciled). These are NOT port-equivalence
+  tests — they assert the C port's own internal APIs (`ast_new`, `arena_alloc`,
+  `hashmap_set`, etc.) behave as written, and protect against C-side regression
+  during refactors. Port-equivalence to Python is measured by the strict
+  functional harnesses (zxbpp, zxbasm, zxbc --parse-only) and the
+  AST-equivalence surface, not by these unit tests. Re-framed in Round 0,
+  Sprint 11 — see [`docs/captures/zxbasic-c/round-0-outcome.md`](../../docs/captures/zxbasic-c/round-0-outcome.md).
+  - `test_utils` (14 `TEST()`) — matches `tests/api/test_utils.py`
   - `test_config` (6) — matches `tests/api/test_config.py` + `test_arg_parser.py`
   - `test_types` (10) — matches `tests/symbols/test_symbolBASICTYPE.py`
   - `test_ast` (61) — matches all 19 `tests/symbols/test_symbol*.py` files
   - `test_symboltable` (22) — matches `tests/api/test_symbolTable.py` (18 + 4 extras)
   - `test_check` (4) — matches `tests/api/test_check.py`
-  - `test_cmdline` (15) — matches `tests/cmdline/test_zxb.py` + `test_arg_parser.py`
-  - `run_cmdline_tests.sh` (4) — zxbc exit-code tests
+  - `test_cmdline` (0 `TEST()` decls; 15 inline tests) — matches `tests/cmdline/test_zxb.py`
+  - `run_cmdline_tests.sh` (4 shell-driven exit-code tests) — **deleted in
+    Round 0 Sprint 11** as fuzzy/syntax-only tests; the 15 `test_cmdline`
+    binary tests are the value-verifying replacement. Original "136" total
+    in the breakdown sum vs "132" badge headline came from this 4-test
+    delta plus a counting bug; reconciled here.
 - **CI** — added all unit tests + cmdline tests to workflow (Unix + Windows)
 
 ### Fixed
