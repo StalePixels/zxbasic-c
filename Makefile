@@ -13,7 +13,7 @@ ZXBASM_TESTS = tests/functional/asm
 ZXBC_C       = $(BUILD_DIR)/zxbc/zxbc
 ZXBC_TESTS   = tests/functional/arch/zx48k
 
-.PHONY: build clean test-zxbpp-strict test-zxbpp-fuzzy verify-phase1-calibration verify-phase2-calibration test-zxbasm-strict test-zxbasm-fuzzy sweep-asm-zero-byte verify-phase3-calibration regenerate-zxbc-baselines test-zxbc-parse-strict test-zxbc-parse-fuzzy verify-phase4-calibration
+.PHONY: build clean test-zxbpp-strict test-zxbpp-fuzzy verify-phase1-calibration verify-phase2-calibration test-zxbasm-strict test-zxbasm-fuzzy sweep-asm-zero-byte verify-phase3-calibration regenerate-zxbc-baselines test-zxbc-parse-strict test-zxbc-parse-fuzzy verify-phase4-calibration test-zxbc-ast-equiv verify-phase5-calibration
 
 build:
 	$(CMAKE) -S csrc -B $(BUILD_DIR) -DCMAKE_BUILD_TYPE=$(BUILD_TYPE)
@@ -146,3 +146,47 @@ verify-phase4-calibration: $(ZXBC_C)
 	    echo "$$fuzzy_out" | tail -10; exit 1; \
 	fi; \
 	echo "verify-phase4-calibration: OK (alxinho1.bas STDERR_MISMATCH strict + MATCH fuzzy)"
+
+ZXBC_AST_DUMP_C = $(BUILD_DIR)/zxbc-ast-dump/zxbc-ast-dump
+PY_AST_DUMP     = csrc/tests/dump_python_ast.py
+PY_AST_DIFF     = csrc/tests/diff_ast_json.py
+AST_FIXTURE_DIR = csrc/tests/ast_equiv_fixtures
+
+test-zxbc-ast-equiv: $(ZXBC_AST_DUMP_C)
+	./csrc/tests/run_zxbc_ast_equiv.sh $(ZXBC_AST_DUMP_C) $(PY_AST_DUMP) $(PY_AST_DIFF) $(ZXBC_TESTS)
+
+# Phase 5 calibration: counts TYPECAST occurrences in each dump
+# directly. Drifted-Python must contain TYPECAST (Python's parser
+# inserts them for the UINTEGER->BYTE coercion in the FOR bounds);
+# drifted-C must contain none (the production-fidelity audit's
+# canonical port-drift finding). Faithful fixture must have zero
+# TYPECAST on either side.
+#
+# Why this shape, not "drift mentions TYPECAST in the diff": the diff
+# tool stops recursion at parent-level shape mismatches (Python
+# optimises declarations out; C keeps them as VARDECL nodes), so the
+# TYPECAST nodes deep inside the FOR subtree never get to be the
+# reported divergence site. Counting TYPECAST occurrences directly
+# isolates the calibration signal from the pervasive shape noise.
+verify-phase5-calibration: $(ZXBC_AST_DUMP_C)
+	@set -e; \
+	tmpdir=$$(mktemp -d); \
+	.venv/bin/python $(PY_AST_DUMP) $(AST_FIXTURE_DIR)/binary_expr_faithful.bas > $$tmpdir/py_f.json; \
+	$(ZXBC_AST_DUMP_C)             $(AST_FIXTURE_DIR)/binary_expr_faithful.bas > $$tmpdir/c_f.json; \
+	.venv/bin/python $(PY_AST_DUMP) $(AST_FIXTURE_DIR)/for_typecast_drifted.bas > $$tmpdir/py_d.json; \
+	$(ZXBC_AST_DUMP_C)             $(AST_FIXTURE_DIR)/for_typecast_drifted.bas > $$tmpdir/c_d.json; \
+	pyf_tc=$$(grep -c '"tag": "TYPECAST"' $$tmpdir/py_f.json || true); \
+	cf_tc=$$(grep -c  '"tag": "TYPECAST"' $$tmpdir/c_f.json  || true); \
+	pyd_tc=$$(grep -c '"tag": "TYPECAST"' $$tmpdir/py_d.json || true); \
+	cd_tc=$$(grep -c  '"tag": "TYPECAST"' $$tmpdir/c_d.json  || true); \
+	rm -rf $$tmpdir; \
+	if [ "$$pyf_tc" != "0" ] || [ "$$cf_tc" != "0" ]; then \
+	    echo "FAIL: faithful fixture has TYPECAST (py=$$pyf_tc c=$$cf_tc) — calibration unsound"; exit 1; \
+	fi; \
+	if [ "$$pyd_tc" -le "0" ]; then \
+	    echo "FAIL: drifted Python AST has no TYPECAST (py=$$pyd_tc) — fixture broken"; exit 1; \
+	fi; \
+	if [ "$$cd_tc" -ge "$$pyd_tc" ]; then \
+	    echo "FAIL: drifted C AST has $$cd_tc TYPECASTs vs Python's $$pyd_tc — port drift not detectable"; exit 1; \
+	fi; \
+	echo "verify-phase5-calibration: OK (drifted py=$$pyd_tc TYPECAST vs c=$$cd_tc; faithful py=$$pyf_tc c=$$cf_tc)"
