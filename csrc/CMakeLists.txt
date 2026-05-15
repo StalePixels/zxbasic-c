@@ -39,6 +39,10 @@ add_subdirectory(zxbasm)
 # Compiler (zxbc)
 add_subdirectory(zxbc)
 
+# AST dump tool — Phase 5 part B test infrastructure (read-only
+# consumer of zxbc_parser_lib; not part of the production toolchain).
+add_subdirectory(zxbc-ast-dump)
+
 # Test harness
 enable_testing()
 add_subdirectory(tests)
