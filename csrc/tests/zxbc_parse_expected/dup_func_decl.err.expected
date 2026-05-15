@@ -1,0 +1,1 @@
+<PROJECT_ROOT>/tests/functional/arch/zx48k/dup_func_decl.bas:5: error: duplicated declaration for function 'f'

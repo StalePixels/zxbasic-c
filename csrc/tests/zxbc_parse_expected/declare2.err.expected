@@ -1,0 +1,1 @@
+<PROJECT_ROOT>/tests/functional/arch/zx48k/declare2.bas:5: error: Function 'func0' (previously declared at 3) parameter mismatch

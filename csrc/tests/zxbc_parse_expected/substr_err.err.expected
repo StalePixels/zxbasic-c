@@ -1,0 +1,1 @@
+<PROJECT_ROOT>/tests/functional/arch/zx48k/substr_err.bas:2: error: Cannot assign a value to 'm$'. It's not a variable

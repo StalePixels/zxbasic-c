@@ -1,0 +1,2 @@
+<PROJECT_ROOT>/tests/functional/arch/zx48k/explicit0.bas:2: error: Undeclared variable "A"
+<PROJECT_ROOT>/tests/functional/arch/zx48k/explicit0.bas:2: warning: [W100] Using default implicit type 'ubyte' for 'A'

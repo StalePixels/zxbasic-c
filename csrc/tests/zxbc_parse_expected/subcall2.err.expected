@@ -1,0 +1,1 @@
+<PROJECT_ROOT>/tests/functional/arch/zx48k/subcall2.bas:6: error: 'test' is a SUB, not a FUNCTION

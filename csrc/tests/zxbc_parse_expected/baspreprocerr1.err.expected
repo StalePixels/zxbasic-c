@@ -1,0 +1,1 @@
+<PROJECT_ROOT>/tests/functional/arch/zx48k/baspreprocerr1.bas:1: error: file 'this_file_does_not_exist.asm' not found

@@ -1,0 +1,2 @@
+<PROJECT_ROOT>/tests/functional/arch/zx48k/01.bas:1: error: expected type integer for 'a%', got ubyte
+<PROJECT_ROOT>/tests/functional/arch/zx48k/01.bas:1: error: 'a%' suffix is for type 'integer' but it was declared as 'ubyte'

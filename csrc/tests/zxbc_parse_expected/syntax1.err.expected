@@ -1,0 +1,2 @@
+<PROJECT_ROOT>/tests/functional/arch/zx48k/syntax1.bas:2: warning: [W100] Using default implicit type 'float' for 'a'
+<PROJECT_ROOT>/tests/functional/arch/zx48k/syntax1.bas:2: error: Unexpected end of line

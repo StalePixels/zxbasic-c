@@ -1,0 +1,2 @@
+<PROJECT_ROOT>/tests/functional/arch/zx48k/declare5.bas:3: warning: [W150] Parameter 'b' is never used
+<PROJECT_ROOT>/tests/functional/arch/zx48k/declare5.bas:6: error: Duplicate function name 'a', previously defined at 3

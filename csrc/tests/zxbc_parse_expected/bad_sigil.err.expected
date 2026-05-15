@@ -1,0 +1,2 @@
+<PROJECT_ROOT>/tests/functional/arch/zx48k/bad_sigil.bas:2: error: expected type string for 'y$', got float
+<PROJECT_ROOT>/tests/functional/arch/zx48k/bad_sigil.bas:2: warning: [W150] Parameter 'y' is never used

@@ -28,3 +28,6 @@ csrc/tests/phase*-asm-missing-fixtures.log
 csrc/tests/phase*-asm-python-internal-skips.log
 csrc/tests/Testing/
 Testing/
+
+# Project-local venv used by csrc/tests/regen_zxbc_baselines.sh
+.venv/

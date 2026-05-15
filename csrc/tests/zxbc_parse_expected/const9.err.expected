@@ -1,0 +1,2 @@
+<PROJECT_ROOT>/tests/functional/arch/zx48k/const9.bas:3: warning: [W100] Using default implicit type 'uinteger' for 'DGMAXY'
+<PROJECT_ROOT>/tests/functional/arch/zx48k/const9.bas:6: error: Unknown upper bound for array dimension

@@ -1,0 +1,3 @@
+<PROJECT_ROOT>/tests/functional/arch/zx48k/dim_dyn_err.bas:1: warning: [W100] Using default implicit type 'float' for 'r'
+<PROJECT_ROOT>/tests/functional/arch/zx48k/dim_dyn_err.bas:1: error: Array bounds must be constants
+<PROJECT_ROOT>/tests/functional/arch/zx48k/dim_dyn_err.bas:1: error: Unexpected extra vector dimensions. It should be 7

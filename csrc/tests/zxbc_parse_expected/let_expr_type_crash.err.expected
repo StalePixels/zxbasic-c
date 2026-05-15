@@ -1,0 +1,2 @@
+<PROJECT_ROOT>/tests/functional/arch/zx48k/let_expr_type_crash.bas:3: error: Syntax Error. Unexpected token 's' <ID>
+<PROJECT_ROOT>/tests/functional/arch/zx48k/let_expr_type_crash.bas:8: error: Too many arguments for Function 'editStringFN'

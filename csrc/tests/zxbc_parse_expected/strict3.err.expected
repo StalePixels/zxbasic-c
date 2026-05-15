@@ -1,0 +1,2 @@
+<PROJECT_ROOT>/tests/functional/arch/zx48k/strict3.bas:5: error: strict mode: missing type declaration for 'anyfunc'
+<PROJECT_ROOT>/tests/functional/arch/zx48k/strict3.bas:4: error: strict mode: missing type declaration for 'anyfunc'

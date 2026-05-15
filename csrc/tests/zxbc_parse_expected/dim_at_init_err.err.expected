@@ -1,0 +1,2 @@
+<PROJECT_ROOT>/tests/functional/arch/zx48k/dim_at_init_err.bas:3: error: Syntax Error. Unexpected token 'AT' <AT>
+<PROJECT_ROOT>/tests/functional/arch/zx48k/dim_at_init_err.bas:4: error: Syntax Error. Unexpected token 'AT' <AT>

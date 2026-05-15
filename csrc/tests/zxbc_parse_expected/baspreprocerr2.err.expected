@@ -1,0 +1,2 @@
+<PROJECT_ROOT>/tests/functional/arch/zx48k/baspreprocerr2.bas:1: error: illegal preprocessor character '@'
+<PROJECT_ROOT>/tests/functional/arch/zx48k/baspreprocerr2.bas:1: error: Syntax error. Unexpected end of line

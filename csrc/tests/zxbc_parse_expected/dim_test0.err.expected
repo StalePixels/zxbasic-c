@@ -1,0 +1,2 @@
+<PROJECT_ROOT>/tests/functional/arch/zx48k/dim_test0.bas:2: error: Undeclared array "c"
+<PROJECT_ROOT>/tests/functional/arch/zx48k/dim_test0.bas:5: warning: [W100] Using default implicit type 'uinteger' for 'q'

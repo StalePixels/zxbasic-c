@@ -1,0 +1,8 @@
+# zxbc parse-only baseline regeneration audit stamp
+python:        /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/.venv/bin/python
+python_ver:    3.12.13
+upstream_pin:  9c0693f83651e51f4ad114d977506ce0414c4a34
+regen_date:    2026-05-15T18:39:39Z
+basc_files:    1036
+exit_zero:     900
+exit_nonzero:  136

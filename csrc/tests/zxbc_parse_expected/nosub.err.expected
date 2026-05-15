@@ -1,0 +1,1 @@
+<PROJECT_ROOT>/tests/functional/arch/zx48k/nosub.bas:3: error: sub 'nofunc' declared but not implemented

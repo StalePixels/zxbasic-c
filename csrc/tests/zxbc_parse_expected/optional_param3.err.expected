@@ -1,0 +1,2 @@
+<PROJECT_ROOT>/tests/functional/arch/zx48k/optional_param3.bas:2: error: Cannot convert string to a value. Use VAL() function
+<PROJECT_ROOT>/tests/functional/arch/zx48k/optional_param3.bas:6: error: Function 'test' takes 2 parameters, not 1

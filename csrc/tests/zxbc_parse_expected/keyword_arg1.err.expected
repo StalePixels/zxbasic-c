@@ -1,0 +1,3 @@
+<PROJECT_ROOT>/tests/functional/arch/zx48k/keyword_arg1.bas:2: warning: [W150] Parameter 'x' is never used
+<PROJECT_ROOT>/tests/functional/arch/zx48k/keyword_arg1.bas:2: warning: [W150] Parameter 'y' is never used
+<PROJECT_ROOT>/tests/functional/arch/zx48k/keyword_arg1.bas:5: error: Positional argument cannot go after keyword argument 'y'

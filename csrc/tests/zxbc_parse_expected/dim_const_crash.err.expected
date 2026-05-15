@@ -1,0 +1,4 @@
+<PROJECT_ROOT>/tests/functional/arch/zx48k/dim_const_crash.bas:2: warning: [W100] Using default implicit type 'float' for 'MHEIGHT'
+<PROJECT_ROOT>/tests/functional/arch/zx48k/dim_const_crash.bas:2: error: Initializer expression is not constant.
+<PROJECT_ROOT>/tests/functional/arch/zx48k/dim_const_crash.bas:3: warning: [W100] Using default implicit type 'float' for 'MAXMOBS'
+<PROJECT_ROOT>/tests/functional/arch/zx48k/dim_const_crash.bas:3: error: Array bounds must be constants

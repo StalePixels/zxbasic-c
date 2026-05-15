@@ -1,0 +1,1 @@
+<PROJECT_ROOT>/tests/functional/arch/zx48k/typecast1.bas:5: error: Cannot convert value to string. Use STR() function

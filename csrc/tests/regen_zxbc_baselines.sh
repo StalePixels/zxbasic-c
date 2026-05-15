@@ -27,13 +27,27 @@ if [ "${1:-}" = "--skip-pytest" ]; then
     SKIP_PYTEST=1
 fi
 
-PYTHON=/opt/homebrew/bin/python3.12
-if [ ! -x "$PYTHON" ]; then
-    echo "ERROR: $PYTHON not present. Pin-update regen requires the canonical interpreter." >&2
+# The regen needs pytest + project deps installed. The repo expects a
+# project-local venv at .venv/ — bootstrap with:
+#
+#     /opt/homebrew/bin/python3.12 -m venv .venv
+#     .venv/bin/pip install pytest pytest-cov pytest-xdist
+#
+# .venv/ is gitignored. This script falls back to /opt/homebrew/bin/
+# python3.12 only if the venv is absent — that covers the case of
+# someone invoking the script before bootstrapping; the Python-health-
+# check gate will then fail loudly with the missing-pytest message
+# pointing back here.
+PROJECT_ROOT=$(cd "$(dirname "$0")/../.." && pwd)
+if [ -x "$PROJECT_ROOT/.venv/bin/python" ]; then
+    PYTHON="$PROJECT_ROOT/.venv/bin/python"
+elif [ -x /opt/homebrew/bin/python3.12 ]; then
+    PYTHON=/opt/homebrew/bin/python3.12
+else
+    echo "ERROR: no python3.12 found at .venv/bin/python or /opt/homebrew/bin/python3.12" >&2
     exit 2
 fi
 
-PROJECT_ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 REAL_PROJECT_ROOT=$(cd "$PROJECT_ROOT" && pwd -P)
 TEST_DIR="$PROJECT_ROOT/tests/functional/arch/zx48k"
 EXPECTED_DIR="$PROJECT_ROOT/csrc/tests/zxbc_parse_expected"
@@ -54,7 +68,12 @@ if [ "$SKIP_PYTEST" -eq 0 ]; then
     echo
 fi
 
-PIN_HASH=$(git rev-parse HEAD 2>/dev/null || echo unknown)
+PIN_FILE="$PROJECT_ROOT/csrc/tests/.python-upstream-pin"
+if [ -f "$PIN_FILE" ]; then
+    PIN_HASH=$(head -1 "$PIN_FILE" | tr -d '[:space:]')
+else
+    PIN_HASH="unknown"
+fi
 PYTHON_VER=$("$PYTHON" --version 2>&1 | sed 's/^Python //')
 REGEN_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 

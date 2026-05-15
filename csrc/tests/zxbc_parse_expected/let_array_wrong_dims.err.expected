@@ -1,0 +1,1 @@
+<PROJECT_ROOT>/tests/functional/arch/zx48k/let_array_wrong_dims.bas:2: error: Array 'a' has 1 dimensions, not 2

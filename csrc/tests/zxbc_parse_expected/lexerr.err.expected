@@ -1,0 +1,3 @@
+<PROJECT_ROOT>/tests/functional/arch/zx48k/lexerr.bas:1: error: ignoring illegal character '%'
+<PROJECT_ROOT>/tests/functional/arch/zx48k/lexerr.bas:1: warning: [W100] Using default implicit type 'float' for 'a'
+<PROJECT_ROOT>/tests/functional/arch/zx48k/lexerr.bas:1: error: Syntax Error. Unexpected token '%' <ERROR>

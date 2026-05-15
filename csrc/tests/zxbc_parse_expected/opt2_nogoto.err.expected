@@ -1,0 +1,1 @@
+<PROJECT_ROOT>/tests/functional/arch/zx48k/opt2_nogoto.bas:2: error: Undeclared label "nolabel"

@@ -1,0 +1,2 @@
+<PROJECT_ROOT>/tests/functional/arch/zx48k/line_number_after_macro.bas:8: warning: [W100] Using default implicit type 'float' for 'a'
+<PROJECT_ROOT>/tests/functional/arch/zx48k/line_number_after_macro.bas:11: error: Syntax Error. Unexpected token '+' <PLUS>

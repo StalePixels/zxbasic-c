@@ -1,0 +1,2 @@
+<PROJECT_ROOT>/tests/functional/arch/zx48k/strict6.bas:4: error: strict mode: missing type declaration for 'a'
+<PROJECT_ROOT>/tests/functional/arch/zx48k/strict6.bas:5: error: strict mode: missing type declaration for 'b'

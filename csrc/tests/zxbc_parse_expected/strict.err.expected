@@ -1,0 +1,2 @@
+<PROJECT_ROOT>/tests/functional/arch/zx48k/strict.bas:2: warning: [W100] Using default implicit type 'float' for 'b'
+<PROJECT_ROOT>/tests/functional/arch/zx48k/strict.bas:4: error: strict mode: missing type declaration for 'a'

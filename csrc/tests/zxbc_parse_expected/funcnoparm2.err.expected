@@ -1,0 +1,4 @@
+<PROJECT_ROOT>/tests/functional/arch/zx48k/funcnoparm2.bas:2: warning: [W150] Parameter 'b' is never used
+<PROJECT_ROOT>/tests/functional/arch/zx48k/funcnoparm2.bas:6: error: Function 'xx' takes 2 parameters, not 1
+<PROJECT_ROOT>/tests/functional/arch/zx48k/funcnoparm2.bas:6: error: Syntax Error. Unexpected token ',' <COMMA>
+<PROJECT_ROOT>/tests/functional/arch/zx48k/funcnoparm2.bas:7: error: Syntax Error. Unexpected token '3.0' <NUMBER>

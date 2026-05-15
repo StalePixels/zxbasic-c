@@ -1,0 +1,12 @@
+<PROJECT_ROOT>/tests/functional/arch/zx48k/funccall6.bas:1: warning: [W100] Using default implicit type 'float' for 'a'
+<PROJECT_ROOT>/tests/functional/arch/zx48k/funccall6.bas:1: warning: [W100] Using default implicit type 'float' for 'b'
+<PROJECT_ROOT>/tests/functional/arch/zx48k/funccall6.bas:2: warning: [W100] Using default implicit type 'float' for 'SNETopen'
+<PROJECT_ROOT>/tests/functional/arch/zx48k/funccall6.bas:1: warning: [W150] Parameter 'x' is never used
+<PROJECT_ROOT>/tests/functional/arch/zx48k/funccall6.bas:1: warning: [W150] Parameter 'n' is never used
+<PROJECT_ROOT>/tests/functional/arch/zx48k/funccall6.bas:1: warning: [W150] Parameter 'a' is never used
+<PROJECT_ROOT>/tests/functional/arch/zx48k/funccall6.bas:1: warning: [W150] Parameter 'b' is never used
+<PROJECT_ROOT>/tests/functional/arch/zx48k/funccall6.bas:6: error: 'SNETcurrMPoint' is neither an array nor a function.
+<PROJECT_ROOT>/tests/functional/arch/zx48k/funccall6.bas:6: warning: [W100] Using default implicit type 'float' for 'flags'
+<PROJECT_ROOT>/tests/functional/arch/zx48k/funccall6.bas:6: error: Type Error: Function must return a numeric value, not a string
+<PROJECT_ROOT>/tests/functional/arch/zx48k/funccall6.bas:4: warning: [W150] Parameter 'mode' is never used
+<PROJECT_ROOT>/tests/functional/arch/zx48k/funccall6.bas:11: warning: [W100] Using default implicit type 'float' for 'SNETcurrMPoint'

@@ -1,0 +1,2 @@
+<PROJECT_ROOT>/tests/functional/arch/zx48k/typecast2.bas:1: warning: [W150] Parameter 'c' is never used
+<PROJECT_ROOT>/tests/functional/arch/zx48k/typecast2.bas:10: error: Cannot convert string to a value. Use VAL() function

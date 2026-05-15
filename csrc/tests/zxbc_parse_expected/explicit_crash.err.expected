@@ -1,0 +1,4 @@
+<PROJECT_ROOT>/tests/functional/arch/zx48k/explicit_crash.bas:9: error: Undeclared variable "x"
+<PROJECT_ROOT>/tests/functional/arch/zx48k/explicit_crash.bas:10: error: Undeclared variable "y"
+<PROJECT_ROOT>/tests/functional/arch/zx48k/explicit_crash.bas:11: error: Undeclared variable "y"
+<PROJECT_ROOT>/tests/functional/arch/zx48k/explicit_crash.bas:11: error: Undeclared variable "x"

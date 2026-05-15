@@ -1,0 +1,2 @@
+<PROJECT_ROOT>/tests/functional/arch/zx48k/declare6.bas:2: warning: [W100] Using default implicit type 'float' for 'f'
+<PROJECT_ROOT>/tests/functional/arch/zx48k/declare6.bas:4: error: Function 'f' (previously declared at 1) type mismatch

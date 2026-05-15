@@ -1,0 +1,2 @@
+<PROJECT_ROOT>/tests/functional/arch/zx48k/read2.bas:4: warning: [W100] Using default implicit type 'float' for 'x'
+<PROJECT_ROOT>/tests/functional/arch/zx48k/read2.bas:11: error: Cannot read 'x'. It's an array

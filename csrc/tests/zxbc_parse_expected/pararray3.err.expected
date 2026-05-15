@@ -1,0 +1,2 @@
+<PROJECT_ROOT>/tests/functional/arch/zx48k/pararray3.bas:2: warning: [W150] Parameter 'q' is never used
+<PROJECT_ROOT>/tests/functional/arch/zx48k/pararray3.bas:8: error: Invalid argument 'q'

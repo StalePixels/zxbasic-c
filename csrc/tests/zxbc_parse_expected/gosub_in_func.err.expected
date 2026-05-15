@@ -1,0 +1,1 @@
+<PROJECT_ROOT>/tests/functional/arch/zx48k/gosub_in_func.bas:3: error: GOSUB not allowed within SUB or FUNCTION

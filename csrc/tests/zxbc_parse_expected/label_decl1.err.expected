@@ -1,0 +1,1 @@
+<PROJECT_ROOT>/tests/functional/arch/zx48k/label_decl1.bas:4: error: Undeclared label "WRONG_LABEL"

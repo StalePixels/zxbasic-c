@@ -1,0 +1,4 @@
+<PROJECT_ROOT>/tests/functional/arch/zx48k/optional_param1.bas:6: warning: [W100] Using default implicit type 'float' for 'y'
+<PROJECT_ROOT>/tests/functional/arch/zx48k/optional_param1.bas:6: error: Can't declare mandatory param 'y' after optional param 'x'
+<PROJECT_ROOT>/tests/functional/arch/zx48k/optional_param1.bas:6: warning: [W150] Parameter 'x' is never used
+<PROJECT_ROOT>/tests/functional/arch/zx48k/optional_param1.bas:6: warning: [W150] Parameter 'y' is never used

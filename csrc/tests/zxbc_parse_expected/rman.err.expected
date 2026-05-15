@@ -1,0 +1,4 @@
+<PROJECT_ROOT>/tests/functional/arch/zx48k/rman.bas:4: warning: [W100] Using default implicit type 'float' for 'pbuffer'
+<PROJECT_ROOT>/tests/functional/arch/zx48k/rman.bas:4: warning: [W150] Parameter 'pbuffer' is never used
+<PROJECT_ROOT>/tests/functional/arch/zx48k/rman.bas:8: warning: [W190] Function 'S' should return a value
+<PROJECT_ROOT>/tests/functional/arch/zx48k/rman.bas:8: error: Cant convert 'ADDRESS(buffer)' to type float

@@ -1,0 +1,2 @@
+<PROJECT_ROOT>/tests/functional/arch/zx48k/label_decl2.bas:5: warning: [W100] Using default implicit type 'float' for 'a'
+<PROJECT_ROOT>/tests/functional/arch/zx48k/label_decl2.bas:5: error: Undeclared function "MYLABEL"

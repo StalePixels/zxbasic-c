@@ -1,0 +1,2 @@
+<PROJECT_ROOT>/tests/functional/arch/zx48k/lvalue03.bas:1: warning: [W100] Using default implicit type 'float' for 'num'
+<PROJECT_ROOT>/tests/functional/arch/zx48k/lvalue03.bas:4: error: 'num' is a FUNCTION, not a VAR

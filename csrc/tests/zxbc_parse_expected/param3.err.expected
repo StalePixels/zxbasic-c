@@ -1,0 +1,2 @@
+<PROJECT_ROOT>/tests/functional/arch/zx48k/param3.bas:5: error: Function 'test' (previously declared at 3) type mismatch
+<PROJECT_ROOT>/tests/functional/arch/zx48k/param3.bas:6: error: Type Error: Function must return a numeric value, not a string

@@ -1,0 +1,5 @@
+<PROJECT_ROOT>/tests/functional/arch/zx48k/doloopuntilsplitted.bas:3: warning: [W100] Using default implicit type 'ubyte' for 'M'
+<PROJECT_ROOT>/tests/functional/arch/zx48k/doloopuntilsplitted.bas:3: error: Syntax Error. Unexpected token 'LOOP' <LOOP>
+<PROJECT_ROOT>/tests/functional/arch/zx48k/doloopuntilsplitted.bas:3: warning: [W100] Using default implicit type 'ubyte' for 'i'
+<PROJECT_ROOT>/tests/functional/arch/zx48k/doloopuntilsplitted.bas:5: error: Syntax Error. Unexpected token 'LET' <LET>
+<PROJECT_ROOT>/tests/functional/arch/zx48k/doloopuntilsplitted.bas:5: error: Syntax Error. Unexpected token 'LOOP' <LOOP>

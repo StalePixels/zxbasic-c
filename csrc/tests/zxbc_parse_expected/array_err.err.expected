@@ -1,0 +1,1 @@
+<PROJECT_ROOT>/tests/functional/arch/zx48k/array_err.bas:2: error: Mismatched vector size. Expected 11 elements, got 1.

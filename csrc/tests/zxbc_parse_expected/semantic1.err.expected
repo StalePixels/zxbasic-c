@@ -1,0 +1,8 @@
+<PROJECT_ROOT>/tests/functional/arch/zx48k/semantic1.bas:2: warning: [W100] Using default implicit type 'float' for 't'
+<PROJECT_ROOT>/tests/functional/arch/zx48k/semantic1.bas:2: warning: [W100] Using default implicit type 'float' for 'i'
+<PROJECT_ROOT>/tests/functional/arch/zx48k/semantic1.bas:3: warning: [W100] Using default implicit type 'float' for 'testfunc'
+<PROJECT_ROOT>/tests/functional/arch/zx48k/semantic1.bas:3: error: Variable 't' already declared as a parameter at <PROJECT_ROOT>/tests/functional/arch/zx48k/semantic1.bas:2
+<PROJECT_ROOT>/tests/functional/arch/zx48k/semantic1.bas:6: warning: [W100] Using default implicit type 'ubyte' for 'b'
+<PROJECT_ROOT>/tests/functional/arch/zx48k/semantic1.bas:2: warning: [W150] Parameter 't' is never used
+<PROJECT_ROOT>/tests/functional/arch/zx48k/semantic1.bas:2: warning: [W150] Parameter 'u' is never used
+<PROJECT_ROOT>/tests/functional/arch/zx48k/semantic1.bas:9: warning: [W100] Using default implicit type 'ubyte' for 'a'

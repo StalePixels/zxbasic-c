@@ -1,0 +1,9 @@
+<PROJECT_ROOT>/tests/functional/arch/zx48k/read11.bas:2: warning: [W100] Using default implicit type 'ubyte' for 'spheres'
+<PROJECT_ROOT>/tests/functional/arch/zx48k/read11.bas:2: error: Array bounds must be constants
+<PROJECT_ROOT>/tests/functional/arch/zx48k/read11.bas:2: warning: [W100] Using default implicit type 'float' for 'c'
+<PROJECT_ROOT>/tests/functional/arch/zx48k/read11.bas:2: warning: [W100] Using default implicit type 'float' for 'r'
+<PROJECT_ROOT>/tests/functional/arch/zx48k/read11.bas:2: warning: [W100] Using default implicit type 'float' for 'q'
+<PROJECT_ROOT>/tests/functional/arch/zx48k/read11.bas:3: error: Array 'c' has 1 dimensions, not 2
+<PROJECT_ROOT>/tests/functional/arch/zx48k/read11.bas:3: error: Syntax Error. Unexpected token ':' <CO>
+<PROJECT_ROOT>/tests/functional/arch/zx48k/read11.bas:3: error: Syntax Error. Unexpected token '*' <MUL>
+<PROJECT_ROOT>/tests/functional/arch/zx48k/read11.bas:3: error: 'k' is a VAR, not a FUNCTION

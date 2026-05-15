@@ -1,0 +1,11 @@
+<PROJECT_ROOT>/tests/functional/arch/zx48k/funccall7.bas:1: warning: [W100] Using default implicit type 'float' for 'a'
+<PROJECT_ROOT>/tests/functional/arch/zx48k/funccall7.bas:1: warning: [W100] Using default implicit type 'float' for 'b'
+<PROJECT_ROOT>/tests/functional/arch/zx48k/funccall7.bas:2: warning: [W100] Using default implicit type 'float' for 'SNETopen'
+<PROJECT_ROOT>/tests/functional/arch/zx48k/funccall7.bas:1: warning: [W150] Parameter 'x' is never used
+<PROJECT_ROOT>/tests/functional/arch/zx48k/funccall7.bas:1: warning: [W150] Parameter 'n' is never used
+<PROJECT_ROOT>/tests/functional/arch/zx48k/funccall7.bas:1: warning: [W150] Parameter 'a' is never used
+<PROJECT_ROOT>/tests/functional/arch/zx48k/funccall7.bas:1: warning: [W150] Parameter 'b' is never used
+<PROJECT_ROOT>/tests/functional/arch/zx48k/funccall7.bas:5: warning: [W100] Using default implicit type 'float' for 'SNETcurrMPoint'
+<PROJECT_ROOT>/tests/functional/arch/zx48k/funccall7.bas:8: warning: [W100] Using default implicit type 'float' for 'flags'
+<PROJECT_ROOT>/tests/functional/arch/zx48k/funccall7.bas:6: warning: [W150] Parameter 'mode' is never used
+<PROJECT_ROOT>/tests/functional/arch/zx48k/funccall7.bas:12: error: Function 'SNETcurrMPoint' (previously declared at 4) type mismatch

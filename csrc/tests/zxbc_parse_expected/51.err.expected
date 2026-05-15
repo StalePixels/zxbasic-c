@@ -1,0 +1,2 @@
+<PROJECT_ROOT>/tests/functional/arch/zx48k/51.bas:2: warning: [W100] Using default implicit type 'float' for 'c'
+<PROJECT_ROOT>/tests/functional/arch/zx48k/51.bas:2: error: Cannot convert string to a value. Use VAL() function

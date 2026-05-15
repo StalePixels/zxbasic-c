@@ -1,0 +1,19 @@
+<PROJECT_ROOT>/tests/functional/arch/zx48k/chr1.bas:1: warning: [W100] Using default implicit type 'string' for 'a'
+<PROJECT_ROOT>/tests/functional/arch/zx48k/chr1.bas:1: warning: [W150] Variable 'a' is never used
+Traceback (most recent call last):
+  File "<string>", line 7, in <module>
+  File "<PROJECT_ROOT>/src/zxbc/zxbc.py", line 122, in main
+    optimizer.visit(zxbparser.ast)
+  File "<PROJECT_ROOT>/src/api/optimize.py", line 205, in visit
+    return super().visit(node)
+           ^^^^^^^^^^^^^^^^^^^
+  File "<PROJECT_ROOT>/src/api/optimize.py", line 62, in visit
+    return super().visit(ToVisit(node))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<PROJECT_ROOT>/src/ast/ast.py", line 39, in visit
+    stack.append(last.send(last_result))
+                 ^^^^^^^^^^^^^^^^^^^^^^
+  File "<PROJECT_ROOT>/src/api/optimize.py", line 331, in visit_LET
+    if x.token == "FUNCCALL" or getattr(x, "fname") in {"IN", "RND", "USR"}
+                                ^^^^^^^^^^^^^^^^^^^
+AttributeError: 'SymbolSTRING' object has no attribute 'fname'
