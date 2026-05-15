@@ -430,16 +430,21 @@ AstNode *make_typecast(CompilerState *cs, TypeInfo *new_type, AstNode *node, int
     if (!node) return NULL;
     if (!new_type) return node;
 
-    /* Same type — no cast needed */
+    /* Same type — no cast needed. type_equal resolves through final_type
+     * (mirrors Python SymbolTYPE.__eq__) — the only "skip the cast"
+     * condition Python's SymbolTYPECAST.make_node has. A target-side
+     * basic_type==TYPE_unknown guard must NOT live here: declared types
+     * are TYPEREF wrappers whose own basic_type is TYPE_unknown (the
+     * resolved type is in final_type), so it would wrongly skip the cast
+     * for every DIM'd variable (the FOR/LET TYPECAST drift). */
     if (type_equal(new_type, node->type_))
         return node;
 
-    /* Target is unknown — skip the cast (type not yet resolved) */
-    if (new_type->basic_type == TYPE_unknown ||
-        (new_type->final_type && new_type->final_type->basic_type == TYPE_unknown))
-        return node;
-
-    /* Source type not yet resolved — skip */
+    /* Source type not yet resolved — skip. Retained as an accommodation
+     * for the C port lacking Python's universal NOTYPE sentinel (Python
+     * make_node has no analogue); removing it faithfully requires
+     * guaranteeing every node carries a non-NULL type_, which is outside
+     * Phase 1's measured scope. */
     if (!node->type_)
         return node;
 

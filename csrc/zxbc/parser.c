@@ -1832,22 +1832,40 @@ static AstNode *parse_for_statement(Parser *p) {
     AstNode *step_expr = NULL;
     if (match(p, BTOK_STEP)) {
         step_expr = parse_expression(p, PREC_NONE + 1);
+    } else {
+        /* Python p_step defaults a missing STEP to make_number(1) so the
+         * 3-way common_type and the sentence's expr3 always exist
+         * (zxbparser.py:1627-1629). */
+        step_expr = make_number(p, 1, p->previous.lineno, NULL);
     }
 
-    /* Validate the FOR variable (matching Python's access_var in p_for_sentence_start) */
-    {
-        AstNode *var = symboltable_access_id(p->cs->symbol_table, p->cs,
-                                              var_name, var_lineno, NULL, CLASS_var);
-        if (var) {
-            if (var->u.id.class_ == CLASS_const)
-                zxbc_error(p->cs, var_lineno, "'%s' is a CONST, not a VAR", var_name);
-            else if (var->u.id.class_ == CLASS_function)
-                zxbc_error(p->cs, var_lineno, "'%s' is a FUNCTION, not a VAR", var_name);
-            else if (var->u.id.class_ == CLASS_sub)
-                zxbc_error(p->cs, var_lineno, "Cannot assign a value to '%s'. It's not a variable", var_name);
-            if (var->u.id.class_ == CLASS_unknown)
-                var->u.id.class_ = CLASS_var;
-        }
+    /* id_type = common_type(common_type(start, end), step)
+     * (zxbparser.py:1614). C's check_common_type takes AstNodes and
+     * reads only their ->type_; mirror Python's nested type call with a
+     * transient type-carrier node (never added to the AST). */
+    TypeInfo *id_type = check_common_type(p->cs, start_expr, end_expr);
+    if (id_type && step_expr) {
+        AstNode *tcarrier = ast_new(p->cs, AST_NUMBER, lineno);
+        tcarrier->type_ = id_type;
+        id_type = check_common_type(p->cs, tcarrier, step_expr);
+    }
+
+    /* Resolve the loop variable (Python access_var with
+     * default_type=id_type, zxbparser.py:1615). Keep the existing class
+     * diagnostics verbatim — the STDERR surface measures them; error-path
+     * control flow is Phase 3's domain, not this parser-fidelity fix. */
+    AstNode *var = symboltable_access_id(p->cs->symbol_table, p->cs,
+                                          var_name, var_lineno, id_type, CLASS_var);
+    if (var) {
+        if (var->u.id.class_ == CLASS_const)
+            zxbc_error(p->cs, var_lineno, "'%s' is a CONST, not a VAR", var_name);
+        else if (var->u.id.class_ == CLASS_function)
+            zxbc_error(p->cs, var_lineno, "'%s' is a FUNCTION, not a VAR", var_name);
+        else if (var->u.id.class_ == CLASS_sub)
+            zxbc_error(p->cs, var_lineno, "Cannot assign a value to '%s'. It's not a variable", var_name);
+        if (var->u.id.class_ == CLASS_unknown)
+            var->u.id.class_ = CLASS_var;
+        var->u.id.accessed = true; /* Python mark_entry_as_accessed */
     }
 
     /* Push loop info */
@@ -1876,9 +1894,22 @@ static AstNode *parse_for_statement(Parser *p) {
     }
 
     AstNode *s = make_sentence_node(p, "FOR", lineno);
-    AstNode *var = ast_new(p->cs, AST_ID, lineno);
-    var->u.id.name = arena_strdup(&p->cs->arena, var_name);
-    ast_add_child(p->cs, s, var);
+    if (var) {
+        /* Python: expr{1,2,3} = make_typecast(variable.type_, …)
+         * (zxbparser.py:1620-1622); the FOR sentence carries the
+         * resolved symbol entry as child[0] (zxbparser.py:1624). */
+        start_expr = make_typecast(p->cs, var->type_, start_expr, var_lineno);
+        end_expr   = make_typecast(p->cs, var->type_, end_expr, var_lineno);
+        step_expr  = make_typecast(p->cs, var->type_, step_expr, var_lineno);
+        ast_add_child(p->cs, s, var);
+    } else {
+        /* var unresolved (class error already emitted above): preserve
+         * the pre-fix fallback shape rather than replicating Python's
+         * early-return — error-path control flow is Phase 3's domain. */
+        AstNode *fallback = ast_new(p->cs, AST_ID, lineno);
+        fallback->u.id.name = arena_strdup(&p->cs->arena, var_name);
+        ast_add_child(p->cs, s, fallback);
+    }
     if (start_expr) ast_add_child(p->cs, s, start_expr);
     if (end_expr) ast_add_child(p->cs, s, end_expr);
     if (step_expr) ast_add_child(p->cs, s, step_expr);
@@ -2496,18 +2527,39 @@ static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function, bool is_decl
     for (int i = 0; i < params->child_count; i++) {
         AstNode *param = params->children[i];
         const char *pname = param->u.argument.name;
-        /* Strip deprecated suffix if present */
+        /* Strip deprecated suffix if present; remember it for type inference */
         size_t plen = strlen(pname);
         char stripped[256];
+        char psuffix = '\0';
         if (plen > 0 && plen < sizeof(stripped) && is_deprecated_suffix(pname[plen - 1])) {
+            psuffix = pname[plen - 1];
             memcpy(stripped, pname, plen - 1);
             stripped[plen - 1] = '\0';
             pname = stripped;
         }
+        /* A deprecated sigil overrides the declared param type (Python
+         * SymbolTable.declare, symboltable.py:102-117): a$ => string,
+         * i% => integer, etc. The DIM and function-name paths already do
+         * this; the param-registration path previously did not, leaving
+         * sigil params at the float default. */
+        TypeInfo *ptype = param->type_;
+        if (psuffix != '\0') {
+            TypeInfo *suffix_ti =
+                p->cs->symbol_table->basic_types[suffix_to_type(psuffix)];
+            if (param->type_ && !param->type_->implicit &&
+                !type_equal(param->type_, suffix_ti)) {
+                zxbc_error(p->cs, param->lineno,
+                           "expected type %s for '%s', got %s",
+                           suffix_ti->name, param->u.argument.name,
+                           param->type_->name);
+            }
+            ptype = suffix_ti;
+            param->type_ = suffix_ti; /* keep the PARAMLIST node consistent */
+        }
         SymbolClass pcls = param->u.argument.is_array ? CLASS_array : CLASS_var;
         AstNode *sym = symboltable_declare(p->cs->symbol_table, p->cs, pname, param->lineno, pcls);
         if (sym) {
-            sym->type_ = param->type_;
+            sym->type_ = ptype;
             sym->u.id.declared = true;
         }
     }
