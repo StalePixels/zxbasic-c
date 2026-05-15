@@ -11,7 +11,7 @@ ZXBPP_TESTS  = tests/functional/zxbpp
 ZXBASM_C     = $(BUILD_DIR)/zxbasm/zxbasm
 ZXBASM_TESTS = tests/functional/asm
 
-.PHONY: build clean test-zxbpp-strict test-zxbpp-fuzzy verify-phase1-calibration verify-phase2-calibration test-zxbasm-strict test-zxbasm-fuzzy sweep-asm-zero-byte verify-phase3-calibration
+.PHONY: build clean test-zxbpp-strict test-zxbpp-fuzzy verify-phase1-calibration verify-phase2-calibration test-zxbasm-strict test-zxbasm-fuzzy sweep-asm-zero-byte verify-phase3-calibration regenerate-zxbc-baselines
 
 build:
 	$(CMAKE) -S csrc -B $(BUILD_DIR) -DCMAKE_BUILD_TYPE=$(BUILD_TYPE)
@@ -106,3 +106,11 @@ verify-phase3-calibration: $(ZXBASM_C)
 	    echo "$$fuzzy_out" | tail -10; exit 1; \
 	fi; \
 	echo "verify-phase3-calibration: OK (asmerror0 strict-FAIL + fuzzy-PASS)"
+
+# Pin-update-only regeneration of zxbc parse-only baselines. Manually
+# invoked when the upstream Python pin moves; never a dependency of any
+# test-* target, so casual `make test` doesn't ever silently shift the
+# spec. The script's first action is to run Python's own functional
+# test suite as a health-check gate.
+regenerate-zxbc-baselines:
+	./csrc/tests/regen_zxbc_baselines.sh

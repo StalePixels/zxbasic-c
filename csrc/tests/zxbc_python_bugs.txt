@@ -1,0 +1,22 @@
+# Tests where Python's --parse-only output is known-wrong by upstream
+# maintainers. Listed entries are routed through the strict harness's
+# SKIP — known-Python-bug bucket (counted separately from PASS/FAIL).
+#
+# This file is the ONLY mechanism for treating Python's output as wrong.
+# Hand-editing a baseline .rc / .err.expected to "fix" Python is forbidden:
+# the .err.expected files are a frozen capture of Python at the pinned
+# commit, and lying to make the C port pass would defeat the purpose of
+# Round 0's whole audit trail.
+#
+# Format: one test stem per line (the .bas filename minus extension).
+# Comments start with '#'. Blank lines ignored.
+#
+# Provenance: the 3 entries below come from the prior agent's
+# categorisation in
+#   _ref/zxbasic-c/docs/plans/plan_feature-phase3-zxbc_implementation.md
+# ("7 unfixable — 3 Python bugs (chr, chr1, const6)"). Round 0 inherits
+# them as-is; Round 1 may re-evaluate.
+
+chr
+chr1
+const6
