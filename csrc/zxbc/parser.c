@@ -2214,7 +2214,6 @@ static AstNode *parse_dim_statement(Parser *p) {
     }
 
     if (name_count == 1) {
-        AstNode *decl = ast_new(p->cs, AST_VARDECL, lineno);
         SymbolClass cls = is_const ? CLASS_const : CLASS_var;
         /* Strip deprecated suffix for symbol table key */
         const char *decl_name = name;
@@ -2232,6 +2231,16 @@ static AstNode *parse_dim_statement(Parser *p) {
                        name, p->cs->current_file, id_node->lineno);
         }
         id_node->type_ = type;
+        /* Bare scalar DIM/CONST (no initializer, no AT) emits NO node at
+         * the statement site — Python p_var_decl returns p[0]=None
+         * (zxbparser.py:652); the symbol is registered above regardless.
+         * Initialized/AT forms still emit: C has no data_ast drain to
+         * recover their parsed init/at value (unlike Python), so dropping
+         * it would be a silent parsed-value drop (CLAUDE.md rule 8).
+         * Faithful deferral of init/AT decls is a later-phase item. */
+        if (!at_expr && !init_expr)
+            return NULL;
+        AstNode *decl = ast_new(p->cs, AST_VARDECL, lineno);
         ast_add_child(p->cs, decl, id_node);
         if (at_expr) ast_add_child(p->cs, decl, at_expr);
         if (init_expr) ast_add_child(p->cs, decl, init_expr);
@@ -2239,11 +2248,14 @@ static AstNode *parse_dim_statement(Parser *p) {
         return decl;
     }
 
-    /* Multiple vars: create a block of declarations */
-    AstNode *block = make_block_node(p, lineno);
+    /* Multiple vars. Symbols are registered regardless; a bare multi-var
+     * DIM/CONST emits NO node (Python p_var_decl p[0]=None,
+     * zxbparser.py:652) — same rule-8 reasoning as the single-name path.
+     * (The multi-var grammar attaches no init/AT; the guard is defensive
+     * and keeps the prior shape if one is ever present.) */
     SymbolClass cls = is_const ? CLASS_const : CLASS_var;
+    AstNode *block = (!at_expr && !init_expr) ? NULL : make_block_node(p, lineno);
     for (int i = 0; i < name_count; i++) {
-        AstNode *decl = ast_new(p->cs, AST_VARDECL, lineno);
         /* Strip deprecated suffix for symbol table key */
         const char *mn = names[i];
         size_t ml = strlen(mn);
@@ -2255,9 +2267,12 @@ static AstNode *parse_dim_statement(Parser *p) {
         }
         AstNode *id_node = symboltable_declare(p->cs->symbol_table, p->cs, mn, lineno, cls);
         id_node->type_ = type;
-        ast_add_child(p->cs, decl, id_node);
-        decl->type_ = type;
-        ast_add_child(p->cs, block, decl);
+        if (block) {
+            AstNode *decl = ast_new(p->cs, AST_VARDECL, lineno);
+            ast_add_child(p->cs, decl, id_node);
+            decl->type_ = type;
+            ast_add_child(p->cs, block, decl);
+        }
     }
     return block;
 }
