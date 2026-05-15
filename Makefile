@@ -10,8 +10,10 @@ ZXBPP_C      = $(BUILD_DIR)/zxbpp/zxbpp
 ZXBPP_TESTS  = tests/functional/zxbpp
 ZXBASM_C     = $(BUILD_DIR)/zxbasm/zxbasm
 ZXBASM_TESTS = tests/functional/asm
+ZXBC_C       = $(BUILD_DIR)/zxbc/zxbc
+ZXBC_TESTS   = tests/functional/arch/zx48k
 
-.PHONY: build clean test-zxbpp-strict test-zxbpp-fuzzy verify-phase1-calibration verify-phase2-calibration test-zxbasm-strict test-zxbasm-fuzzy sweep-asm-zero-byte verify-phase3-calibration regenerate-zxbc-baselines
+.PHONY: build clean test-zxbpp-strict test-zxbpp-fuzzy verify-phase1-calibration verify-phase2-calibration test-zxbasm-strict test-zxbasm-fuzzy sweep-asm-zero-byte verify-phase3-calibration regenerate-zxbc-baselines test-zxbc-parse-strict test-zxbc-parse-fuzzy verify-phase4-calibration
 
 build:
 	$(CMAKE) -S csrc -B $(BUILD_DIR) -DCMAKE_BUILD_TYPE=$(BUILD_TYPE)
@@ -114,3 +116,33 @@ verify-phase3-calibration: $(ZXBASM_C)
 # test suite as a health-check gate.
 regenerate-zxbc-baselines:
 	./csrc/tests/regen_zxbc_baselines.sh
+
+test-zxbc-parse-strict: $(ZXBC_C)
+	./csrc/tests/run_zxbc_tests_strict.sh $(ZXBC_C) $(ZXBC_TESTS)
+
+test-zxbc-parse-fuzzy: $(ZXBC_C)
+	./csrc/tests/run_zxbc_tests.sh $(ZXBC_C) $(ZXBC_TESTS)
+
+# Phase 4 calibration: alxinho1.bas — both Python and C exit 1 on the
+# undeclared-array case, so the existing exit-code-only harness reports
+# MATCH. But Python says `Undeclared array "a"` while C says `'a' is
+# neither an array nor a function.` — different error wording for the
+# same root cause. The strict harness's stderr-content equality catches
+# this; the existing harness silently passes it.
+verify-phase4-calibration: $(ZXBC_C)
+	@set -e; \
+	strict_out=$$(./csrc/tests/run_zxbc_tests_strict.sh $(ZXBC_C) $(ZXBC_TESTS) tests/functional/arch/zx48k/alxinho1.bas 2>&1 || true); \
+	fuzzy_out=$$(./csrc/tests/run_zxbc_tests.sh $(ZXBC_C) $(ZXBC_TESTS) tests/functional/arch/zx48k/alxinho1.bas 2>&1 || true); \
+	if ! echo "$$strict_out" | grep -qE 'STDERR_MISMATCH:[[:space:]]+1'; then \
+	    echo "FAIL: strict harness did not flag alxinho1 as STDERR_MISMATCH"; \
+	    echo "$$strict_out" | tail -10; exit 1; \
+	fi; \
+	if echo "$$fuzzy_out" | grep -qE 'MISMATCH:.*alxinho1|FALSE_(POS|NEG):.*alxinho1'; then \
+	    echo "FAIL: fuzzy harness already flags alxinho1 — calibration unsound"; \
+	    echo "$$fuzzy_out" | tail -10; exit 1; \
+	fi; \
+	if ! echo "$$fuzzy_out" | grep -qE '1 matched, 0 mismatched|matched: 1'; then \
+	    echo "FAIL: fuzzy harness did not report alxinho1 MATCH"; \
+	    echo "$$fuzzy_out" | tail -10; exit 1; \
+	fi; \
+	echo "verify-phase4-calibration: OK (alxinho1.bas STDERR_MISMATCH strict + MATCH fuzzy)"
