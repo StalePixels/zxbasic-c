@@ -9,7 +9,7 @@ BUILD_TYPE  ?= Release
 ZXBPP_C     = $(BUILD_DIR)/zxbpp/zxbpp
 ZXBPP_TESTS = tests/functional/zxbpp
 
-.PHONY: build clean test-zxbpp-strict test-zxbpp-fuzzy verify-phase1-calibration
+.PHONY: build clean test-zxbpp-strict test-zxbpp-fuzzy verify-phase1-calibration verify-phase2-calibration
 
 build:
 	$(CMAKE) -S csrc -B $(BUILD_DIR) -DCMAKE_BUILD_TYPE=$(BUILD_TYPE)
@@ -44,3 +44,24 @@ verify-phase1-calibration: $(ZXBPP_C)
 	    echo "$$fuzzy_out" | tail -3; exit 1; \
 	fi; \
 	echo "verify-phase1-calibration: OK (prepro00 strict-FAIL + fuzzy-PASS)"
+
+# Phase 2 calibration: prepro22 (zxbpp error test). The .err message body
+# is identical between Python and C, but Python reports the macro
+# call-site at line 4 while C reports line 7 (the multi-line macro's
+# expanded body) — the strict harness's stderr-content comparison
+# catches it; the fuzzy harness's exit-code-only check passes both.
+verify-phase2-calibration: $(ZXBPP_C)
+	@set -e; \
+	strict_out=$$(./csrc/tests/run_zxbpp_tests_strict.sh $(ZXBPP_C) $(ZXBPP_TESTS) 2>&1 || true); \
+	fuzzy_out=$$(./csrc/tests/run_zxbpp_tests.sh $(ZXBPP_C) $(ZXBPP_TESTS) 2>&1 || true); \
+	if ! echo "$$strict_out" | grep -qE 'ERR-FAIL: prepro22|^  prepro22$$'; then \
+	    echo "FAIL: strict harness did not flag prepro22 as error-test failing"; \
+	    echo "$$strict_out" | tail -25; exit 1; \
+	fi; \
+	if echo "$$fuzzy_out" | grep -qE 'FAIL: prepro22'; then \
+	    echo "FAIL: fuzzy harness reported prepro22 FAIL — calibration unsound"; exit 1; \
+	fi; \
+	if ! echo "$$fuzzy_out" | grep -qE 'Results: 96 passed'; then \
+	    echo "FAIL: fuzzy harness did not report 96/96 — base shifted"; exit 1; \
+	fi; \
+	echo "verify-phase2-calibration: OK (prepro22 strict-FAIL + fuzzy-PASS)"
