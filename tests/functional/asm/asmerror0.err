@@ -1,0 +1,1 @@
+tests/functional/asm/asmerror0.asm:4: warning: label 'X' already declared as LOCAL

@@ -6,10 +6,12 @@ CMAKE       ?= cmake
 BUILD_DIR   ?= csrc/build
 BUILD_TYPE  ?= Release
 
-ZXBPP_C     = $(BUILD_DIR)/zxbpp/zxbpp
-ZXBPP_TESTS = tests/functional/zxbpp
+ZXBPP_C      = $(BUILD_DIR)/zxbpp/zxbpp
+ZXBPP_TESTS  = tests/functional/zxbpp
+ZXBASM_C     = $(BUILD_DIR)/zxbasm/zxbasm
+ZXBASM_TESTS = tests/functional/asm
 
-.PHONY: build clean test-zxbpp-strict test-zxbpp-fuzzy verify-phase1-calibration verify-phase2-calibration
+.PHONY: build clean test-zxbpp-strict test-zxbpp-fuzzy verify-phase1-calibration verify-phase2-calibration test-zxbasm-strict test-zxbasm-fuzzy sweep-asm-zero-byte verify-phase3-calibration
 
 build:
 	$(CMAKE) -S csrc -B $(BUILD_DIR) -DCMAKE_BUILD_TYPE=$(BUILD_TYPE)
@@ -65,3 +67,42 @@ verify-phase2-calibration: $(ZXBPP_C)
 	    echo "FAIL: fuzzy harness did not report 96/96 — base shifted"; exit 1; \
 	fi; \
 	echo "verify-phase2-calibration: OK (prepro22 strict-FAIL + fuzzy-PASS)"
+
+test-zxbasm-strict: $(ZXBASM_C)
+	./csrc/tests/run_zxbasm_tests_strict.sh $(ZXBASM_C) $(ZXBASM_TESTS)
+
+test-zxbasm-fuzzy: $(ZXBASM_C)
+	./csrc/tests/run_zxbasm_tests.sh $(ZXBASM_C) $(ZXBASM_TESTS)
+
+# Sweep for any zero-byte .bin fixtures. With Sprint 4's regen of
+# asmerror0.err, the strict harness no longer accepts asmerror0's
+# 0-byte fixture as a success-cmp (it's classified as an error test
+# now — sibling .err authoritative). New 0-byte arrivals are flagged
+# here for fixture-regen review.
+sweep-asm-zero-byte:
+	@matches=$$(find tests/functional -name '*.bin' -size 0); \
+	count=$$(printf '%s\n' "$$matches" | grep -c .); \
+	echo "$$matches"; \
+	echo "$$count zero-byte .bin files found"
+
+# Phase 3 calibration: asmerror0 must FAIL strict (because Python and
+# C disagree on line number — Python:4, C:5; same line-tracking
+# divergence shape as Phase 2's prepro22) AND PASS fuzzy (because
+# fuzzy compares the empty .bin against zxbasm's empty output, which
+# trivially succeeds via the 0-byte cmp loophole this sprint closes).
+verify-phase3-calibration: $(ZXBASM_C)
+	@set -e; \
+	strict_out=$$(./csrc/tests/run_zxbasm_tests_strict.sh $(ZXBASM_C) $(ZXBASM_TESTS) 2>&1 || true); \
+	fuzzy_out=$$(./csrc/tests/run_zxbasm_tests.sh $(ZXBASM_C) $(ZXBASM_TESTS) 2>&1 || true); \
+	if ! echo "$$strict_out" | grep -qE 'ERR-FAIL: asmerror0|^  asmerror0$$'; then \
+	    echo "FAIL: strict harness did not flag asmerror0 as error-test failing"; \
+	    echo "$$strict_out" | tail -20; exit 1; \
+	fi; \
+	if echo "$$fuzzy_out" | grep -qE 'FAIL: asmerror0'; then \
+	    echo "FAIL: fuzzy harness reported asmerror0 FAIL — calibration unsound"; exit 1; \
+	fi; \
+	if ! echo "$$fuzzy_out" | grep -qE 'PASS:[[:space:]]+61'; then \
+	    echo "FAIL: fuzzy harness did not report 61/61 — base shifted"; \
+	    echo "$$fuzzy_out" | tail -10; exit 1; \
+	fi; \
+	echo "verify-phase3-calibration: OK (asmerror0 strict-FAIL + fuzzy-PASS)"
