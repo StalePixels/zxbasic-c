@@ -23,6 +23,7 @@ PY_AST_DIFF     = csrc/tests/diff_ast_json.py
 
 .PHONY: build clean \
         test test-zxbpp test-zxbasm test-zxbc-parse test-zxbc-ast-equiv \
+        test-semantic-fidelity verify-phase1-calibration \
         sweep-asm-zero-byte regenerate-zxbc-baselines
 
 build:
@@ -63,6 +64,18 @@ test-zxbc-parse: $(ZXBC_C)
 
 test-zxbc-ast-equiv: $(ZXBC_AST_DUMP_C)
 	./csrc/tests/run_zxbc_ast_equiv.sh $(ZXBC_AST_DUMP_C) $(PY_AST_DUMP) $(PY_AST_DIFF) $(ZXBC_TESTS)
+
+# Phase 1 semantic-fidelity meter (S1.1). Measurement, exit 0 — the
+# per-construct match counts ARE the meter. RED for FOR/LET/DIM at the
+# Phase 1 baseline, driven to 100% in S1.2; Binary is a regression guard.
+test-semantic-fidelity: $(ZXBC_AST_DUMP_C)
+	./csrc/tests/run_semantic_fidelity.sh $(ZXBC_AST_DUMP_C)
+
+# Phase 1 named calibration gate (FOR typed-bounds). Verifier — exits
+# non-zero on drift. RED at the Phase 1 parent baseline (expected), GREEN
+# after the S1.2 fix; that transition is the encoded red/green.
+verify-phase1-calibration: $(ZXBC_AST_DUMP_C)
+	./csrc/tests/run_phase1_calibration.sh $(ZXBC_AST_DUMP_C)
 
 sweep-asm-zero-byte:
 	@matches=$$(find tests/functional -name '*.bin' -size 0); \
