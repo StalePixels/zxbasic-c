@@ -409,6 +409,14 @@ static AstNode *parse_builtin_func(Parser *p, const char *fname, BTokenType kw) 
         case BTOK_VAL:
             n->type_ = st->basic_types[TYPE_float];
             break;
+        case BTOK_LBOUND:
+        case BTOK_UBOUND:
+            /* LBOUND/UBOUND are always uinteger regardless of the array's
+             * element type — Python zxbparser.py:3330/3332/3378
+             * (make_builtin/make_number type_=TYPE.uinteger). Without this
+             * they fall to default → arg->type_ (the element type). */
+            n->type_ = st->basic_types[TYPE_uinteger];
+            break;
         default:
             n->type_ = arg->type_;
             break;
@@ -1493,9 +1501,15 @@ static AstNode *parse_statement(Parser *p) {
             if (p->previous.type != BTOK_EQ) {
                 consume(p, BTOK_EQ, "Expected '=' in assignment");
             }
+            /* Python p_assignment parses the RHS first, then resolves the
+             * lvalue with default_type = RHS.type_ (zxbparser.py:1100) and
+             * casts the RHS to the lvalue type (:1115). Parse-order and
+             * the typecast both matter for fidelity. */
+            AstNode *expr = parse_expression(p, PREC_NONE + 1);
+            TypeInfo *rhs_type = expr ? expr->type_ : NULL;
             /* Resolve target via symbol table (triggers explicit mode check) */
             AstNode *var = symboltable_access_id(p->cs->symbol_table, p->cs,
-                                                  name, ln, NULL, CLASS_var);
+                                                  name, ln, rhs_type, CLASS_var);
             if (var) {
                 /* Check if target is assignable */
                 if (var->u.id.class_ == CLASS_const) {
@@ -1513,7 +1527,9 @@ static AstNode *parse_statement(Parser *p) {
                 var->u.id.name = arena_strdup(&p->cs->arena, name);
                 var->u.id.class_ = CLASS_unknown;
             }
-            AstNode *expr = parse_expression(p, PREC_NONE + 1);
+            /* Cast RHS to the lvalue type (make_typecast is a no-op when
+             * types match or var->type_ is NULL — fallback path). */
+            expr = make_typecast(p->cs, var->type_, expr, ln);
             AstNode *s = make_sentence_node(p, "LET", ln);
             ast_add_child(p->cs, s, var);
             if (expr) ast_add_child(p->cs, s, expr);
@@ -2180,6 +2196,13 @@ static AstNode *parse_dim_statement(Parser *p) {
         if (slen > 0 && is_deprecated_suffix(name[slen - 1])) {
             BasicType bt = suffix_to_type(name[slen - 1]);
             type = p->cs->symbol_table->basic_types[bt];
+        } else if (init_expr && init_expr->type_) {
+            /* Implicit type with an initializer: take the initializer's
+             * type — Python zxbparser.py:704-705
+             * (if typedef.implicit: typedef = TYPEREF(expr.type_, ...)).
+             * Without this, CONST/DIM with no AS clause defaulted to
+             * float even for string/other initializers. */
+            type = type_new_ref(p->cs, init_expr->type_, lineno, true);
         } else {
             type = type_new_ref(p->cs, p->cs->default_type, lineno, true);
             /* Strict mode: error on implicit type in DIM */
