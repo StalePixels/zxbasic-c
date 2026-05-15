@@ -1,0 +1,213 @@
+#!/usr/bin/env bash
+# Phase 1 calibration discovery — strict-cmp Python vs C zxbpp stdout per .bi.
+#
+# For each non-helper tests/functional/zxbpp/*.bi, runs both interpreters,
+# strict cmps stdouts (no normalisation), and emits a divergence catalog.
+# Output: <output-md-path> with totals + per-failing-test divergence kind.
+# Exit 0 always (this is a discovery tool, not a verifier).
+
+set -uo pipefail
+
+PYTHON="${PYTHON:-/opt/homebrew/bin/python3.12}"
+ZXBPP_C="${ZXBPP_C:-csrc/build/zxbpp/zxbpp}"
+TEST_DIR="${TEST_DIR:-tests/functional/zxbpp}"
+OUT_MD="${1:-../docs/captures/zxbasic-c/phase1-strict-divergences.md}"
+
+if [ ! -x "$PYTHON" ]; then
+    echo "ERROR: python3.12 not found at $PYTHON" >&2
+    exit 1
+fi
+if [ ! -x "$ZXBPP_C" ]; then
+    echo "ERROR: C zxbpp binary not built at $ZXBPP_C — run 'make build' first" >&2
+    exit 1
+fi
+if [ ! -d "$TEST_DIR" ]; then
+    echo "ERROR: test dir $TEST_DIR not found" >&2
+    exit 1
+fi
+
+PROJECT_ROOT=$(pwd)
+INCLUDE_ARGS=""
+if [ -d "$PROJECT_ROOT/src/lib/arch/zx48k/stdlib" ]; then
+    INCLUDE_ARGS="-I $PROJECT_ROOT/src/lib/arch/zx48k/stdlib"
+fi
+
+mkdir -p "$(dirname "$OUT_MD")"
+
+TOTAL=0
+PASS=0
+FAIL=0
+SKIP=0
+declare -a FAILS_TESTS
+declare -a FAILS_KINDS
+
+# Classify a divergence by inspecting py_out and c_out.
+# Categories (deliberately small, expandable):
+#   trailing-whitespace : differ only after collapsing trailing whitespace per line
+#   empty-lines         : differ only after stripping empty lines
+#   path-formatting     : strings containing PROJECT_ROOT differ between sides
+#   line-numbers        : numeric "line N" pattern differs
+#   structural          : everything else
+classify() {
+    local py="$1"
+    local c="$2"
+
+    # Replace project root in both, then strip trailing whitespace, then strip empty lines.
+    local py_path c_path
+    py_path=$(mktemp); c_path=$(mktemp)
+    sed "s|${PROJECT_ROOT}|<ROOT>|g" "$py" > "$py_path"
+    sed "s|${PROJECT_ROOT}|<ROOT>|g" "$c"  > "$c_path"
+
+    if cmp -s "$py" "$c"; then
+        echo "no-diff"; rm -f "$py_path" "$c_path"; return
+    fi
+    if ! cmp -s "$py_path" "$c_path"; then
+        # Path normalisation alone didn't equalise; keep digging.
+        :
+    else
+        echo "path-formatting"; rm -f "$py_path" "$c_path"; return
+    fi
+
+    local py_tw c_tw
+    py_tw=$(mktemp); c_tw=$(mktemp)
+    sed 's/[[:space:]]*$//' "$py_path" > "$py_tw"
+    sed 's/[[:space:]]*$//' "$c_path"  > "$c_tw"
+    if cmp -s "$py_tw" "$c_tw"; then
+        echo "trailing-whitespace"; rm -f "$py_path" "$c_path" "$py_tw" "$c_tw"; return
+    fi
+
+    local py_el c_el
+    py_el=$(mktemp); c_el=$(mktemp)
+    grep -v '^$' "$py_tw" > "$py_el" || true
+    grep -v '^$' "$c_tw"  > "$c_el" || true
+    if cmp -s "$py_el" "$c_el"; then
+        echo "empty-lines"; rm -f "$py_path" "$c_path" "$py_tw" "$c_tw" "$py_el" "$c_el"; return
+    fi
+
+    # Line-number heuristic: collapse all "<num>" tokens to <N> and re-compare.
+    local py_ln c_ln
+    py_ln=$(mktemp); c_ln=$(mktemp)
+    sed -E 's/[0-9]+/<N>/g' "$py_el" > "$py_ln"
+    sed -E 's/[0-9]+/<N>/g' "$c_el"  > "$c_ln"
+    if cmp -s "$py_ln" "$c_ln"; then
+        echo "line-numbers"; rm -f "$py_path" "$c_path" "$py_tw" "$c_tw" "$py_el" "$c_el" "$py_ln" "$c_ln"; return
+    fi
+
+    rm -f "$py_path" "$c_path" "$py_tw" "$c_tw" "$py_el" "$c_el" "$py_ln" "$c_ln"
+    echo "structural"
+}
+
+cd "$TEST_DIR"
+
+for bi in *.bi; do
+    test_name="${bi%.bi}"
+    case "$test_name" in
+        once|once_base|other_arch|init_dot|spectrum) SKIP=$((SKIP+1)); continue ;;
+    esac
+    # Skip error tests (sibling .err with no .out) — Phase 2 territory.
+    if [ -f "${test_name}.err" ] && [ ! -f "${test_name}.out" ]; then
+        SKIP=$((SKIP+1)); continue
+    fi
+
+    TOTAL=$((TOTAL+1))
+
+    py_out=$(mktemp); c_out=$(mktemp)
+    py_err=$(mktemp); c_err=$(mktemp)
+
+    "$PYTHON" -c "
+import sys
+sys.path.insert(0, '$PROJECT_ROOT')
+from src.zxbpp.zxbpp import entry_point
+sys.argv = ['zxbpp', '$bi']
+sys.exit(entry_point() or 0)
+" > "$py_out" 2> "$py_err" || true
+
+    "$PROJECT_ROOT/$ZXBPP_C" "$bi" -e /dev/null $INCLUDE_ARGS > "$c_out" 2> "$c_err" || true
+
+    if cmp -s "$py_out" "$c_out"; then
+        PASS=$((PASS+1))
+    else
+        FAIL=$((FAIL+1))
+        kind=$(classify "$py_out" "$c_out")
+        FAILS_TESTS+=("$test_name")
+        FAILS_KINDS+=("$kind")
+    fi
+
+    rm -f "$py_out" "$c_out" "$py_err" "$c_err"
+done
+
+cd "$PROJECT_ROOT"
+
+# Pick a calibration test: prefer trailing-whitespace if any (most representative
+# of what the fuzzy harness silently masks); else empty-lines; else first FAIL.
+CALIBRATION=""
+for category in trailing-whitespace empty-lines line-numbers path-formatting structural; do
+    for i in "${!FAILS_TESTS[@]}"; do
+        if [ "${FAILS_KINDS[$i]}" = "$category" ]; then
+            CALIBRATION="${FAILS_TESTS[$i]}"
+            CALIBRATION_KIND="$category"
+            break 2
+        fi
+    done
+done
+
+{
+    echo "# Phase 1 — strict-cmp divergences (Python vs C zxbpp stdout)"
+    echo
+    echo "Generated by \`csrc/tests/phase1_strict_discovery.sh\`."
+    echo "Generated at: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "Python: \`$PYTHON\` ($("$PYTHON" --version))"
+    echo "C zxbpp: \`$ZXBPP_C\` (built from local main HEAD)"
+    echo
+    echo "## Totals"
+    echo
+    echo "- Test inputs scanned (\`*.bi\` non-helper, non-error): **$TOTAL**"
+    echo "- Strict PASS (Python stdout byte-identical to C stdout): **$PASS**"
+    echo "- Strict FAIL: **$FAIL**"
+    echo "- Skipped (helper includes / error tests): **$SKIP**"
+    echo
+    echo "Compare with the existing fuzzy harness's claim of 96 PASS / 0 FAIL — the fuzzy preprocessing"
+    echo "(strip trailing whitespace, drop empty lines, replace project root) hides the divergences below."
+    echo
+    echo "## Calibration test (named for Sprint 2)"
+    echo
+    if [ -n "$CALIBRATION" ]; then
+        echo "**\`$CALIBRATION\`** — kind: \`$CALIBRATION_KIND\`."
+        echo
+        echo "Sprint 2's \`make verify-phase1-calibration\` target asserts that the new strict harness"
+        echo "reports FAIL on this test while the existing fuzzy harness still reports PASS."
+    else
+        echo "_No strict-FAIL tests — every test passes byte-identical. Calibration is vacuous;_"
+        echo "_the harness rebuild produces no behavioural change. Investigate before proceeding._"
+    fi
+    echo
+    echo "## Per-failing-test divergence kinds"
+    echo
+    if [ "$FAIL" -eq 0 ]; then
+        echo "_(none)_"
+    else
+        echo "| Test | Divergence kind |"
+        echo "|------|-----------------|"
+        for i in "${!FAILS_TESTS[@]}"; do
+            echo "| \`${FAILS_TESTS[$i]}\` | \`${FAILS_KINDS[$i]}\` |"
+        done
+    fi
+    echo
+    echo "## Divergence-kind glossary"
+    echo
+    echo "- \`trailing-whitespace\` — outputs differ only after stripping trailing whitespace per line. Hidden by fuzzy \`sed 's/[[:space:]]*\$//'\`."
+    echo "- \`empty-lines\` — outputs differ only after also stripping empty lines. Hidden by fuzzy \`grep -v '^\$'\`."
+    echo "- \`line-numbers\` — outputs differ only in numeric tokens (e.g. \`#line\` directives). Often a source-mapping divergence."
+    echo "- \`path-formatting\` — outputs differ in absolute-path strings (project root). Hidden by the \`s|\$PROJECT_ROOT|/zxbasic|g\` substitution in the fuzzy harness."
+    echo "- \`structural\` — outputs differ in ways the heuristics above don't reduce. Real port divergence; needs human inspection."
+    echo
+    echo "## Fixture-staleness note"
+    echo
+    echo "Some \`.out\` fixtures may diverge from current Python output (Python at the held pin"
+    echo "\`9c0693f8\` is the oracle; \`.out\` files were captured at an earlier pin). Phase 1 records"
+    echo "this fact but does NOT regenerate fixtures — fixture refresh is Phase 6 / Sprint 11 work."
+} > "$OUT_MD"
+
+echo "Discovery complete: $OUT_MD"
+echo "  $PASS strict-PASS, $FAIL strict-FAIL, $SKIP skipped (of $((TOTAL+SKIP)) total)."
+[ -n "$CALIBRATION" ] && echo "  Calibration test: $CALIBRATION ($CALIBRATION_KIND)"
