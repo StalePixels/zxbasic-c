@@ -1,0 +1,1 @@
+tests/functional/asm/atoloduplbl.asm:3: error: label '.SetSubScreen' already defined at line 2

@@ -1,0 +1,1 @@
+tests/functional/asm/bitop1.asm:3: error: Invalid bit position 8. Must be in [0..7]

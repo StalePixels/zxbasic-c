@@ -1,0 +1,1 @@
+tests/functional/asm/incbin0.asm:3: error: file 'nofile.bin' not found

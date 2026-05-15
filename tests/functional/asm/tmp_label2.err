@@ -1,0 +1,1 @@
+tests/functional/asm/tmp_label2.asm:2: error: Undefined temporary label '1'

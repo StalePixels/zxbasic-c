@@ -1,0 +1,1 @@
+tests/functional/asm/jr_no_label.asm:1: error: Undefined GLOBAL label '.sigPuente'

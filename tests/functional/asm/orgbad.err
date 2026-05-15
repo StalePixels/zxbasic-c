@@ -1,0 +1,1 @@
+tests/functional/asm/orgbad.asm:2: error: Memory ORG out of range [0 .. 65535]. Current value: -1

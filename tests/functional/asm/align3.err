@@ -1,0 +1,1 @@
+tests/functional/asm/align3.asm:2: error: ALIGN value must be greater than 1

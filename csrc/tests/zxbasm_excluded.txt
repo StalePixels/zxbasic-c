@@ -1,0 +1,17 @@
+# Documented exclusion list for the zxbasm strict harness.
+#
+# The harness reads this file (one stem per line, # for comments) and
+# routes listed entries to the SKIP — documented exclusion bucket.
+#
+# Sprint 10 (this file's introduction) found that all 32 silently-
+# skipped fixtures from Sprint 4's audit were in fact regen-eligible
+# error tests — Python produces a deterministic stderr diagnostic for
+# each. None needed exclusion. The file ships empty as the documented-
+# exclusion mechanism for any future fixtures that genuinely cannot be
+# tested (e.g. fixtures requiring an unavailable include, fixtures
+# pinned at a Python version we can't run, etc.).
+#
+# Format: one stem per line, optionally followed by "# <reason>".
+# Empty lines and #-prefixed lines ignored.
+#
+# (no exclusions at HEAD)

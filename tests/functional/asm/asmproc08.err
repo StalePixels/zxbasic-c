@@ -1,0 +1,1 @@
+tests/functional/asm/asmproc08.asm:2: error: Undefined GLOBAL label '.test.privatelabel'

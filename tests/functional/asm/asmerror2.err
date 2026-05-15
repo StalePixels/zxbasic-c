@@ -1,0 +1,3 @@
+tests/functional/asm/asmerror2.asm:2: error: illegal preprocessor character '@'
+tests/functional/asm/asmerror2.asm:2: error: illegal character '#'
+tests/functional/asm/asmerror2.asm:2: error: Syntax error. Unexpected end of line [NEWLINE]

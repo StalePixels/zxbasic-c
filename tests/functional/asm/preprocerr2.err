@@ -1,0 +1,3 @@
+tests/functional/asm/preprocerr2.asm:1: error: illegal preprocessor character '@'
+tests/functional/asm/preprocerr2.asm:1: error: Syntax error. Unexpected end of line
+General syntax error at assembler (unexpected End of File?)

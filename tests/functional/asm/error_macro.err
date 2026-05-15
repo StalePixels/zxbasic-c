@@ -1,0 +1,2 @@
+tests/functional/asm/error_macro.asm:1: warning: this is a warning
+tests/functional/asm/error_macro.asm:2: error: this is an error

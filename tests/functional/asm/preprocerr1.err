@@ -1,0 +1,1 @@
+tests/functional/asm/preprocerr1.asm:1: error: file 'this_file_does_not_exist.asm' not found

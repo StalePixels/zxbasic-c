@@ -1,0 +1,8 @@
+tests/functional/asm/no_zxnext.asm:8: error: Syntax error. Unexpected token 'D' [D]
+tests/functional/asm/no_zxnext.asm:9: error: Syntax error. Unexpected token 'A' [A]
+tests/functional/asm/no_zxnext.asm:12: error: Syntax error. Unexpected token '513' [INTEGER]
+tests/functional/asm/no_zxnext.asm:14: error: Syntax error. Unexpected token 'BC' [BC]
+tests/functional/asm/no_zxnext.asm:17: error: Syntax error. Unexpected token '17185' [INTEGER]
+tests/functional/asm/no_zxnext.asm:19: error: Syntax error. Unexpected token '51' [INTEGER]
+tests/functional/asm/no_zxnext.asm:23: error: Syntax error. Unexpected token '119' [INTEGER]
+tests/functional/asm/no_zxnext.asm:29: error: Syntax error. Unexpected token 'C' [C]

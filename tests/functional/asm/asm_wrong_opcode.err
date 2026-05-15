@@ -1,0 +1,1 @@
+tests/functional/asm/asm_wrong_opcode.asm:2: error: Syntax error. Unexpected token '.c' [ID]

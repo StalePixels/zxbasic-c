@@ -1,0 +1,1 @@
+tests/functional/asm/and_err.asm:1: error: Syntax error. Unexpected token ':' [CO]
