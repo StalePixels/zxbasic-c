@@ -627,13 +627,19 @@ char *preproc_expand_macro(PreprocState *pp, const char *name,
     pp->macro_body_line = saved_mbl;
     def->evaluating = false;
 
-    /* Python's expand_macros() calls remove_spaces() on each MacroCall result:
-     * strip leading/trailing whitespace, return " " if all-whitespace. */
+    /* Python remove_spaces (src/zxbpp/zxbpp.py:99-103):
+     *   if not x: return x          # empty stays empty
+     *   return x.strip(" \t") or " "  # non-empty all-ws -> single space
+     * An empty expansion (e.g. `#define PI` then `PI`) must yield ""
+     * not " "; only a non-empty all-whitespace result collapses to " ". */
+    if (final && !*final) {
+        return final; /* "" — Python `if not x: return x` */
+    }
     if (final) {
         const char *start = final;
         while (*start == ' ' || *start == '\t') start++;
         if (!*start) {
-            /* All whitespace → single space */
+            /* Non-empty, all whitespace → single space */
             return arena_strdup(&pp->arena, " ");
         }
         const char *end = start + strlen(start);
