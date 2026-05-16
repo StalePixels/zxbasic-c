@@ -1723,13 +1723,14 @@ static void process_directive(PreprocState *pp, const char *directive)
         handle_init(pp, rest);
         pp->has_output = true;
     } else if (strnicmp_local(p, "error", (size_t)dlen) == 0 && dlen == 5) {
+        /* Python p_errormsg (src/zxbpp/zxbpp.py:531-535): emits the
+         * diagnostic to stderr and sets p[0]=[] — contributes nothing
+         * to OUTPUT, not even a placeholder newline. */
         handle_error_directive(pp, rest);
-        strbuf_append_char(&pp->output, '\n');
-        pp->has_output = true;
     } else if (strnicmp_local(p, "warning", (size_t)dlen) == 0 && dlen == 7) {
+        /* Python p_warningmsg (src/zxbpp/zxbpp.py:538-542): same — the
+         * warning goes to stderr, p[0]=[], no OUTPUT contribution. */
         handle_warning_directive(pp, rest);
-        strbuf_append_char(&pp->output, '\n');
-        pp->has_output = true;
     } else {
         char *dname = arena_strndup(&pp->arena, p, (size_t)dlen);
         preproc_error(pp, "invalid directive #%s", dname);
