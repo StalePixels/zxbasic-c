@@ -84,6 +84,14 @@ typedef struct PreprocState {
     char *current_file;
     int current_line;
 
+    /* While expanding a macro body, the line that body's macro was
+     * #defined on. Python binds a MacroCall's lineno at body-parse
+     * time (src/zxbpp/prepro/macrocall.py:93 self.lineno), so an error
+     * from a call nested in a macro body is attributed to the enclosing
+     * macro's definition line, not the invocation line. 0 = not inside
+     * a macro-body expansion (use current_line). */
+    int macro_body_line;
+
     /* Include paths */
     VEC(char *) include_paths;
 

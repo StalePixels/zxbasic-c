@@ -42,6 +42,7 @@ void preproc_init(PreprocState *pp)
     vec_init(pp->file_stack);
     pp->current_file = NULL;
     pp->current_line = 0;
+    pp->macro_body_line = 0;
     vec_init(pp->include_paths);
     pp->arch = NULL;
     pp->debug_level = 0;
@@ -594,10 +595,17 @@ char *preproc_expand_macro(PreprocState *pp, const char *name,
     char *expanded;
 
     if (def->num_params >= 0) {
-        /* Function-like macro — check argument count */
+        /* Function-like macro — check argument count.
+         * Attribute to the enclosing macro body's #define line when this
+         * call is nested in one (Python MacroCall.self.lineno is bound at
+         * body-parse time, macrocall.py:93); else the invocation line. */
         if (argc != def->num_params) {
+            int saved_cl = pp->current_line;
+            if (pp->macro_body_line > 0)
+                pp->current_line = pp->macro_body_line;
             preproc_error(pp, "Macro \"%s\" expected %d params, got %d",
                           name, def->num_params, argc);
+            pp->current_line = saved_cl;
             def->evaluating = false;
             return arena_strdup(&pp->arena, "");
         }
@@ -608,8 +616,15 @@ char *preproc_expand_macro(PreprocState *pp, const char *name,
         expanded = arena_strdup(&pp->arena, def->body);
     }
 
-    /* Recursively expand macros in the result */
+    /* Recursively expand macros in the result. Any macro call textually
+     * inside this body was, in Python, parsed at this macro's #define
+     * line and carries that lineno (macrocall.py:93). Scope macro_body_line
+     * to def->def_line for the recursion (save/restore → innermost
+     * enclosing body wins, matching nested-#define attribution). */
+    int saved_mbl = pp->macro_body_line;
+    pp->macro_body_line = def->def_line;
     char *final = expand_macros_in_text(pp, expanded);
+    pp->macro_body_line = saved_mbl;
     def->evaluating = false;
 
     /* Python's expand_macros() calls remove_spaces() on each MacroCall result:
