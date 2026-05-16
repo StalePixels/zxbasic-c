@@ -23,6 +23,7 @@ add_library(zxbc_parser_lib STATIC
     passes/functiongraph.c
     passes/unreachable.c
     passes/optimizer.c
+    ic.c
 )
 
 target_include_directories(zxbc_parser_lib PUBLIC
