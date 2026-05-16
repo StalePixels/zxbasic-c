@@ -69,41 +69,69 @@ FALSE_POS=0
 SKIP=0
 SKIP_PYINTERNAL=0
 
-cd "$TEST_DIR"
+# One per-run scratch directory. Two reasons this exists and we never
+# `cd "$TEST_DIR"`:
+#   1. `$TEST_DIR` is the read-only upstream fixture corpus. Both the
+#      Python compiler and the C binary fall back to writing a default
+#      `<stem>.asm` next to the *current working directory* when the
+#      output path is unusable. If we ran them with CWD inside the
+#      corpus, that fallback would overwrite the committed fixtures.
+#      Compiling from a scratch CWD with an absolute input path keeps
+#      any CWD-side artefact in scratch, never in `tests/`.
+#   2. The previous code built temp paths with
+#      `mktemp /tmp/zxbc_cg_py_XXXXXX.asm`. On BSD/macOS mktemp the
+#      `X` run must be the trailing characters; with a `.asm` suffix
+#      the template is taken *literally*, so every iteration after the
+#      first collided, mktemp printed nothing, the output path became
+#      the empty string, `-o ''` made the compiler write its default
+#      `<stem>.asm` into the corpus, and every test fell out of the
+#      codegen buckets. A single `mktemp -d` plus fixed names inside
+#      it is portable and immune to that collision.
+SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/zxbc_cg_XXXXXX")
+if [ -z "$SCRATCH" ] || [ ! -d "$SCRATCH" ]; then
+    echo "ERROR: could not create scratch dir; refusing to run." >&2
+    exit 2
+fi
+cleanup() { rm -rf "$SCRATCH"; }
+trap cleanup EXIT INT TERM
 
-for bas in *.bas; do
+for bas in "$TEST_DIR"/*.bas; do
     [ -e "$bas" ] || continue
-    stem="${bas%.bas}"
+    base=$(basename "$bas")
+    stem="${base%.bas}"
 
     # No sibling .asm => Python rejects / no codegen expected: SKIP
     # (owned by the parse-only + AST-equiv harnesses).
-    if [ ! -f "${stem}.asm" ]; then
+    if [ ! -f "$TEST_DIR/${stem}.asm" ]; then
         SKIP=$((SKIP + 1))
         continue
     fi
 
-    py_out=$(mktemp /tmp/zxbc_cg_py_XXXXXX.asm)
-    c_out=$(mktemp /tmp/zxbc_cg_c_XXXXXX.asm)
-    py_err=$(mktemp /tmp/zxbc_cg_pye_XXXXXX)
-    c_err=$(mktemp /tmp/zxbc_cg_ce_XXXXXX)
+    py_out="$SCRATCH/py_out.asm"
+    c_out="$SCRATCH/c_out.asm"
+    py_err="$SCRATCH/py_err"
+    c_err="$SCRATCH/c_err"
+    rm -f "$py_out" "$c_out" "$py_err" "$c_err"
     py_rc=0
     c_rc=0
 
-    "$PYTHON" -c "
+    # Run from the scratch dir with an absolute input path so any
+    # default-named CWD-side artefact lands in scratch, never in the
+    # read-only corpus.
+    ( cd "$SCRATCH" && "$PYTHON" -c "
 import sys
 sys.path.insert(0, '$PROJECT_ROOT')
 from src.zxbc.zxbc import main as entry_point
 sys.argv = ['zxbc', '--output-format=asm', '-o', '$py_out', '$bas']
 sys.exit(entry_point() or 0)
-" > /dev/null 2> "$py_err" || py_rc=$?
+" ) > /dev/null 2> "$py_err" || py_rc=$?
 
     if is_python_internal_error "$py_err"; then
         SKIP_PYINTERNAL=$((SKIP_PYINTERNAL + 1))
-        rm -f "$py_out" "$c_out" "$py_err" "$c_err"
         continue
     fi
 
-    "$ZXBC_C" --output-format=asm -o "$c_out" "$bas" > /dev/null 2> "$c_err" || c_rc=$?
+    ( cd "$SCRATCH" && "$ZXBC_C" --output-format=asm -o "$c_out" "$bas" ) > /dev/null 2> "$c_err" || c_rc=$?
 
     py_has_asm=0; [ -s "$py_out" ] && py_has_asm=1
     c_has_asm=0;  [ -s "$c_out" ]  && c_has_asm=1
@@ -120,7 +148,7 @@ sys.exit(entry_point() or 0)
     elif [ "$c_rc" -ne 0 ] || [ "$c_has_asm" -eq 0 ]; then
         C_NO_CODEGEN=$((C_NO_CODEGEN + 1))
     else
-        pn=$(mktemp); cn=$(mktemp)
+        pn="$SCRATCH/py_norm.asm"; cn="$SCRATCH/c_norm.asm"
         normalise < "$py_out" > "$pn"
         normalise < "$c_out"  > "$cn"
         if cmp -s "$pn" "$cn"; then
@@ -134,6 +162,9 @@ sys.exit(entry_point() or 0)
 
     rm -f "$py_out" "$c_out" "$py_err" "$c_err"
 done
+
+cleanup
+trap - EXIT INT TERM
 
 CODEGEN_TOTAL=$((PASS + C_NO_CODEGEN + ASM_MISMATCH + FALSE_POS))
 echo "##zxbc-codegen##"
