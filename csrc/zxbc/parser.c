@@ -1511,13 +1511,18 @@ static AstNode *parse_statement(Parser *p) {
             AstNode *var = symboltable_access_id(p->cs->symbol_table, p->cs,
                                                   name, ln, rhs_type, CLASS_var);
             if (var) {
-                /* Check if target is assignable */
-                if (var->u.id.class_ == CLASS_const) {
-                    zxbc_error(p->cs, ln, "'%s' is a CONST, not a VAR", name);
-                } else if (var->u.id.class_ == CLASS_sub) {
-                    zxbc_error(p->cs, ln, "Cannot assign a value to '%s'. It's not a variable", name);
-                } else if (var->u.id.class_ == CLASS_function) {
-                    zxbc_error(p->cs, ln, "'%s' is a FUNCTION, not a VAR", name);
+                /* Assignment to a non-variable lvalue. Python emits ONE
+                 * message for CONST/SUB/FUNCTION alike —
+                 * syntax_error_cannot_assign_not_a_var (errmsg.py:283),
+                 * "Cannot assign a value to '%s'. It's not a variable".
+                 * C's SUB branch already used that text; CONST/FUNCTION
+                 * diverged ("'%s' is a CONST/FUNCTION, not a VAR") — S1.2
+                 * preserved the literals verbatim and deferred wording to
+                 * Phase 3; this is that alignment (S3.1 CAT-4). */
+                if (var->u.id.class_ == CLASS_const ||
+                    var->u.id.class_ == CLASS_sub ||
+                    var->u.id.class_ == CLASS_function) {
+                    err_cannot_assign(p->cs, ln, name);
                 }
                 if (var->u.id.class_ == CLASS_unknown)
                     var->u.id.class_ = CLASS_var;
