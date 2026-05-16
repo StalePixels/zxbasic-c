@@ -2530,8 +2530,11 @@ static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function, bool is_decl
         AstNode *old_params = id_node->parent->children[1];  /* DECLARE's param list */
         if (old_params && params) {
             if (old_params->child_count != params->child_count) {
-                zxbc_error(p->cs, lineno, "Parameter mismatch in %s '%s' (previously declared at %d)",
-                           symbolclass_to_string(cls), func_name, id_node->lineno);
+                /* Python syntax_error_parameter_mismatch (errmsg.py:255):
+                 * "Function '%s' (previously declared at %d) parameter
+                 * mismatch" — use the existing faithful helper, not the
+                 * divergent inline literal. */
+                err_parameter_mismatch(p->cs, lineno, func_name, id_node->lineno);
             } else {
                 for (int pi = 0; pi < old_params->child_count; pi++) {
                     AstNode *a = old_params->children[pi];
@@ -2544,8 +2547,9 @@ static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function, bool is_decl
                         }
                         bool byref_mismatch = (a->u.argument.byref != b->u.argument.byref);
                         if (type_mismatch || byref_mismatch) {
-                            zxbc_error(p->cs, lineno, "Parameter mismatch in %s '%s' (previously declared at %d)",
-                                       symbolclass_to_string(cls), func_name, id_node->lineno);
+                            /* Python syntax_error_parameter_mismatch
+                             * (errmsg.py:255) — existing faithful helper. */
+                            err_parameter_mismatch(p->cs, lineno, func_name, id_node->lineno);
                             break;
                         }
                     }
