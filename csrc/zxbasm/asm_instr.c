@@ -143,6 +143,23 @@ int asm_instr_bytes(AsmState *as, AsmInstr *instr, uint8_t *out, int out_size)
         }
     }
 
+    /* Relative-jump range check. Mirrors Python Asm.argval()
+     * (src/zxbasm/asm.py:120-123): for JR/DJNZ the (already relative)
+     * displacement must fit a signed byte. Python tests the *resolved*
+     * arg only (argval runs after .eval()), so guard on !pending — this
+     * fires for backward refs at add-time and forward refs at the
+     * dump-time second pass (memory.c), the two points Python's argval
+     * is reached with a final value. asm_name is Python's self.asm;
+     * self.asm.split(" ")[0] == the mnemonic. */
+    if (!instr->pending && instr->arg_count > 0 && instr->asm_name &&
+        (strncmp(instr->asm_name, "JR ", 3) == 0 ||
+         strncmp(instr->asm_name, "DJNZ ", 5) == 0)) {
+        if (arg_vals[0] < -128 || arg_vals[0] > 127) {
+            asm_error(as, instr->lineno, "Relative jump out of range");
+            return 0;
+        }
+    }
+
     /* Parse opcode string and emit bytes */
     int n = 0;
     int argi = 0;
