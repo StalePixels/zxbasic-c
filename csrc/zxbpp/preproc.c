@@ -1370,6 +1370,13 @@ static void handle_include(PreprocState *pp, const char *rest)
     /* Check for #pragma once / include once */
     IncludeInfo *inc_info = hashmap_get(&pp->included, resolved);
     if (inc_info && (inc_info->once || once)) {
+        /* Already included: the file expands to nothing, but the
+         * directive line's terminating NEWLINE is still emitted (Python
+         * include_once() returns "" yet the line's NEWLINE token reaches
+         * OUTPUT — src/zxbpp/zxbpp.py:259-261). The normal-include path
+         * resyncs via #line; the skip path has none, so emit the
+         * placeholder blank line here to keep line accounting aligned. */
+        strbuf_append_char(&pp->output, '\n');
         return; /* already included with once */
     }
 
