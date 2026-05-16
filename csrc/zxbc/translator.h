@@ -37,4 +37,30 @@ void translator_visit(Translator *tr, AstNode *ast);
 /* zxbc.py:150  translator.ic_inline(";; --- end of user code ---"). */
 void translator_ic_inline(Translator *tr, const char *asm_code);
 
+/* ---- S5.3 shared TranslatorInstVisitor surface (var_translator.c) ---- */
+
+/* TranslatorInstVisitor.emit (translator_inst_visitor.py:21-25):
+ *   Quad(*args); backend.MEMORY.append(quad). args already string-coerced
+ *   by the caller (mirrors Quad.__init__'s str() of each arg). */
+void tr_emit_quad(Translator *tr, const char *instr, int nargs,
+                  const char *const *args);
+
+/* TranslatorInstVisitor.TSUFFIX (translator_inst_visitor.py:27-51):
+ * a TYPE/TYPEREF/BASICTYPE -> the DataType string ("u8","i8","u16",...).
+ * Returns an arena-stable static string literal. */
+const char *tr_tsuffix(const TypeInfo *type_);
+
+/* Translator.default_value (translator.py:1029-1078): the list of 2-hex
+ * byte/word strings an initialized scalar compiles to. Returns the count
+ * and writes arena-owned strings into *out (caller passes a buffer big
+ * enough — max 5 for float). Faithful for the S5.3 integer-scalar path;
+ * CONSTEXPR/float/fixed branches ported verbatim. */
+int tr_default_value(Translator *tr, const TypeInfo *type_,
+                     AstNode *expr, char **out, int out_cap);
+
+/* VarTranslator over data_ast (var_translator.py whole file). Visits the
+ * BLOCK of VARDECL(entry) appending the data-space Quads (var/vard/varx/
+ * deflabel/label). Mirrors zxbc.py:196-199. */
+void var_translator_visit(Translator *tr, AstNode *data_ast);
+
 #endif /* ZXBC_TRANSLATOR_H */

@@ -2247,21 +2247,46 @@ static AstNode *parse_dim_statement(Parser *p) {
                        name, p->cs->current_file, id_node->lineno);
         }
         id_node->type_ = type;
-        /* Bare scalar DIM/CONST (no initializer, no AT) emits NO node at
-         * the statement site — Python p_var_decl returns p[0]=None
-         * (zxbparser.py:652); the symbol is registered above regardless.
-         * Initialized/AT forms still emit: C has no data_ast drain to
-         * recover their parsed init/at value (unlike Python), so dropping
-         * it would be a silent parsed-value drop (CLAUDE.md rule 8).
-         * Faithful deferral of init/AT decls is a later-phase item. */
-        if (!at_expr && !init_expr)
-            return NULL;
-        AstNode *decl = ast_new(p->cs, AST_VARDECL, lineno);
-        ast_add_child(p->cs, decl, id_node);
-        if (at_expr) ast_add_child(p->cs, decl, at_expr);
-        if (init_expr) ast_add_child(p->cs, decl, init_expr);
-        decl->type_ = type;
-        return decl;
+        /* Python ID.t delegates to the ref: a global var's VarRef.t is
+         * entry.mangled (varref.py:36-37). symboltable_declare (the
+         * generic creator) sets .mangled but not .t (only
+         * symboltable_declare_variable does); set it here so a later
+         * VAR rvalue / LET lvalue reads "_name", not "" — matching the
+         * dedicated declarer and Python's VarRef.t. (Non-string scalar
+         * DIM/CONST: the '$'-prefixed dynamic-string .t is S5.5+.) */
+        if (id_node->t == NULL)
+            id_node->t = id_node->u.id.mangled;
+        /* Scalar DIM/CONST emits NO node at the statement site — Python
+         * p_var_decl / p_var_decl_ini / p_var_decl_at all set p[0]=None
+         * (zxbparser.py:652/689/657). The parsed init/AT value is NOT
+         * dropped (CLAUDE.md rule 8): S5.3 added the data_ast drain, so
+         * the init becomes entry.default_value and AT becomes entry.addr,
+         * faithfully recovered by VarTranslator over data_ast. */
+        if (init_expr) {
+            /* p_var_decl_ini (zxbparser.py:707-711):
+             *   value  = make_typecast(typedef, expr)
+             *   defval = value if is_static(expr) and value.type_ != string
+             *   declare_variable(..., default_value=defval)
+             * is_static() tests the ORIGINAL expr; defval is the cast value.
+             * (Implicit-typedef→expr.type_ already applied above, :2215.) */
+            AstNode *value = make_typecast(p->cs, type, init_expr, lineno);
+            bool stat = check_is_static(init_expr);
+            bool is_str = value && type_is_string(value->type_);
+            if (stat && !is_str)
+                id_node->u.id.default_value_expr = value;
+        }
+        if (at_expr) {
+            /* p_var_decl_at (zxbparser.py:679):
+             *   entry.addr = make_typecast(PTR_TYPE, expr)  (static expr)
+             * S5.3 corpus is initializer-only; AT recorded faithfully via
+             * the same data_ast path (entry.addr drives ic_deflabel). */
+            TypeInfo *ptr_t =
+                p->cs->symbol_table->basic_types[TYPE_uinteger]; /* gl.PTR_TYPE */
+            AstNode *av = make_typecast(p->cs, ptr_t, at_expr, lineno);
+            id_node->u.id.addr_expr = av;
+            id_node->u.id.accessed = true; /* Python mark_entry_as_accessed */
+        }
+        return NULL;
     }
 
     /* Multiple vars. Symbols are registered regardless; a bare multi-var

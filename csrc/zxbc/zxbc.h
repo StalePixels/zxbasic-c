@@ -160,6 +160,10 @@ struct AstNode {
         /* AST_ID */
         struct {
             char *name;
+            char *mangled;       /* Python ID.mangled = MANGLE_CHR + name ("_a");
+                                  * S5.3: used by VarTranslator for the data
+                                  * label. Equals .t for globals. NULL until
+                                  * symboltable_declare* sets it. */
             SymbolClass class_;
             Scope scope;
             Convention convention;
@@ -168,6 +172,14 @@ struct AstNode {
             bool forwarded;      /* forward-declared function */
             bool declared;       /* has been defined (not just referenced) */
             bool default_value;  /* parameter has default value */
+            /* S5.3: the initializer expr for `DIM v AS t = expr` (Python
+             * VarRef.default_value). NULL == no initializer. Faithful to
+             * zxbparser.py:711 declare_variable(default_value=defval). */
+            AstNode *default_value_expr;
+            /* S5.3: the AT-address expr for `DIM v AS t AT expr` (Python
+             * entry.addr, a typecast Symbol; zxbparser.py:679). NULL == no
+             * AT clause. ic_deflabel uses this. */
+            AstNode *addr_expr;
             int64_t addr;        /* for absolute address variables */
             bool addr_set;
             /* Function-specific fields */
@@ -365,6 +377,15 @@ struct CompilerState {
     /* AST roots */
     AstNode *ast;            /* main program AST */
     AstNode *data_ast;       /* global variable declarations */
+
+    /* S5.3 (N1): every ID symbol-table entry, in first-textual-appearance
+     * (insertion) order. The C scope HashMap is unordered, so this mirrors
+     * Python's OrderedDict global scope (scope.py:43-44) and the single
+     * insert point symboltable.py:116 (symboltable_declare). data_ast is
+     * built by filtering this to global CLASS_var entries — the faithful
+     * analogue of SYMBOL_TABLE.vars_ (symboltable.py:776-782, filter_by_opt
+     * = False → ALL declared vars regardless of O-level). */
+    VEC(AstNode *) sym_entries_ordered;
 
     /* Parser state */
     bool labels_allowed;     /* for line-start label detection */

@@ -62,6 +62,15 @@ AstNode *symboltable_declare(SymbolTable *st, CompilerState *cs,
     /* Create new ID node */
     AstNode *node = ast_new(cs, AST_ID, lineno);
     node->u.id.name = arena_strdup(&cs->arena, name);
+    {
+        /* Python ID.mangled = f"{MANGLE_CHR}{name}" (_id.py:60); MANGLE_CHR
+         * = "_" (global_.py:167). */
+        size_t nl = strlen(name);
+        char *m = arena_alloc(&cs->arena, nl + 2);
+        m[0] = '_';
+        memcpy(m + 1, name, nl + 1);
+        node->u.id.mangled = m;
+    }
     node->u.id.class_ = class_;
     node->u.id.scope = (st->current_scope->level == 0) ? SCOPE_global : SCOPE_local;
     node->u.id.convention = CONV_unknown;
@@ -71,6 +80,11 @@ AstNode *symboltable_declare(SymbolTable *st, CompilerState *cs,
     node->u.id.declared = true;
 
     hashmap_set(&st->current_scope->symbols, name, node);
+    /* N1: the single symbol-table insertion point (mirrors Python
+     * symboltable.py:116 self.current_scope[id2] = entry). Record every
+     * entry once, in first-textual-appearance order, regardless of class
+     * or O-level — data_ast is filtered from this later (codegen.c). */
+    vec_push(cs->sym_entries_ordered, node);
     return node;
 }
 
@@ -151,6 +165,13 @@ AstNode *symboltable_declare_variable(SymbolTable *st, CompilerState *cs,
     /* Create new ID node */
     AstNode *node = ast_new(cs, AST_ID, lineno);
     node->u.id.name = arena_strdup(&cs->arena, base_name);
+    {
+        size_t nl = strlen(base_name);
+        char *m = arena_alloc(&cs->arena, nl + 2);
+        m[0] = '_';
+        memcpy(m + 1, base_name, nl + 1);
+        node->u.id.mangled = m;   /* Python ID.mangled (_id.py:60) */
+    }
     node->u.id.class_ = CLASS_var;
     node->u.id.scope = (st->current_scope->level == 0) ? SCOPE_global : SCOPE_local;
     node->u.id.convention = CONV_unknown;
@@ -172,6 +193,7 @@ AstNode *symboltable_declare_variable(SymbolTable *st, CompilerState *cs,
     }
 
     hashmap_set(&st->current_scope->symbols, base_name, node);
+    vec_push(cs->sym_entries_ordered, node);  /* N1 (symboltable.py:116) */
     return node;
 }
 
@@ -189,6 +211,13 @@ AstNode *symboltable_declare_param(SymbolTable *st, CompilerState *cs,
     /* Create new ID node as parameter */
     AstNode *node = ast_new(cs, AST_ID, lineno);
     node->u.id.name = arena_strdup(&cs->arena, name);
+    {
+        size_t nl = strlen(name);
+        char *m = arena_alloc(&cs->arena, nl + 2);
+        m[0] = '_';
+        memcpy(m + 1, name, nl + 1);
+        node->u.id.mangled = m;   /* Python ID.mangled (_id.py:60) */
+    }
     node->u.id.class_ = CLASS_var;
     node->u.id.scope = SCOPE_parameter;
     node->u.id.convention = CONV_unknown;
@@ -210,6 +239,7 @@ AstNode *symboltable_declare_param(SymbolTable *st, CompilerState *cs,
     }
 
     hashmap_set(&st->current_scope->symbols, name, node);
+    vec_push(cs->sym_entries_ordered, node);  /* N1 (symboltable.py:116) */
     return node;
 }
 
@@ -228,6 +258,13 @@ AstNode *symboltable_declare_array(SymbolTable *st, CompilerState *cs,
 
     AstNode *node = ast_new(cs, AST_ID, lineno);
     node->u.id.name = arena_strdup(&cs->arena, name);
+    {
+        size_t nl = strlen(name);
+        char *m = arena_alloc(&cs->arena, nl + 2);
+        m[0] = '_';
+        memcpy(m + 1, name, nl + 1);
+        node->u.id.mangled = m;   /* Python ID.mangled (_id.py:60) */
+    }
     node->u.id.class_ = CLASS_array;
     node->u.id.scope = (st->current_scope->level == 0) ? SCOPE_global : SCOPE_local;
     node->u.id.convention = CONV_unknown;
@@ -238,6 +275,7 @@ AstNode *symboltable_declare_array(SymbolTable *st, CompilerState *cs,
     node->type_ = typeref;
 
     hashmap_set(&st->current_scope->symbols, name, node);
+    vec_push(cs->sym_entries_ordered, node);  /* N1 (symboltable.py:116) */
     return node;
 }
 
@@ -1099,6 +1137,7 @@ void compiler_init(CompilerState *cs) {
     vec_init(cs->loop_stack);
     vec_init(cs->datas);
     vec_init(cs->inits);
+    vec_init(cs->sym_entries_ordered);   /* N1 */
 
     cs->symbol_table = symboltable_new(cs);
     cs->default_type = cs->symbol_table->basic_types[TYPE_float];
@@ -1123,6 +1162,7 @@ void compiler_destroy(CompilerState *cs) {
     vec_free(cs->loop_stack);
     vec_free(cs->datas);
     vec_free(cs->inits);
+    vec_free(cs->sym_entries_ordered);   /* N1 */
 
     arena_destroy(&cs->arena);
 }

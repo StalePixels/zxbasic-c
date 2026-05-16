@@ -170,6 +170,57 @@ int codegen_emit(CompilerState *cs, AstNode *ast) {
     peephole_init(a);
     peephole_main();
 
+    /* ---- S5.3 (N1): build data_ast + seed the temp counter ------------
+     *
+     * data_ast: a BLOCK of VARDECL(entry) over the global CLASS_var
+     * symbol-table entries in first-textual-appearance order — the
+     * faithful analogue of p_start:543-545 + make_var_declaration:263-267
+     * (sym.VARDECL(entry)) drained from SYMBOL_TABLE.vars_
+     * (symboltable.py:776-782, filter_by_opt=False → ALL declared vars
+     * regardless of O-level; the O2 unused-drop happens in VarTranslator,
+     * not here). Built here (not in parser.c) to keep parser churn
+     * minimal; the drain point is faithful (it reads the final symbol
+     * table, exactly as p_start does after the whole program parsed).
+     *
+     * Temp-counter seed: Python's global optemps counter is bumped at
+     * ref-object construction during parse + p_start (symbolref.py:25 —
+     * every SymbolRef.__init__, incl. VarRef/LabelRef). For the S5.3
+     * integer-scalar corpus the only entries are global scalars + the 2
+     * fixed p_start namespace data labels (.ZXBASIC_USER_DATA / _LEN):
+     *   per var/const entry      = ID(SymbolRef) + to_var/to_const = 2
+     *   2 p_start ns data labels = (ID SymbolRef + to_label) ×2     = 4
+     * so the pre-Translator counter = 2*N_var_const + 4. Verified live
+     * against let0.bas / calib.bas / multi-var fixtures (the BINARY's .t
+     * is t6 for let0, t8 for the 2-var case). User LABELs add +3 each
+     * (non-namespace: extra symboltable.py:620 to_label) — out of the
+     * S5.3 integer-scalar slice (no GOTO/labels in the S5.3 corpus);
+     * extended faithfully when the label sprints land. */
+    {
+        int nvc = 0;
+        AstNode *e;
+        vec_foreach(cs->sym_entries_ordered, e) {
+            if (e && (e->u.id.class_ == CLASS_var ||
+                      e->u.id.class_ == CLASS_const))
+                nvc++;
+        }
+        cs->temp_counter = 2 * nvc + 4;
+
+        AstNode *dast = ast_new(cs, AST_BLOCK, 1);
+        vec_foreach(cs->sym_entries_ordered, e) {
+            /* SYMBOL_TABLE.vars_ : global scope, class_ == CLASS.var
+             * (symboltable.py:776-782). make_var_declaration = VARDECL
+             * with the entry as its sole child (vardecl.py:18-20). */
+            if (!e || e->u.id.class_ != CLASS_var ||
+                e->u.id.scope != SCOPE_global)
+                continue;
+            AstNode *vd = ast_new(cs, AST_VARDECL, e->lineno);
+            ast_add_child(cs, vd, e);
+            vd->type_ = e->type_;
+            ast_add_child(cs, dast, vd);
+        }
+        cs->data_ast = dast;
+    }
+
     /* 6  translator.visit(ast)  (zxbc.py:125-126) */
     Translator tr; tr.cs = cs; tr.backend = &b;
     translator_visit(&tr, ast);
@@ -214,10 +265,53 @@ int codegen_emit(CompilerState *cs, AstNode *ast) {
      * REQUIRES empty). Full re-filter is S7 (runtime #include) scope. */
     StrVec asm_lines = split_nl(a, rejoined);
 
-    /* 12 VarTranslator over data_ast (zxbc.py:195-203): C has no data_ast
-     * (deferred S5.3, recorded); the calib var is unused @O2 so this
-     * contributes nothing -> tmp = []. */
+    /* 12 VarTranslator over data_ast (zxbc.py:192-203):
+     *   backend.MEMORY[:] = []                      (192)
+     *   VariableVisitor().visit(data_ast)           (195-196)
+     *   VarTranslator(backend).visit(data_ast)      (197-198)
+     *   tmp = [x for x in backend.emit(optimize=False)
+     *          if x.strip()[0] != "#"]              (203)
+     *
+     * VariableVisitor (optimize.py:497/546-556) is an error-only pass: it
+     * checks aliasing-var circular dependencies and yields the node
+     * unchanged — no accessed/IC side-effects. The S5.3 integer-scalar
+     * corpus has no aliased vars, so it is a faithful no-op here (the
+     * alias-dependency graph is out of the integer-scalar slice). */
     StrVec tmp; vec_init(tmp);
+    {
+        /* backend.MEMORY[:] = [] — main asm already emitted (step 9); the
+         * data path emits into a fresh MEMORY. */
+        vec_free(b.memory);
+        vec_init(b.memory);
+        /* common.FLAG_end_emitted is NOT reset (Python only resets it in
+         * common.init); the data path emits no `end` quad so it has no
+         * observable effect either way — left unchanged for fidelity. */
+
+        var_translator_visit(&tr, cs->data_ast);
+
+        if (cs->error_count > 0) {
+            /* zxbc.py:199-201: gl.has_errors -> return 1 */
+            vec_free(tmp);
+            backend_free(&b);
+            return 1;
+        }
+
+        StrVec data_emit = backend_emit(&b, false);
+        for (int i = 0; i < data_emit.len; i++) {
+            const char *x = data_emit.data[i];
+            const char *p = x;
+            while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')
+                p++;
+            /* Python x.strip()[0] != "#": a stripped-empty line would
+             * IndexError in Python — the data emit never yields one
+             * (vard/var/varx always emit "LABEL:"/"DEFB ..."); keep
+             * non-'#' lines (the '#include once <...>' REQUIRES lines,
+             * which start with '#', are dropped here as in Python). */
+            if (*p == '#') continue;
+            vec_push(tmp, (char *)x);
+        }
+        vec_free(data_emit);
+    }
 
     /* 13 final = emit_prologue() + tmp + [DATA_END:, MAIN:] + asm + epilogue
      * (zxbc.py:204-210) */
