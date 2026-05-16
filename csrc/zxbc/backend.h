@@ -49,6 +49,7 @@ typedef struct Backend {
     Arena  *arena;            /* &cs->arena — Quad/string allocation */
     QuadVec memory;           /* Python Backend.MEMORY: list[Quad] */
     bool    flag_end_emitted; /* common.FLAG_end_emitted */
+    bool    flag_use_function_exit; /* common.FLAG_use_function_exit (_leave) */
     HashMap asms;             /* "##ASMn" -> AsmsBody* (common.ASMS) */
     int     asmcount;         /* common.ASMCOUNT */
     HashMap requires_;        /* set of #include-once libs (common.REQUIRES) */
@@ -81,6 +82,11 @@ void backend_common_reset(Backend *b);
 
 /* new_ASMID() -> "##ASM<n>", n = post-increment of asmcount. */
 char *backend_new_asmid(Backend *b);
+
+/* tmp_labels.tmp_label() (src/api/tmp_labels.py:16-25): the next
+ * ".LABEL.__LABEL<N>" (single monotonic counter, no zero-pad), recorded in
+ * TMP_LABELS. Arena-owned. Used by the S5.5 control-flow visitors. */
+char *backend_tmp_label(Backend *b);
 
 /* Free the heap-backed containers (Quads/strings are arena-owned). */
 void backend_free(Backend *b);

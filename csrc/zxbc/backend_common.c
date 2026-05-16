@@ -17,6 +17,7 @@
 void backend_common_reset(Backend *b) {
     b->asmcount = 0;
     b->flag_end_emitted = false;
+    b->flag_use_function_exit = false; /* common.init (common.py:257) */
 
     /* HashMap has no clear(); free + re-init is the empty-set equivalent.
      * Stored values (ASMS bodies) are arena-owned, not freed here. */

@@ -25,9 +25,39 @@
 #include "zxbc.h"
 #include "backend.h"
 
+/* LOOPS entry (translator.py:1009-1027): (loop_type, end_label,
+ * continue_label). loop_type is "FOR"/"WHILE"/"DO". Resolution scans
+ * inner->outer (reverse). Python class-level mutable; C port is
+ * Translator-scoped, cleared per translator_visit (mirrors reset()). */
+typedef struct LoopEntry {
+    const char *kind;     /* "FOR" / "WHILE" / "DO" */
+    const char *end_label;
+    const char *cont_label;
+} LoopEntry;
+
+/* JumpTable (translator_visitor.py:160-162 + JumpTable dataclass): one
+ * ON GOTO/GOSUB jump table; emitted by emit_jump_tables as
+ * ic_vard(label, ["#count"] + ["##mangled" ...]). */
+typedef struct JumpTableEntry {
+    const char *label;          /* the tmp_label() table label */
+    AstNode   **addresses;      /* the target LABEL id nodes (children[1:]) */
+    int         naddresses;
+} JumpTableEntry;
+
 typedef struct Translator {
     CompilerState *cs;
     Backend       *backend;
+
+    /* TranslatorVisitor class state (translator_visitor.py:43-61). Python
+     * keeps these class-level + clears them in reset(); the C port scopes
+     * them to the Translator and clears them at the top of
+     * translator_visit (the faithful reset() analogue). */
+    LoopEntry       loops[64];   /* the LOOPS stack (translator.py:1009) */
+    int             loops_len;
+    JumpTableEntry  jump_tables[64];
+    int             jump_tables_len;
+    const char     *prev_token;  /* PREV_TOKEN (visit_CHKBREAK guard) */
+    const char     *curr_token;  /* CURR_TOKEN */
 } Translator;
 
 /* zxbc.py:125-126  translator.visit(zxbparser.ast) — appends Quads to
@@ -36,6 +66,12 @@ void translator_visit(Translator *tr, AstNode *ast);
 
 /* zxbc.py:150  translator.ic_inline(";; --- end of user code ---"). */
 void translator_ic_inline(Translator *tr, const char *asm_code);
+
+/* emit_jump_tables (translator_visitor.py:160-162; zxbc.py:148): drains
+ * the ON GOTO/GOSUB JUMP_TABLES into ic_vard quads. Must run after
+ * translator_visit, before ic_inline(end-of-user-code). No-op when no
+ * ON GOTO/GOSUB appeared. */
+void translator_emit_jump_tables(Translator *tr);
 
 /* ---- S5.3 shared TranslatorInstVisitor surface (var_translator.c) ---- */
 

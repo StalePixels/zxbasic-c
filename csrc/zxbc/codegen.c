@@ -230,8 +230,12 @@ int codegen_emit(CompilerState *cs, AstNode *ast) {
      * No functions in the calibration program -> genuine no-op (the
      * Python loop iterates gl.FUNCTIONS, empty here). Real in S5.5+. */
 
-    /* 8  emit_data_blocks / emit_strings / emit_jump_tables
-     * (zxbc.py:144-148): no DATA/strings/jumptables -> no-op. Real S5.8. */
+    /* 8  emit_data_blocks / emit_strings (zxbc.py:144-146): no DATA/
+     * strings -> no-op. Real S5.8. */
+
+    /* 8  translator.emit_jump_tables() (zxbc.py:148): drains the ON
+     * GOTO/GOSUB JUMP_TABLES (S5.5). No-op when none appeared. */
+    translator_emit_jump_tables(&tr);
 
     /* 8  translator.ic_inline(";; --- end of user code ---") (zxbc.py:150) */
     translator_ic_inline(&tr, ";; --- end of user code ---");

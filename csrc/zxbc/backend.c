@@ -325,6 +325,23 @@ static int s_log2(long x) { int n = 0; while (x > 1) { x >>= 1; n++; } return n;
 #define RL_NOTF       ZXBC_NAMESPACE ".__NOTF"
 #define RL_NEGF       ZXBC_NAMESPACE ".__NEGF"
 
+/* S5.5 — control-flow RuntimeLabels (runtime/core.py; NAMESPACE == .core).
+ * ON_GOTO/ON_GOSUB -> "ongoto.asm"; STOP/ERROR -> "error.asm";
+ * CHECK_BREAK -> "break.asm" (core.py:35,47,95-96,114; labels.py map). */
+/* S5.5 — 8/16-bit signed comparison RuntimeLabels (core.py:44,65-72;
+ * the Bits8/Bits16 signed lt/le/gt/ge paths runtime_call these). */
+#define RL_LTI8       ZXBC_NAMESPACE ".__LTI8"
+#define RL_LEI8       ZXBC_NAMESPACE ".__LEI8"
+#define RL_LTI16      ZXBC_NAMESPACE ".__LTI16"
+#define RL_LEI16      ZXBC_NAMESPACE ".__LEI16"
+#define RL_EQ16       ZXBC_NAMESPACE ".__EQ16"
+
+#define RL_ON_GOTO     ZXBC_NAMESPACE ".__ON_GOTO"
+#define RL_ON_GOSUB    ZXBC_NAMESPACE ".__ON_GOSUB"
+#define RL_STOP        ZXBC_NAMESPACE ".__STOP"
+#define RL_ERROR       ZXBC_NAMESPACE ".__ERROR"
+#define RL_CHECK_BREAK ZXBC_NAMESPACE ".CHECK_BREAK"
+
 /* runtime_call (common.py:156-161): REQUIRES.add(LABEL_REQUIRED_MODULES
  * [label]) if present; returns "call {label}". The label->module map is
  * runtime/core.py:160-225 (only the S5.3-reachable labels). */
@@ -396,6 +413,17 @@ static const char *s_required_module(const char *label) {
     if (strcmp(label, RL_ANDF)       == 0) return "bool/andf.asm";
     if (strcmp(label, RL_NOTF)       == 0) return "bool/notf.asm";
     if (strcmp(label, RL_NEGF)       == 0) return "negf.asm";
+    /* S5.5 control-flow modules (runtime/labels.py map, live-verified). */
+    if (strcmp(label, RL_ON_GOTO)    == 0) return "ongoto.asm";
+    if (strcmp(label, RL_ON_GOSUB)   == 0) return "ongoto.asm";
+    if (strcmp(label, RL_STOP)       == 0) return "error.asm";
+    if (strcmp(label, RL_ERROR)      == 0) return "error.asm";
+    if (strcmp(label, RL_CHECK_BREAK)== 0) return "break.asm";
+    if (strcmp(label, RL_LTI8)       == 0) return "cmp/lti8.asm";
+    if (strcmp(label, RL_LEI8)       == 0) return "cmp/lei8.asm";
+    if (strcmp(label, RL_LTI16)      == 0) return "cmp/lti16.asm";
+    if (strcmp(label, RL_LEI16)      == 0) return "cmp/lei16.asm";
+    if (strcmp(label, RL_EQ16)       == 0) return "cmp/eq16.asm";
     return NULL;
 }
 static char *s_runtime_call(Backend *b, const char *label) {
@@ -922,6 +950,11 @@ static char *s_tmp_label(Backend *b) {
     hashmap_set(&b->tmp_labels, r, (void *)1);
     return r;
 }
+
+/* Public tmp_label() accessor — the Translator's control-flow visitors
+ * (S5.5) allocate generated loop/if labels through the one Backend-scoped
+ * counter + TMP_LABELS set (src/api/tmp_labels.py:16-25). */
+char *backend_tmp_label(Backend *b) { return s_tmp_label(b); }
 
 /* Bits32.int32 (_32bit.py:24-32): (int(op) & 0xFFFFFFFF) -> (DE,HL). */
 static void s_int32(const char *op, unsigned *de, unsigned *hl) {
@@ -2009,6 +2042,485 @@ static StrVec emit_retf(Backend *b, Quad *q) {
     return out;
 }
 
+/* ==================================================================== *
+ *  S5.5 — 8/16-bit integer comparisons (the IF/FOR/WHILE condition      *
+ *  producers; Quad("X", t, t1, t2): ins[2]=t1, ins[3]=t2 — result is    *
+ *  PUSHed, not stored. _8bit.py:486-660 / _16bit.py:479-620 verbatim).  *
+ * ==================================================================== */
+
+/* ---- Bits8 comparisons (_8bit.py:486-660) --------------------------- */
+static StrVec emit_ltu8(Backend *b, Quad *q) {
+    StrVec out = bits8_get_oper(b, q_ins(q, 2), q_ins(q, 3), false);
+    sv_push(b, &out, "cp h");
+    sv_push(b, &out, "sbc a, a");
+    sv_push(b, &out, "push af");
+    return out;
+}
+static StrVec emit_lti8(Backend *b, Quad *q) {
+    StrVec out = bits8_get_oper(b, q_ins(q, 2), q_ins(q, 3), false);
+    sv_push(b, &out, s_runtime_call(b, RL_LTI8));
+    sv_push(b, &out, "push af");
+    return out;
+}
+static StrVec emit_gtu8(Backend *b, Quad *q) {
+    StrVec out = bits8_get_oper(b, q_ins(q, 2), q_ins(q, 3), true);
+    sv_push(b, &out, "cp h");
+    sv_push(b, &out, "sbc a, a");
+    sv_push(b, &out, "push af");
+    return out;
+}
+static StrVec emit_gti8(Backend *b, Quad *q) {
+    StrVec out = bits8_get_oper(b, q_ins(q, 2), q_ins(q, 3), true);
+    sv_push(b, &out, s_runtime_call(b, RL_LTI8));
+    sv_push(b, &out, "push af");
+    return out;
+}
+static StrVec emit_eq8(Backend *b, Quad *q) {
+    StrVec out;
+    const char *op3 = q_ins(q, 3);
+    if (s_is_int(op3)) {
+        out = bits8_get_oper(b, q_ins(q, 2), NULL, false);
+        int n = s_int8(s_int_val(op3));
+        if (n) {
+            if (n == 1) sv_push(b, &out, "dec a");
+            else        sv_pushf(b, &out, "sub %d", n);
+        }
+    } else {
+        out = bits8_get_oper(b, q_ins(q, 2), op3, false);
+        sv_push(b, &out, "sub h");
+    }
+    sv_push(b, &out, "sub 1");                      /* Carry only if 0 */
+    sv_push(b, &out, "sbc a, a");
+    sv_push(b, &out, "push af");
+    return out;
+}
+static StrVec emit_leu8(Backend *b, Quad *q) {
+    StrVec out = bits8_get_oper(b, q_ins(q, 2), q_ins(q, 3), true);
+    sv_push(b, &out, "sub h");                       /* Carry if H > A */
+    sv_push(b, &out, "ccf");                         /* Carry if H <= A */
+    sv_push(b, &out, "sbc a, a");
+    sv_push(b, &out, "push af");
+    return out;
+}
+static StrVec emit_lei8(Backend *b, Quad *q) {
+    StrVec out = bits8_get_oper(b, q_ins(q, 2), q_ins(q, 3), false);
+    sv_push(b, &out, s_runtime_call(b, RL_LEI8));
+    sv_push(b, &out, "push af");
+    return out;
+}
+static StrVec emit_geu8(Backend *b, Quad *q) {
+    StrVec out;
+    const char *op3 = q_ins(q, 3);
+    if (s_is_int(op3)) {
+        out = bits8_get_oper(b, q_ins(q, 2), NULL, false);
+        int n = s_int8(s_int_val(op3));
+        if (n) sv_pushf(b, &out, "sub %d", n);
+        else   sv_push(b, &out, "cp a");
+    } else {
+        out = bits8_get_oper(b, q_ins(q, 2), op3, false);
+        sv_push(b, &out, "sub h");
+    }
+    sv_push(b, &out, "ccf");
+    sv_push(b, &out, "sbc a, a");
+    sv_push(b, &out, "push af");
+    return out;
+}
+static StrVec emit_gei8(Backend *b, Quad *q) {
+    StrVec out = bits8_get_oper(b, q_ins(q, 2), q_ins(q, 3), true);
+    sv_push(b, &out, s_runtime_call(b, RL_LEI8));
+    sv_push(b, &out, "push af");
+    return out;
+}
+static StrVec emit_ne8(Backend *b, Quad *q) {
+    StrVec out;
+    const char *op3 = q_ins(q, 3);
+    if (s_is_int(op3)) {
+        out = bits8_get_oper(b, q_ins(q, 2), NULL, false);
+        int n = s_int8(s_int_val(op3));
+        if (n) {
+            if (n == 1) sv_push(b, &out, "dec a");
+            else        sv_pushf(b, &out, "sub %d", n);
+        }
+    } else {
+        out = bits8_get_oper(b, q_ins(q, 2), op3, false);
+        sv_push(b, &out, "sub h");
+    }
+    sv_push(b, &out, "push af");
+    return out;
+}
+
+/* ---- Bits16 comparisons (_16bit.py:479-620) ------------------------- */
+static StrVec emit_ltu16(Backend *b, Quad *q) {
+    StrVec out = bits16_get_oper(b, q_ins(q, 2), q_ins(q, 3), false);
+    sv_push(b, &out, "or a");
+    sv_push(b, &out, "sbc hl, de");
+    sv_push(b, &out, "sbc a, a");
+    sv_push(b, &out, "push af");
+    return out;
+}
+static StrVec emit_lti16(Backend *b, Quad *q) {
+    StrVec out = bits16_get_oper(b, q_ins(q, 2), q_ins(q, 3), false);
+    sv_push(b, &out, s_runtime_call(b, RL_LTI16));
+    sv_push(b, &out, "push af");
+    return out;
+}
+static StrVec emit_gtu16(Backend *b, Quad *q) {
+    StrVec out = bits16_get_oper(b, q_ins(q, 2), q_ins(q, 3), true);
+    sv_push(b, &out, "or a");
+    sv_push(b, &out, "sbc hl, de");
+    sv_push(b, &out, "sbc a, a");
+    sv_push(b, &out, "push af");
+    return out;
+}
+static StrVec emit_gti16(Backend *b, Quad *q) {
+    StrVec out = bits16_get_oper(b, q_ins(q, 2), q_ins(q, 3), true);
+    sv_push(b, &out, s_runtime_call(b, RL_LTI16));
+    sv_push(b, &out, "push af");
+    return out;
+}
+static StrVec emit_leu16(Backend *b, Quad *q) {
+    StrVec out = bits16_get_oper(b, q_ins(q, 2), q_ins(q, 3), true);
+    sv_push(b, &out, "or a");
+    sv_push(b, &out, "sbc hl, de");                  /* Carry if A > B */
+    sv_push(b, &out, "ccf");                         /* Carry if A <= B */
+    sv_push(b, &out, "sbc a, a");
+    sv_push(b, &out, "push af");
+    return out;
+}
+static StrVec emit_lei16(Backend *b, Quad *q) {
+    StrVec out = bits16_get_oper(b, q_ins(q, 2), q_ins(q, 3), false);
+    sv_push(b, &out, s_runtime_call(b, RL_LEI16));
+    sv_push(b, &out, "push af");
+    return out;
+}
+static StrVec emit_geu16(Backend *b, Quad *q) {
+    StrVec out = bits16_get_oper(b, q_ins(q, 2), q_ins(q, 3), false);
+    sv_push(b, &out, "or a");
+    sv_push(b, &out, "sbc hl, de");
+    sv_push(b, &out, "ccf");
+    sv_push(b, &out, "sbc a, a");
+    sv_push(b, &out, "push af");
+    return out;
+}
+static StrVec emit_gei16(Backend *b, Quad *q) {
+    StrVec out = bits16_get_oper(b, q_ins(q, 2), q_ins(q, 3), true);
+    sv_push(b, &out, s_runtime_call(b, RL_LEI16));
+    sv_push(b, &out, "push af");
+    return out;
+}
+static StrVec emit_eq16(Backend *b, Quad *q) {
+    StrVec out = bits16_get_oper(b, q_ins(q, 2), q_ins(q, 3), false);
+    sv_push(b, &out, s_runtime_call(b, RL_EQ16));
+    sv_push(b, &out, "push af");
+    return out;
+}
+static StrVec emit_ne16(Backend *b, Quad *q) {
+    StrVec out = bits16_get_oper(b, q_ins(q, 2), q_ins(q, 3), false);
+    sv_push(b, &out, "or a");                        /* reset carry */
+    sv_push(b, &out, "sbc hl, de");
+    sv_push(b, &out, "ld a, h");
+    sv_push(b, &out, "or l");
+    sv_push(b, &out, "push af");
+    return out;
+}
+
+/* ==================================================================== *
+ *  S5.5 — FLOW CONTROL                                                  *
+ * ==================================================================== */
+
+/* 0-based Quad arg accessor (Python ins[1]==first arg==args[0]). The
+ * S5.5 emitters below index args directly; qa(q,0)==ins[1], qa(q,1)==
+ * ins[2] — equivalently q_ins(q,1)/q_ins(q,2). */
+static const char *qa(Quad *q, int i) {
+    if (i < 0 || i >= q->nargs) return "";
+    return q->args[i];
+}
+
+/* ---- _jump (generic.py:393-395): ["jp %s" % str(ins[1])] ------------- */
+static StrVec emit_jump(Backend *b, Quad *q) {
+    StrVec out = sv_new();
+    sv_pushf(b, &out, "jp %s", qa(q, 0));
+    return out;
+}
+
+/* ---- _ret (generic.py:398-400): ["jp %s" % str(ins[1])] -------------- *
+ * The parameterless RET ic (Quad("ret", addr)). ins[1] == qa(q,0). */
+static StrVec emit_ret(Backend *b, Quad *q) {
+    StrVec out = sv_new();
+    sv_pushf(b, &out, "jp %s", qa(q, 0));
+    return out;
+}
+
+/* ---- _call (generic.py:403-431) -------------------------------------- *
+ * Quad("call", label, num). ins[1]=label (qa 0), ins[2]=num (qa 1).
+ * int(ins[2]) drives the result-push: 1->push af; >4->Float.fpush();
+ * >2->push de; >1->push hl. ValueError -> no push. */
+static StrVec emit_call(Backend *b, Quad *q) {
+    StrVec out = sv_new();
+    sv_pushf(b, &out, "call %s", qa(q, 0));
+    const char *nstr = qa(q, 1);
+    if (s_is_int(nstr)) {
+        long val = s_int_val(nstr);
+        if (val == 1) {
+            sv_push(b, &out, "push af");          /* Byte */
+        } else if (val > 4) {
+            float_fpush(b, &out);
+        } else {
+            if (val > 2) sv_push(b, &out, "push de");
+            if (val > 1) sv_push(b, &out, "push hl");
+        }
+    }
+    return out;
+}
+
+/* The jzero/jnzero/jgezero idiom (capture §2c). Quad shape:
+ *   Quad("jzeroX", t, label) -> ins[1]=t (qa 0), ins[2]=label (qa 1).
+ * Integer modules gate the constant-fold on is_int (rejects "1.0"); the
+ * float/f16 modules gate on is_float (accepts "1" and "1.0"). */
+
+/* ---- Bits8.jzero8/jnzero8/jgezerou8/jgezeroi8 (_8bit.py:1103-1155) ---- */
+static StrVec emit_jzero8(Backend *b, Quad *q) {
+    const char *value = qa(q, 0);
+    if (s_is_int(value)) {
+        StrVec out = sv_new();
+        if (s_int_val(value) == 0) sv_pushf(b, &out, "jp %s", qa(q, 1));
+        return out;                               /* != 0 -> [] */
+    }
+    StrVec out = bits8_get_oper(b, value, NULL, false);
+    sv_push(b, &out, "or a");
+    sv_pushf(b, &out, "jp z, %s", qa(q, 1));
+    return out;
+}
+static StrVec emit_jnzero8(Backend *b, Quad *q) {
+    const char *value = qa(q, 0);
+    if (s_is_int(value)) {
+        StrVec out = sv_new();
+        if (s_int_val(value) != 0) sv_pushf(b, &out, "jp %s", qa(q, 1));
+        return out;
+    }
+    StrVec out = bits8_get_oper(b, value, NULL, false);
+    sv_push(b, &out, "or a");
+    sv_pushf(b, &out, "jp nz, %s", qa(q, 1));
+    return out;
+}
+static StrVec emit_jgezerou8(Backend *b, Quad *q) {
+    const char *value = qa(q, 0);
+    StrVec out = sv_new();
+    if (!s_is_int(value)) { vec_free(out); out = bits8_get_oper(b, value, NULL, false); }
+    sv_pushf(b, &out, "jp %s", qa(q, 1));
+    return out;
+}
+static StrVec emit_jgezeroi8(Backend *b, Quad *q) {
+    const char *value = qa(q, 0);
+    if (s_is_int(value)) {
+        StrVec out = sv_new();
+        if (s_int_val(value) >= 0) sv_pushf(b, &out, "jp %s", qa(q, 1));
+        return out;
+    }
+    StrVec out = bits8_get_oper(b, value, NULL, false);
+    sv_push(b, &out, "add a, a");                  /* sign -> carry */
+    sv_pushf(b, &out, "jp nc, %s", qa(q, 1));
+    return out;
+}
+
+/* ---- Bits16.jzero16/jnzero16/jgezerou16/jgezeroi16 (_16bit.py:1070-1148) */
+static StrVec emit_jzero16(Backend *b, Quad *q) {
+    const char *value = qa(q, 0);
+    if (s_is_int(value)) {
+        StrVec out = sv_new();
+        if (s_int_val(value) == 0) sv_pushf(b, &out, "jp %s", qa(q, 1));
+        return out;
+    }
+    StrVec out = bits16_get_oper(b, value, NULL, false);
+    sv_push(b, &out, "ld a, h");
+    sv_push(b, &out, "or l");
+    sv_pushf(b, &out, "jp z, %s", qa(q, 1));
+    return out;
+}
+static StrVec emit_jnzero16(Backend *b, Quad *q) {
+    const char *value = qa(q, 0);
+    if (s_is_int(value)) {
+        StrVec out = sv_new();
+        if (s_int_val(value) != 0) sv_pushf(b, &out, "jp %s", qa(q, 1));
+        return out;
+    }
+    StrVec out = bits16_get_oper(b, value, NULL, false);
+    sv_push(b, &out, "ld a, h");
+    sv_push(b, &out, "or l");
+    sv_pushf(b, &out, "jp nz, %s", qa(q, 1));
+    return out;
+}
+static StrVec emit_jgezerou16(Backend *b, Quad *q) {
+    const char *value = qa(q, 0);
+    StrVec out = sv_new();
+    if (!s_is_int(value)) { vec_free(out); out = bits16_get_oper(b, value, NULL, false); }
+    sv_pushf(b, &out, "jp %s", qa(q, 1));
+    return out;
+}
+static StrVec emit_jgezeroi16(Backend *b, Quad *q) {
+    const char *value = qa(q, 0);
+    if (s_is_int(value)) {
+        StrVec out = sv_new();
+        if (s_int_val(value) >= 0) sv_pushf(b, &out, "jp %s", qa(q, 1));
+        return out;
+    }
+    StrVec out = bits16_get_oper(b, value, NULL, false);
+    sv_push(b, &out, "add hl, hl");                /* sign -> carry */
+    sv_pushf(b, &out, "jp nc, %s", qa(q, 1));
+    return out;
+}
+
+/* ---- Bits32.jzero32/jnzero32/jgezerou32/jgezeroi32 (_32bit.py:916-1000) */
+static StrVec emit_jzero32(Backend *b, Quad *q) {
+    const char *value = qa(q, 0);
+    if (s_is_int(value)) {
+        StrVec out = sv_new();
+        if (s_int_val(value) == 0) sv_pushf(b, &out, "jp %s", qa(q, 1));
+        return out;
+    }
+    StrVec out = bits32_get_oper(b, value, NULL, false, false);
+    sv_push(b, &out, "ld a, h");
+    sv_push(b, &out, "or l");
+    sv_push(b, &out, "or e");
+    sv_push(b, &out, "or d");
+    sv_pushf(b, &out, "jp z, %s", qa(q, 1));
+    return out;
+}
+static StrVec emit_jnzero32(Backend *b, Quad *q) {
+    const char *value = qa(q, 0);
+    if (s_is_int(value)) {
+        StrVec out = sv_new();
+        if (s_int_val(value) != 0) sv_pushf(b, &out, "jp %s", qa(q, 1));
+        return out;
+    }
+    StrVec out = bits32_get_oper(b, value, NULL, false, false);
+    sv_push(b, &out, "ld a, h");
+    sv_push(b, &out, "or l");
+    sv_push(b, &out, "or e");
+    sv_push(b, &out, "or d");
+    sv_pushf(b, &out, "jp nz, %s", qa(q, 1));
+    return out;
+}
+static StrVec emit_jgezerou32(Backend *b, Quad *q) {
+    const char *value = qa(q, 0);
+    StrVec out = sv_new();
+    if (!s_is_int(value)) { vec_free(out); out = bits32_get_oper(b, value, NULL, false, false); }
+    sv_pushf(b, &out, "jp %s", qa(q, 1));
+    return out;
+}
+static StrVec emit_jgezeroi32(Backend *b, Quad *q) {
+    const char *value = qa(q, 0);
+    if (s_is_int(value)) {
+        StrVec out = sv_new();
+        if (s_int_val(value) >= 0) sv_pushf(b, &out, "jp %s", qa(q, 1));
+        return out;
+    }
+    StrVec out = bits32_get_oper(b, value, NULL, false, false);
+    sv_push(b, &out, "ld a, d");
+    sv_push(b, &out, "add a, a");                  /* sign -> carry */
+    sv_pushf(b, &out, "jp nc, %s", qa(q, 1));
+    return out;
+}
+
+/* ---- Fixed16.jzerof16/jnzerof16/jgezerof16 (_f16.py:444-493) --------- *
+ * fixed-point gates on is_float; jgezerof16 has NO "<0 -> return []"
+ * early-out (capture §2d quirk) — it falls through to get_oper. */
+static StrVec emit_jzerof16(Backend *b, Quad *q) {
+    const char *value = qa(q, 0);
+    if (s_is_float(value)) {
+        StrVec out = sv_new();
+        if (s_float_val(value) == 0) sv_pushf(b, &out, "jp %s", qa(q, 1));
+        return out;
+    }
+    StrVec out = fixed16_get_oper(b, value, NULL, false, false);
+    sv_push(b, &out, "ld a, h");
+    sv_push(b, &out, "or l");
+    sv_push(b, &out, "or e");
+    sv_push(b, &out, "or d");
+    sv_pushf(b, &out, "jp z, %s", qa(q, 1));
+    return out;
+}
+static StrVec emit_jnzerof16(Backend *b, Quad *q) {
+    const char *value = qa(q, 0);
+    if (s_is_float(value)) {
+        StrVec out = sv_new();
+        if (s_float_val(value) != 0) sv_pushf(b, &out, "jp %s", qa(q, 1));
+        return out;
+    }
+    StrVec out = fixed16_get_oper(b, value, NULL, false, false);
+    sv_push(b, &out, "ld a, h");
+    sv_push(b, &out, "or l");
+    sv_push(b, &out, "or e");
+    sv_push(b, &out, "or d");
+    sv_pushf(b, &out, "jp nz, %s", qa(q, 1));
+    return out;
+}
+static StrVec emit_jgezerof16(Backend *b, Quad *q) {
+    const char *value = qa(q, 0);
+    StrVec out;
+    if (s_is_float(value) && s_float_val(value) >= 0) {
+        out = sv_new();
+        sv_pushf(b, &out, "jp %s", qa(q, 1));
+        return out;                               /* NB: no [] for <0 */
+    }
+    out = fixed16_get_oper(b, value, NULL, false, false);
+    sv_push(b, &out, "ld a, d");
+    sv_push(b, &out, "add a, a");                  /* sign -> carry */
+    sv_pushf(b, &out, "jp nc, %s", qa(q, 1));
+    return out;
+}
+
+/* ---- Float.jzerof/jnzerof/jgezerof (_float.py:386-433) --------------- *
+ * the named S5.4 nef.bas residual. 5-byte ZX FP zero-test is
+ * ld a,c / or l / or h / or e / or d; sign byte = e. jgezerof shares the
+ * f16 fall-through quirk (no [] for <0). */
+static StrVec emit_jzerof(Backend *b, Quad *q) {
+    const char *value = qa(q, 0);
+    if (s_is_float(value)) {
+        StrVec out = sv_new();
+        if (s_float_val(value) == 0) sv_pushf(b, &out, "jp %s", qa(q, 1));
+        return out;
+    }
+    StrVec out = float_get_oper(b, value, NULL);
+    sv_push(b, &out, "ld a, c");
+    sv_push(b, &out, "or l");
+    sv_push(b, &out, "or h");
+    sv_push(b, &out, "or e");
+    sv_push(b, &out, "or d");
+    sv_pushf(b, &out, "jp z, %s", qa(q, 1));
+    return out;
+}
+static StrVec emit_jnzerof(Backend *b, Quad *q) {
+    const char *value = qa(q, 0);
+    if (s_is_float(value)) {
+        StrVec out = sv_new();
+        if (s_float_val(value) != 0) sv_pushf(b, &out, "jp %s", qa(q, 1));
+        return out;
+    }
+    StrVec out = float_get_oper(b, value, NULL);
+    sv_push(b, &out, "ld a, c");
+    sv_push(b, &out, "or l");
+    sv_push(b, &out, "or h");
+    sv_push(b, &out, "or e");
+    sv_push(b, &out, "or d");
+    sv_pushf(b, &out, "jp nz, %s", qa(q, 1));
+    return out;
+}
+static StrVec emit_jgezerof(Backend *b, Quad *q) {
+    const char *value = qa(q, 0);
+    StrVec out;
+    if (s_is_float(value) && s_float_val(value) >= 0) {
+        out = sv_new();
+        sv_pushf(b, &out, "jp %s", qa(q, 1));
+        return out;                               /* NB: no [] for <0 */
+    }
+    out = float_get_oper(b, value, NULL);
+    sv_push(b, &out, "ld a, e");                   /* sign from mantissa */
+    sv_push(b, &out, "add a, a");                  /* sign -> carry */
+    sv_pushf(b, &out, "jp nc, %s", qa(q, 1));
+    return out;
+}
+
 /* ---- _label (generic.py:92-94): ["%s:" % str(ins[1])] ----------------- */
 static StrVec emit_label(Backend *b, Quad *q) {
     StrVec out = sv_new();
@@ -2020,6 +2532,67 @@ static StrVec emit_label(Backend *b, Quad *q) {
 static StrVec emit_deflabel(Backend *b, Quad *q) {
     StrVec out = sv_new();
     sv_pushf(b, &out, "%s EQU %s", q->args[0], q->args[1]);
+    return out;
+}
+
+/* ---- _leave (generic.py:472-535) ------------------------------------- *
+ * Quad("leave", N|"__fastcall__"). "__fastcall__" -> ["ret"]. Otherwise
+ * pop N param bytes off the stack then ret. IDX_REG == "ix"
+ * (common.py:121). FLAG_use_function_exit gates the shared __EXIT_FUNCTION
+ * trampoline for nbytes > 11. S5.5 RETURN only ever hits __fastcall__;
+ * the byte-popping arms are ported faithfully for FunctionTranslator. */
+static StrVec emit_leave(Backend *b, Quad *q) {
+    StrVec out = sv_new();
+    const char *a = q_ins(q, 1);
+    if (strcmp(a, "__fastcall__") == 0) {
+        sv_push(b, &out, "ret");
+        return out;
+    }
+    long nbytes = s_int_val(a);
+    if (nbytes == 0) {
+        sv_push(b, &out, "ld sp, ix");
+        sv_push(b, &out, "pop ix");
+        sv_push(b, &out, "ret");
+        return out;
+    }
+    if (nbytes == 1) {
+        sv_push(b, &out, "ld sp, ix");
+        sv_push(b, &out, "pop ix");
+        sv_push(b, &out, "inc sp");
+        sv_push(b, &out, "ret");
+        return out;
+    }
+    if (nbytes <= 11) {
+        sv_push(b, &out, "ld sp, ix");
+        sv_push(b, &out, "pop ix");
+        sv_push(b, &out, "exx");
+        sv_push(b, &out, "pop hl");
+        for (long i = 0; i < (nbytes >> 1) - 1; i++)
+            sv_push(b, &out, "pop bc");
+        if (nbytes & 1) sv_push(b, &out, "inc sp");
+        sv_push(b, &out, "ex (sp), hl");
+        sv_push(b, &out, "exx");
+        sv_push(b, &out, "ret");
+        return out;
+    }
+    if (!b->flag_use_function_exit) {
+        b->flag_use_function_exit = true;
+        sv_push(b, &out, "exx");
+        sv_pushf(b, &out, "ld hl, %ld", nbytes);
+        sv_push(b, &out, "__EXIT_FUNCTION:");
+        sv_push(b, &out, "ld sp, ix");
+        sv_push(b, &out, "pop ix");
+        sv_push(b, &out, "pop de");
+        sv_push(b, &out, "add hl, sp");
+        sv_push(b, &out, "ld sp, hl");
+        sv_push(b, &out, "push de");
+        sv_push(b, &out, "exx");
+        sv_push(b, &out, "ret");
+    } else {
+        sv_push(b, &out, "exx");
+        sv_pushf(b, &out, "ld hl, %ld", nbytes);
+        sv_push(b, &out, "jp __EXIT_FUNCTION");
+    }
     return out;
 }
 
@@ -2376,6 +2949,34 @@ static StrVec quad_emit(Backend *b, Quad *q) {
     if (strcmp(I, "deflabel") == 0) return emit_deflabel(b, q);
     if (strcmp(I, "label")    == 0) return emit_label(b, q);
 
+    /* ---- S5.5 — flow-control _QUAD_TABLE rows (main.py:308-398).
+     * JUMP/CALL/RET scaffolding + the jzero/jnzero/jgezero width-split
+     * (JZERO{I8,U8,I16,U16,I32,U32,F16,F} etc.). The IC opcode string is
+     * the Quad's first token; ICInstruction membername->opcode mapping in
+     * backend/icinstruction.py. No per-width JUMP/LABEL/CALL/RET split. */
+    if (strcmp(I, "jump")     == 0) return emit_jump(b, q);
+    if (strcmp(I, "call")     == 0) return emit_call(b, q);
+    if (strcmp(I, "ret")      == 0) return emit_ret(b, q);
+    if (strcmp(I, "leave")    == 0) return emit_leave(b, q);
+    if (strcmp(I, "jzeroi8")  == 0 || strcmp(I, "jzerou8")  == 0) return emit_jzero8(b, q);
+    if (strcmp(I, "jzeroi16") == 0 || strcmp(I, "jzerou16") == 0) return emit_jzero16(b, q);
+    if (strcmp(I, "jzeroi32") == 0 || strcmp(I, "jzerou32") == 0) return emit_jzero32(b, q);
+    if (strcmp(I, "jzerof16") == 0) return emit_jzerof16(b, q);
+    if (strcmp(I, "jzerof")   == 0) return emit_jzerof(b, q);
+    if (strcmp(I, "jnzeroi8") == 0 || strcmp(I, "jnzerou8") == 0) return emit_jnzero8(b, q);
+    if (strcmp(I, "jnzeroi16")== 0 || strcmp(I, "jnzerou16")== 0) return emit_jnzero16(b, q);
+    if (strcmp(I, "jnzeroi32")== 0 || strcmp(I, "jnzerou32")== 0) return emit_jnzero32(b, q);
+    if (strcmp(I, "jnzerof16")== 0) return emit_jnzerof16(b, q);
+    if (strcmp(I, "jnzerof")  == 0) return emit_jnzerof(b, q);
+    if (strcmp(I, "jgezeroi8")== 0) return emit_jgezeroi8(b, q);
+    if (strcmp(I, "jgezerou8")== 0) return emit_jgezerou8(b, q);
+    if (strcmp(I, "jgezeroi16")==0) return emit_jgezeroi16(b, q);
+    if (strcmp(I, "jgezerou16")==0) return emit_jgezerou16(b, q);
+    if (strcmp(I, "jgezeroi32")==0) return emit_jgezeroi32(b, q);
+    if (strcmp(I, "jgezerou32")==0) return emit_jgezerou32(b, q);
+    if (strcmp(I, "jgezerof16")==0) return emit_jgezerof16(b, q);
+    if (strcmp(I, "jgezerof") == 0) return emit_jgezerof(b, q);
+
     /* ---- S5.4 — wide (i32/u32), fixed (f16), float (f) _QUAD_TABLE rows
      * (main.py:158-585). STOREI32/STOREU32 -> Bits32.store32 etc.;
      * VAR/VARD/STORE are the type-generic emitters above. */
@@ -2410,6 +3011,28 @@ static StrVec quad_emit(Backend *b, Quad *q) {
     if (strcmp(I, "shri32") == 0) return emit_shri32(b, q);
     if (strcmp(I, "shlu32") == 0 || strcmp(I, "shli32") == 0) return emit_shl32(b, q);
     /* comparisons */
+    /* S5.5 — 8/16-bit integer comparisons (main.py:209-257). */
+    if (strcmp(I, "ltu8")  == 0) return emit_ltu8(b, q);
+    if (strcmp(I, "lti8")  == 0) return emit_lti8(b, q);
+    if (strcmp(I, "ltu16") == 0) return emit_ltu16(b, q);
+    if (strcmp(I, "lti16") == 0) return emit_lti16(b, q);
+    if (strcmp(I, "gtu8")  == 0) return emit_gtu8(b, q);
+    if (strcmp(I, "gti8")  == 0) return emit_gti8(b, q);
+    if (strcmp(I, "gtu16") == 0) return emit_gtu16(b, q);
+    if (strcmp(I, "gti16") == 0) return emit_gti16(b, q);
+    if (strcmp(I, "leu8")  == 0) return emit_leu8(b, q);
+    if (strcmp(I, "lei8")  == 0) return emit_lei8(b, q);
+    if (strcmp(I, "leu16") == 0) return emit_leu16(b, q);
+    if (strcmp(I, "lei16") == 0) return emit_lei16(b, q);
+    if (strcmp(I, "geu8")  == 0) return emit_geu8(b, q);
+    if (strcmp(I, "gei8")  == 0) return emit_gei8(b, q);
+    if (strcmp(I, "geu16") == 0) return emit_geu16(b, q);
+    if (strcmp(I, "gei16") == 0) return emit_gei16(b, q);
+    if (strcmp(I, "equ8")  == 0 || strcmp(I, "eqi8")  == 0) return emit_eq8(b, q);
+    if (strcmp(I, "equ16") == 0 || strcmp(I, "eqi16") == 0) return emit_eq16(b, q);
+    if (strcmp(I, "neu8")  == 0 || strcmp(I, "nei8")  == 0) return emit_ne8(b, q);
+    if (strcmp(I, "neu16") == 0 || strcmp(I, "nei16") == 0) return emit_ne16(b, q);
+
     if (strcmp(I, "ltu32") == 0) return emit_ltu32(b, q);
     if (strcmp(I, "lti32") == 0) return emit_lti32(b, q);
     if (strcmp(I, "ltf16") == 0) return emit_ltf16(b, q);
