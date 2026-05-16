@@ -539,13 +539,6 @@ int mem_dump(AsmState *as, int *org_out, uint8_t **data_out, int *data_len)
         }
     }
 
-    if (min_addr < 0) {
-        *org_out = 0;
-        *data_out = NULL;
-        *data_len = 0;
-        return 0;
-    }
-
     /* Resolve temporary labels */
     for (int i = 0; i < m->tmp_pending.capacity; i++) {
         HashEntry *entry = &m->tmp_pending.entries[i];
@@ -587,11 +580,23 @@ int mem_dump(AsmState *as, int *org_out, uint8_t **data_out, int *data_len)
         }
     }
 
+    /* Python Memory.dump() (src/zxbasm/memory.py:169-181) runs the
+     * temporary- and GLOBAL-label sweeps BEFORE the byte loop and does
+     * not short-circuit on empty output: an undefined label in a unit
+     * that emits no bytes (e.g. `L EQU UNDEF + 1`) must still error.
+     * Hence the sweeps above precede the empty-memory early return. */
     if (as->error_count > 0) {
-        *org_out = min_addr;
+        *org_out = (min_addr < 0) ? 0 : min_addr;
         *data_out = NULL;
         *data_len = 0;
         return -1;
+    }
+
+    if (min_addr < 0) {
+        *org_out = 0;
+        *data_out = NULL;
+        *data_len = 0;
+        return 0;
     }
 
     /* Second pass: re-resolve pending instructions and overwrite memory.
