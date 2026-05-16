@@ -12,6 +12,7 @@
  * three passes land in S2.2-S2.4.
  */
 #include "visitor.h"
+#include "passes/unreachable.h"
 #include "passes/functiongraph.h"
 
 #include <string.h>
@@ -96,5 +97,7 @@ void visitor_run_passes(CompilerState *cs, AstNode *ast) {
      * own Visitor/ctx (Python constructs a fresh visitor per pass). */
     if (!ast)
         return;
-    functiongraph_run(cs, ast);
+    unreachable_run(cs, ast);   /* pass 1 — Python zxbc.py:113-114 */
+    functiongraph_run(cs, ast); /* pass 2 — Python zxbc.py:117-118 */
+    /* S2.4 appends optimizer_run() — Python zxbc.py:121-122. */
 }
