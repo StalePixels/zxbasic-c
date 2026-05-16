@@ -26,6 +26,14 @@ add_library(zxbc_parser_lib STATIC
     ic.c
     backend_common.c
     translator.c
+    z80asm.c
+    peephole/memcell.c
+    peephole/pattern.c
+    peephole/template.c
+    peephole/evaluator.c
+    peephole/parser.c
+    peephole/engine.c
+    peephole/opts_embedded.c
 )
 
 target_include_directories(zxbc_parser_lib PUBLIC
