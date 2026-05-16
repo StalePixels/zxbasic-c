@@ -34,6 +34,7 @@ add_library(zxbc_parser_lib STATIC
     peephole/parser.c
     peephole/engine.c
     peephole/opts_embedded.c
+    backend.c
 )
 
 target_include_directories(zxbc_parser_lib PUBLIC

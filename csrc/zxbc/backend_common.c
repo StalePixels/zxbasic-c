@@ -40,6 +40,14 @@ void backend_init(Backend *b, Arena *arena) {
 
     backend_common_reset(b); /* common.init() */
     vec_clear(b->memory);    /* Backend.init(): self.MEMORY.clear() */
+
+    /* OPTIONS the emitter reads — defaults per options.c / backend.init()
+     * (Backend.init OPTIONS.org default 32768). The driver overrides
+     * these from cs->opts before emit. */
+    b->org = 32768;
+    b->headerless = false;
+    b->autorun = false;
+    b->opt_level = 2;
 }
 
 char *backend_new_asmid(Backend *b) {
