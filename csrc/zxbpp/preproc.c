@@ -1785,21 +1785,20 @@ static bool is_comment_only_line(const char *line, bool in_asm)
 }
 
 /* Strip trailing comment from a line, returning a new arena-allocated string.
- * Also strips trailing whitespace after removing the comment. */
+ * The text before the comment is kept verbatim. Python's zxbpp lexer
+ * emits the whitespace preceding a comment as SEPARATOR tokens
+ * (src/zxbpp/zxbpplex.py: t_INITIAL_COMMENT:84 consumes only the
+ * comment introducer; the prior `[ \t]+` SEPARATOR:371 was already
+ * returned to OUTPUT), so pre-comment whitespace is preserved, not
+ * stripped. */
 static char *strip_comment(PreprocState *pp, const char *line)
 {
     const char *comment = find_comment(line, pp->in_asm);
     if (!comment) return NULL; /* no comment found */
 
-    /* Copy everything before the comment */
+    /* Copy everything before the comment, verbatim */
     size_t len = (size_t)(comment - line);
-    char *result = arena_strndup(&pp->arena, line, len);
-    /* Strip trailing whitespace */
-    int rlen = (int)len;
-    while (rlen > 0 && (result[rlen-1] == ' ' || result[rlen-1] == '\t'))
-        rlen--;
-    result[rlen] = '\0';
-    return result;
+    return arena_strndup(&pp->arena, line, len);
 }
 
 /* Check if line starts/ends ASM mode. Updates pp->in_asm.
@@ -1941,8 +1940,14 @@ static void process_line(PreprocState *pp, const char *line)
     /* Track ASM mode transitions */
     check_asm_boundary(pp, line);
 
-    /* Comment-only lines → blank line */
+    /* Comment-only line → its leading-whitespace run, then newline.
+     * Python's lexer returns the run of spaces/tabs before the comment
+     * introducer as a SEPARATOR token (src/zxbpp/zxbpplex.py:371) which
+     * is emitted to OUTPUT; only the comment body is discarded. A bare
+     * blank line would drop that leading whitespace. */
     if (is_comment_only_line(line, pp->in_asm)) {
+        const char *p = skip_ws(line);
+        strbuf_append_n(&pp->output, line, (size_t)(p - line));
         strbuf_append_char(&pp->output, '\n');
         pp->has_output = true;
         return;
