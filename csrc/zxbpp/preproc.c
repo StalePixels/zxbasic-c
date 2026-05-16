@@ -384,8 +384,15 @@ static char *resolve_include(PreprocState *pp, const char *name, bool is_system)
         }
     }
 
-    /* Try current directory */
-    if (access(name, R_OK) == 0) {
+    /* Last-resort current-directory fallback — local ("...") includes
+     * only. Python's search_filename treats a system (<...>) include as
+     * local_first=False: it searches ONLY the include-path chain, never
+     * the cwd (src/zxbpp/zxbpp.py:185-205). Without this guard a
+     * `#include <foo.bas>` run from a directory containing a same-named
+     * file resolves to that file — and if it is the including file
+     * itself (e.g. tests/.../print42.bas == `#include <print42.bas>`),
+     * that is unbounded self-inclusion -> stack overflow. */
+    if (!is_system && access(name, R_OK) == 0) {
         return arena_strdup(&pp->arena, name);
     }
 
