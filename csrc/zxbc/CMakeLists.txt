@@ -20,6 +20,7 @@ add_library(zxbc_parser_lib STATIC
     compiler.c
     options.c
     visitor.c
+    passes/functiongraph.c
 )
 
 target_include_directories(zxbc_parser_lib PUBLIC

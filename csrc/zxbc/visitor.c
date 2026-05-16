@@ -12,6 +12,7 @@
  * three passes land in S2.2-S2.4.
  */
 #include "visitor.h"
+#include "passes/functiongraph.h"
 
 #include <string.h>
 
@@ -87,12 +88,13 @@ AstNode *visitor_visit(Visitor *v, AstNode *node) {
 }
 
 void visitor_run_passes(CompilerState *cs, AstNode *ast) {
-    /* S2.1 (Phase 2 groundwork): inert wire-in point. The three passes
-     * — UnreachableCodeVisitor, FunctionGraphVisitor, OptimizerVisitor
-     * (Python src/api/optimize.py:92/161/198, run in that order per
-     * src/zxbc/zxbc.py:107-141) — are registered and invoked here in
-     * S2.2-S2.4. Until then this is a no-op so the framework is inert
-     * and every prior meter stays byte-identical. */
-    (void)cs;
-    (void)ast;
+    /* Python order: UnreachableCodeVisitor -> FunctionGraphVisitor ->
+     * OptimizerVisitor (src/zxbc/zxbc.py:107-141). S2.2 ships
+     * FunctionGraph only; with a single pass the interim ordering is
+     * trivially correct. S2.3 prepends unreachable_run(), S2.4 appends
+     * optimizer_run(), reaching Python's exact order. Each pass uses its
+     * own Visitor/ctx (Python constructs a fresh visitor per pass). */
+    if (!ast)
+        return;
+    functiongraph_run(cs, ast);
 }
