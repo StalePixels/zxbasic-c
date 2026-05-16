@@ -8,6 +8,7 @@
 #include "parser.h"
 #include "errmsg.h"
 #include "visitor.h"
+#include "codegen.h"
 #include "zxbpp.h"
 #include "cwalk.h"
 
@@ -123,9 +124,10 @@ int main(int argc, char *argv[]) {
         if (cs.opts.debug_level > 0)
             zxbc_info(&cs, "Parse OK (%d top-level statements)", ast->child_count);
     } else if (rc == 0) {
-        /* TODO: code generation */
-        fprintf(stderr, "zxbc: code generation not yet implemented (Phase 3 in progress)\n");
-        rc = 1;
+        /* Code generation (zxbc.py:125-214, output_file_type==ASM path). */
+        rc = codegen_emit(&cs, ast);
+        if (cs.error_count > 0)
+            rc = 1;
     }
 
     /* Cleanup */
