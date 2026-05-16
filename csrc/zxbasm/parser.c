@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include "compat.h"   /* access()/R_OK, cross-platform */
 
 /* Token types, Lexer, Token are all declared in zxbasm.h */
 
@@ -1626,10 +1627,23 @@ static void parse_asm(Parser *p)
             snprintf(path, sizeof(path), "%s", fname);
         }
 
-        FILE *f = fopen(path, "rb");
-        if (!f) {
-            f = fopen(fname, "rb");
+        /* Resolve via the search path (mirrors zxbpp.search_filename in
+         * src/zxbasm/asmparse.py:393): a file absent from every search
+         * location is "not found" (zxbpp.py:204). "cannot read file" is
+         * reserved for the open/read failure of a file that *was* located
+         * (the Python open_file IOError branch, asmparse.py:402). */
+        const char *resolved = NULL;
+        if (access(path, R_OK) == 0) {
+            resolved = path;
+        } else if (access(fname, R_OK) == 0) {
+            resolved = fname;
         }
+        if (!resolved) {
+            asm_error(p->as, lineno, "file '%s' not found", fname);
+            return;
+        }
+
+        FILE *f = fopen(resolved, "rb");
         if (!f) {
             asm_error(p->as, lineno, "cannot read file '%s'", fname);
             return;
