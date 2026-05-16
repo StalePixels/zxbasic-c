@@ -69,7 +69,8 @@ int main(int argc, char *argv[]) {
 
     int pp_rc = preproc_file(&pp, cs.opts.input_filename);
     if (pp_rc != 0 || pp.error_count > 0) {
-        fprintf(stderr, "zxbc: preprocessing failed\n");
+        /* Python prints no extra trailer on preprocess failure — the
+         * preproc error itself was already emitted (zxbpp.py path). */
         preproc_destroy(&pp);
         compiler_destroy(&cs);
         return 1;

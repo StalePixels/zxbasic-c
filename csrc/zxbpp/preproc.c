@@ -1334,7 +1334,8 @@ static void handle_include(PreprocState *pp, const char *rest)
     if (!resolved)
         resolved = resolve_include(pp, fn, is_system);
     if (!resolved) {
-        preproc_error(pp, "cannot find include file \"%s\"", filename);
+        /* Python zxbpp.py:204: error(lineno, "file '%s' not found" % fname) */
+        preproc_error(pp, "file '%s' not found", filename);
         return;
     }
 
