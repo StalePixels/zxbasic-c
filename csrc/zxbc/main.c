@@ -7,6 +7,7 @@
 #include "args.h"
 #include "parser.h"
 #include "errmsg.h"
+#include "visitor.h"
 #include "zxbpp.h"
 #include "cwalk.h"
 
@@ -104,6 +105,14 @@ int main(int argc, char *argv[]) {
         if (cs.data_is_used && cs.datas.len == 0) {
             zxbc_error(&cs, 0, "No DATA defined");
         }
+
+        /* Post-parse semantic passes (Python order: Unreachable ->
+         * FunctionGraph -> Optimizer; src/zxbc/zxbc.py:107-141). S2.1
+         * groundwork: inert no-op until the passes land in S2.2-S2.4.
+         * A pass signals an error via zxbc_error() -> cs.error_count,
+         * which the re-check below maps to rc = 1 (mirrors Python
+         * gl.has_errors, zxbc.py:139-141). */
+        visitor_run_passes(&cs, ast);
 
         if (cs.error_count > 0)
             rc = 1;

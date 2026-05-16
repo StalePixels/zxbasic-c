@@ -40,6 +40,44 @@ def python_root(bas_path: str):
     return zxbparser.parser.parse(src, lexer=zxbparser.zxblex.lexer, debug=False)
 
 
+def python_root_after_passes(bas_path: str, opt_level: int = 0):
+    """Parse a .bas, then run Python's post-parse passes 1-3 in
+    src/zxbc/zxbc.py order (Unreachable -> FunctionGraph -> Optimizer;
+    zxbc.py:107-141), returning the in-place-mutated AST root. Read-only
+    consumer of the reference Python — imports the passes, never edits
+    `src/`. This is the "Python AST after passes 1-3" oracle for the
+    Phase-2 post-pass differential probes (wired against the C visitor
+    passes as they land in S2.2-S2.4); the Phase-1 probes keep using
+    `python_root` (raw post-parse tree).
+
+    `opt_level` sets OPTIONS.optimization_level before the optimizer
+    (OptimizerVisitor is gated: O_LEVEL < 1 returns nodes unchanged,
+    src/api/optimize.py:201-205). Returns None if the parse errored.
+    """
+    root = _project_root()
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    from src.zxbc import zxbparser  # noqa: E402
+
+    zxbparser.init()
+    with open(bas_path, encoding="utf-8") as fh:
+        src = fh.read()
+    ast = zxbparser.parser.parse(
+        src, lexer=zxbparser.zxblex.lexer, debug=False
+    )
+    if ast is None:
+        return None
+
+    from src.api.config import OPTIONS  # noqa: E402
+    import src.api.optimize as optimize  # noqa: E402
+
+    OPTIONS.optimization_level = opt_level
+    optimize.UnreachableCodeVisitor().visit(zxbparser.ast)  # pass 1
+    optimize.FunctionGraphVisitor().visit(zxbparser.ast)    # pass 2
+    optimize.OptimizerVisitor().visit(zxbparser.ast)        # pass 3
+    return zxbparser.ast
+
+
 def py_token(node) -> str:
     return getattr(node, "token", type(node).__name__)
 

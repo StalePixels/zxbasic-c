@@ -19,6 +19,7 @@ add_library(zxbc_parser_lib STATIC
     errmsg.c
     compiler.c
     options.c
+    visitor.c
 )
 
 target_include_directories(zxbc_parser_lib PUBLIC
