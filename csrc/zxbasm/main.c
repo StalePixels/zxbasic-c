@@ -207,14 +207,13 @@ int main(int argc, char *argv[])
 
     preproc_file(&pp, input_file);
 
-    if (pp.error_count > 0) {
-        preproc_destroy(&pp);
-        if (as.err_file && as.err_file != stderr)
-            fclose(as.err_file);
-        asm_destroy(&as);
-        free(default_out);
-        return 1;
-    }
+    /* Python zxbasm.main() (src/zxbasm/zxbasm.py:155-161) runs the
+     * preprocessor, then assembles OUTPUT *unconditionally*, and only
+     * then checks has_errors. It never short-circuits between the two —
+     * so a preprocessor error still produces an assembler diagnostic on
+     * the (often empty) output (see newl.err / preprocerr2.err, where
+     * the assembler EOF message follows the preprocessor's). */
+    int preproc_errors = pp.error_count;
 
     const char *preprocessed = strbuf_cstr(&pp.output);
 
@@ -223,7 +222,7 @@ int main(int argc, char *argv[])
 
     preproc_destroy(&pp);
 
-    if (as.error_count > 0) {
+    if (preproc_errors > 0 || as.error_count > 0) {
         if (as.err_file && as.err_file != stderr)
             fclose(as.err_file);
         asm_destroy(&as);

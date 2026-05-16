@@ -1984,6 +1984,27 @@ int preproc_file(PreprocState *pp, const char *filename)
     pp->current_file = arena_strdup(&pp->arena, filename);
     pp->current_line = 1;
 
+    /* Empty / whitespace-only input: PLY's preprocessor grammar cannot
+     * reduce its start symbol and calls p_error(None), which writes the
+     * bare string below and bumps has_errors (src/zxbpp/zxbpp.py:907-909).
+     * No #line is emitted, so OUTPUT stays empty and the assembler then
+     * also sees end-of-file (the second message in newl.err). The text is
+     * written verbatim — no "file:line: error:" prefix, no newline. */
+    {
+        const char *c = content;
+        while (*c == ' ' || *c == '\t' || *c == '\n' || *c == '\r' ||
+               *c == '\f' || *c == '\v')
+            c++;
+        if (*c == '\0') {
+            fprintf(pp->err_file,
+                    "General syntax error at preprocessor "
+                    "(unexpected End of File?)");
+            pp->error_count++;
+            free(content);
+            return 1;
+        }
+    }
+
     /* Emit initial #line — this sets the baseline for line tracking.
      * Don't set has_output here; that flag tracks grammar-level output
      * (i.e., first define produces "\n", subsequent produces "#line"). */

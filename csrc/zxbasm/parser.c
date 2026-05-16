@@ -1818,6 +1818,26 @@ static void parse_program(Parser *p)
  * ---------------------------------------------------------------- */
 int parser_parse(AsmState *as, const char *input)
 {
+    /* Empty / whitespace-only input: PLY's parser cannot reduce its
+     * start symbol and calls p_error(None) — written verbatim, no
+     * "file:line: error:" prefix, no newline, then has_errors += 1
+     * (src/zxbasm/asmparse.py:986-989). Reached when the preprocessed
+     * text has no tokens (an empty source, or one whose preprocessor
+     * produced no output). */
+    if (input) {
+        const char *c = input;
+        while (*c == ' ' || *c == '\t' || *c == '\n' || *c == '\r' ||
+               *c == '\f' || *c == '\v')
+            c++;
+        if (*c == '\0') {
+            fprintf(as->err_file ? as->err_file : stderr,
+                    "General syntax error at assembler "
+                    "(unexpected End of File?)");
+            as->error_count++;
+            return as->error_count;
+        }
+    }
+
     Parser parser;
     parser_init(&parser, as, input);
     parse_program(&parser);
