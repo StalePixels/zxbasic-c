@@ -1,2 +1,2 @@
 DIM a AS UBYTE
-LET a = 1
+LET a = 1 + 2
