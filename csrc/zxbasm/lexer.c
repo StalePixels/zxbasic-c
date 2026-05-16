@@ -531,8 +531,20 @@ Token lexer_next(Lexer *lex)
                         strbuf_free(&fn);
                     }
                     lex->lineno = new_line;
-                    /* Skip to end of line */
+                    /* Skip to the directive's line terminator, then
+                     * CONSUME it WITHOUT counting it: lex->lineno is
+                     * already the 1-based number of the FOLLOWING line
+                     * per #line semantics. Python asmlex
+                     * t_asm_PREPROCLINE absorbs this newline into the
+                     * directive regex (no increment); letting the
+                     * generic newline branch see it double-counts (+1
+                     * on every line after a #line directive — the
+                     * zxbasm line-attribution off-by-one). */
                     while (!lexer_eof(lex) && lexer_peek(lex) != '\n' && lexer_peek(lex) != '\r')
+                        lexer_advance(lex);
+                    if (!lexer_eof(lex) && lexer_peek(lex) == '\r')
+                        lexer_advance(lex);
+                    if (!lexer_eof(lex) && lexer_peek(lex) == '\n')
                         lexer_advance(lex);
                     lex->in_preproc = false;
                     continue;
