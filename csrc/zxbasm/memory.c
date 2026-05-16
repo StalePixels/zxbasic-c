@@ -556,8 +556,22 @@ int mem_dump(AsmState *as, int *org_out, uint8_t **data_out, int *data_len)
         for (int j = 0; j < pending->len; j++) {
             resolve_temp_label(as, fname, pending->data[j]);
             if (!pending->data[j]->defined) {
+                /* Python error() uses the BARE decimal label name
+                 * (src/zxbasm/memory.py:173, label.name == '1'); C keeps
+                 * the B/F direction suffix in the internal name
+                 * (mem_get_label, memory.c:259). Strip it for the
+                 * message only — don't perturb the stored name. */
+                const char *nm = pending->data[j]->name;
+                char bare[64];
+                size_t nl = nm ? strlen(nm) : 0;
+                if (nl > 1 && nl < sizeof(bare) &&
+                    (nm[nl - 1] == 'B' || nm[nl - 1] == 'F')) {
+                    memcpy(bare, nm, nl - 1);
+                    bare[nl - 1] = '\0';
+                    nm = bare;
+                }
                 asm_error(as, pending->data[j]->lineno,
-                          "Undefined temporary label '%s'", pending->data[j]->name);
+                          "Undefined temporary label '%s'", nm);
             }
         }
     }
