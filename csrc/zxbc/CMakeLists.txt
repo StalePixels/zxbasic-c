@@ -24,6 +24,7 @@ add_library(zxbc_parser_lib STATIC
     passes/unreachable.c
     passes/optimizer.c
     ic.c
+    backend_common.c
 )
 
 target_include_directories(zxbc_parser_lib PUBLIC
