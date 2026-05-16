@@ -109,6 +109,13 @@ void err_not_array_nor_func(CompilerState *cs, int lineno, const char *name) {
     zxbc_error(cs, lineno, "'%s' is neither an array nor a function.", name);
 }
 
+/* Python p_err_undefined_arr_access (zxbparser.py:2835):
+ * error(lineno, 'Undeclared array "%s"' % p[2]) — for @<id>(args) where
+ * <id> is not a declared array (the ADDRESSOF ID arg_list production). */
+void err_undeclared_array(CompilerState *cs, int lineno, const char *name) {
+    zxbc_error(cs, lineno, "Undeclared array \"%s\"", name);
+}
+
 void err_not_an_array(CompilerState *cs, int lineno, const char *name) {
     zxbc_error(cs, lineno, "'%s' is not an array (or has not been declared yet)", name);
 }

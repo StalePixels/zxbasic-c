@@ -306,7 +306,7 @@ static bool is_right_assoc(BTokenType type) {
 }
 
 /* Forward declarations for expression parsing */
-static AstNode *parse_call_or_array(Parser *p, const char *name, int lineno, bool expr_context);
+static AstNode *parse_call_or_array(Parser *p, const char *name, int lineno, bool expr_context, bool addressof_ctx);
 static AstNode *parse_arglist(Parser *p);
 
 /* Parse builtin function: ABS, SIN, COS, etc. */
@@ -511,7 +511,10 @@ AstNode *parse_primary(Parser *p) {
         /* Check for array/call access: @name(...) */
         AstNode *operand;
         if (check(p, BTOK_LP)) {
-            operand = parse_call_or_array(p, name, lineno, true);
+            /* ADDRESSOF @name(...) — Python's ADDRESSOF ID arg_list
+             * production; addressof_ctx=true selects the
+             * "Undeclared array" diagnostic for an undeclared <name>. */
+            operand = parse_call_or_array(p, name, lineno, true, true);
         } else {
             operand = ast_new(p->cs, AST_ID, lineno);
             operand->u.id.name = arena_strdup(&p->cs->arena, name);
@@ -549,7 +552,7 @@ AstNode *parse_primary(Parser *p) {
 
         /* Check for function call or array access: ID(...) */
         if (check(p, BTOK_LP)) {
-            return parse_call_or_array(p, name, lineno, true);
+            return parse_call_or_array(p, name, lineno, true, false);
         }
 
         /* Variable reference — resolve via symbol table (auto-declares if implicit)
@@ -608,7 +611,7 @@ AstNode *parse_primary(Parser *p) {
 }
 
 /* Parse function call or array access: name(...) */
-static AstNode *parse_call_or_array(Parser *p, const char *name, int lineno, bool expr_context) {
+static AstNode *parse_call_or_array(Parser *p, const char *name, int lineno, bool expr_context, bool addressof_ctx) {
     consume(p, BTOK_LP, "Expected '('");
 
     /* Parse argument list */
@@ -704,7 +707,15 @@ static AstNode *parse_call_or_array(Parser *p, const char *name, int lineno, boo
      * In expression context, CLASS_unknown non-string entries are not callable.
      * In statement context (could be a forward sub call), they're allowed. */
     if (expr_context && entry && entry->u.id.class_ == CLASS_unknown && !type_is_string(entry->type_)) {
-        err_not_array_nor_func(p->cs, lineno, name);
+        /* @<id>(args) where <id> is undeclared (auto-declared
+         * CLASS_unknown) is Python's dedicated p_err_undefined_arr_access
+         * production (zxbparser.py:2835) → 'Undeclared array "%s"'.
+         * A plain undeclared x(args) call keeps the generic message
+         * (mcleod3-class — addressof_ctx is false there). */
+        if (addressof_ctx)
+            err_undeclared_array(p->cs, lineno, name);
+        else
+            err_not_array_nor_func(p->cs, lineno, name);
         return NULL;
     }
 
@@ -1469,7 +1480,7 @@ static AstNode *parse_statement(Parser *p) {
 
         /* Array element assignment: ID(index) = expr or ID(i)(j TO k) = expr */
         if (check(p, BTOK_LP)) {
-            AstNode *call_node = parse_call_or_array(p, name, ln, false);
+            AstNode *call_node = parse_call_or_array(p, name, ln, false, false);
             /* Handle chained postfix: a$(b)(1 TO 5) */
             call_node = parse_postfix(p, call_node);
 

@@ -41,6 +41,7 @@ void err_expected_string(CompilerState *cs, int lineno, const char *type_name);
 void err_wrong_for_var(CompilerState *cs, int lineno, const char *expected, const char *got);
 void err_not_constant(CompilerState *cs, int lineno);
 void err_not_array_nor_func(CompilerState *cs, int lineno, const char *name);
+void err_undeclared_array(CompilerState *cs, int lineno, const char *name);
 void err_not_an_array(CompilerState *cs, int lineno, const char *name);
 void err_func_type_mismatch(CompilerState *cs, int lineno, const char *name, int prev_lineno);
 void err_parameter_mismatch(CompilerState *cs, int lineno, const char *name, int prev_lineno);
