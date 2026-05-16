@@ -26,6 +26,7 @@
 #include "visitor.h"
 #include "ic.h"
 #include "errmsg.h"
+#include "z80asm.h"
 
 #include <stdio.h>
 #include <stdint.h>
@@ -180,12 +181,51 @@ int tr_default_value(Translator *tr, const TypeInfo *type_,
         return c;
     }
 
-    /* float branch (translator.py:1058-1069) — out of the S5.3 integer-
-     * scalar slice (no float DIM = literal in the S5.3 corpus). Loud. */
+    /* float branch (translator.py:1058-1069):
+     *   C, DE, HL = Float.float(expr.value)   # = fp.immediate_float
+     *   C  = C[:-1];  C  = C[-2:]
+     *   DE = DE[:-1]; DE = ("00" + DE)[-4:]
+     *   HL = HL[:-1]; HL = ("00" + HL)[-4:]
+     *   return [C, DE[-2:], DE[:-2], HL[-2:], HL[:-2]]
+     * Float.float returns the ("0XXh","0XXXXh","0XXXXh") triple. */
     if (bt == TYPE_float) {
-        fprintf(stderr,
-                "zxbc: default_value float branch not in S5.3 scope\n");
-        return 0;
+        double dvf = (expr && expr->tag == AST_NUMBER) ? expr->u.number.value
+                                                       : 0.0;
+        char Cs[8], DEs[8], HLs[8];
+        z80h_immediate_float(dvf, Cs, DEs, HLs);
+
+        /* C[:-1] (drop 'h') then [-2:] (last 2). "0XXh" -> "0XX" -> "XX". */
+        size_t cl = strlen(Cs);                 /* "0XXh" => 4 */
+        char cc[3];
+        { size_t body = cl - 1;                 /* drop trailing 'h' */
+          size_t st = body >= 2 ? body - 2 : 0;
+          size_t k = 0;
+          for (size_t i = st; i < body; i++) cc[k++] = Cs[i];
+          cc[k] = '\0'; }
+
+        /* ("00" + DE[:-1])[-4:]  ; DE,HL are "0XXXXh" => body "0XXXX". */
+        char de4[5], hl4[5];
+        const char *src[2] = { DEs, HLs };
+        char *dst[2] = { de4, hl4 };
+        for (int j = 0; j < 2; j++) {
+            char pad[16];
+            size_t bl = strlen(src[j]) - 1;     /* drop 'h' */
+            snprintf(pad, sizeof(pad), "00%.*s", (int)bl, src[j]);
+            size_t pl = strlen(pad);
+            size_t st = pl >= 4 ? pl - 4 : 0;
+            size_t k = 0;
+            for (size_t i = st; i < pl; i++) dst[j][k++] = pad[i];
+            dst[j][k] = '\0';
+        }
+
+        /* [C, DE[-2:], DE[:-2], HL[-2:], HL[:-2]] — de4/hl4 are 4 chars. */
+        char dlo[3] = { de4[2], de4[3], 0 }, dhi[3] = { de4[0], de4[1], 0 };
+        char hlo[3] = { hl4[2], hl4[3], 0 }, hhi[3] = { hl4[0], hl4[1], 0 };
+        const char *vals[5] = { cc, dlo, dhi, hlo, hhi };
+        int c = 0;
+        for (int i = 0; i < 5 && c < out_cap; i++)
+            out[c++] = arena_strdup(&tr->cs->arena, vals[i]);
+        return c;
     }
 
     /* fixed / integer numeric branch (translator.py:1071-1078). */

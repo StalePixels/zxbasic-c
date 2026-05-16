@@ -264,6 +264,67 @@ static int s_log2(long x) { int n = 0; while (x > 1) { x >>= 1; n++; } return n;
 #define RL_NEGHL      ZXBC_NAMESPACE ".__NEGHL"
 #define RL_LOAD_DE_DE ZXBC_NAMESPACE ".__LOAD_DE_DE"
 
+/* S5.4 — wide (i32/u32/f16) + float (5-byte) RuntimeLabels
+ * (runtime/core.py; values + REQUIRED_MODULES verified vs live Python). */
+#define RL_ADDF       ZXBC_NAMESPACE ".__ADDF"
+#define RL_SUBF       ZXBC_NAMESPACE ".__SUBF"
+#define RL_MULF       ZXBC_NAMESPACE ".__MULF"
+#define RL_DIVF       ZXBC_NAMESPACE ".__DIVF"
+#define RL_MODF       ZXBC_NAMESPACE ".__MODF"
+#define RL_POWF       ZXBC_NAMESPACE ".__POW"     /* NB: __POW, not __POWF */
+#define RL_MULF16     ZXBC_NAMESPACE ".__MULF16"
+#define RL_DIVF16     ZXBC_NAMESPACE ".__DIVF16"
+#define RL_MODF16     ZXBC_NAMESPACE ".__MODF16"
+#define RL_MUL32      ZXBC_NAMESPACE ".__MUL32"
+#define RL_SUB32      ZXBC_NAMESPACE ".__SUB32"
+#define RL_DIVU32     ZXBC_NAMESPACE ".__DIVU32"
+#define RL_DIVI32     ZXBC_NAMESPACE ".__DIVI32"
+#define RL_MODU32     ZXBC_NAMESPACE ".__MODU32"
+#define RL_MODI32     ZXBC_NAMESPACE ".__MODI32"
+#define RL_NEG32      ZXBC_NAMESPACE ".__NEG32"
+#define RL_ABS32      ZXBC_NAMESPACE ".__ABS32"
+#define RL_SWAP32     ZXBC_NAMESPACE ".__SWAP32"
+#define RL_SHL32      ZXBC_NAMESPACE ".__SHL32"
+#define RL_SHRL32     ZXBC_NAMESPACE ".__SHRL32"
+#define RL_SHRA32     ZXBC_NAMESPACE ".__SHRA32"
+#define RL_EQ32       ZXBC_NAMESPACE ".__EQ32"
+#define RL_LTI32      ZXBC_NAMESPACE ".__LTI32"
+#define RL_LEI32      ZXBC_NAMESPACE ".__LEI32"
+#define RL_AND32      ZXBC_NAMESPACE ".__AND32"
+#define RL_OR32       ZXBC_NAMESPACE ".__OR32"
+#define RL_XOR32      ZXBC_NAMESPACE ".__XOR32"
+#define RL_NOT32      ZXBC_NAMESPACE ".__NOT32"
+#define RL_BAND32     ZXBC_NAMESPACE ".__BAND32"
+#define RL_BOR32      ZXBC_NAMESPACE ".__BOR32"
+#define RL_BXOR32     ZXBC_NAMESPACE ".__BXOR32"
+#define RL_BNOT32     ZXBC_NAMESPACE ".__BNOT32"
+#define RL_ILOAD32    ZXBC_NAMESPACE ".__ILOAD32"
+#define RL_STORE32    ZXBC_NAMESPACE ".__STORE32"
+#define RL_ISTORE32   ZXBC_NAMESPACE ".__ISTORE32"
+#define RL_LOADF      ZXBC_NAMESPACE ".__LOADF"
+#define RL_ILOADF     ZXBC_NAMESPACE ".__ILOADF"
+#define RL_STOREF     ZXBC_NAMESPACE ".__STOREF"
+#define RL_ISTOREF    ZXBC_NAMESPACE ".__ISTOREF"
+#define RL_FP_PUSH_REV ZXBC_NAMESPACE ".__FP_PUSH_REV"
+#define RL_FTOU32REG  ZXBC_NAMESPACE ".__FTOU32REG"
+#define RL_FTOF16REG  ZXBC_NAMESPACE ".__FTOF16REG"
+#define RL_F16TOFREG  ZXBC_NAMESPACE ".__F16TOFREG"
+#define RL_I32TOFREG  ZXBC_NAMESPACE ".__I32TOFREG"
+#define RL_U32TOFREG  ZXBC_NAMESPACE ".__U32TOFREG"
+#define RL_I8TOFREG   ZXBC_NAMESPACE ".__I8TOFREG"
+#define RL_U8TOFREG   ZXBC_NAMESPACE ".__U8TOFREG"
+#define RL_GEF        ZXBC_NAMESPACE ".__GEF"
+#define RL_GTF        ZXBC_NAMESPACE ".__GTF"
+#define RL_LEF        ZXBC_NAMESPACE ".__LEF"
+#define RL_LTF        ZXBC_NAMESPACE ".__LTF"
+#define RL_EQF        ZXBC_NAMESPACE ".__EQF"
+#define RL_NEF        ZXBC_NAMESPACE ".__NEF"
+#define RL_ORF        ZXBC_NAMESPACE ".__ORF"
+#define RL_XORF       ZXBC_NAMESPACE ".__XORF"
+#define RL_ANDF       ZXBC_NAMESPACE ".__ANDF"
+#define RL_NOTF       ZXBC_NAMESPACE ".__NOTF"
+#define RL_NEGF       ZXBC_NAMESPACE ".__NEGF"
+
 /* runtime_call (common.py:156-161): REQUIRES.add(LABEL_REQUIRED_MODULES
  * [label]) if present; returns "call {label}". The label->module map is
  * runtime/core.py:160-225 (only the S5.3-reachable labels). */
@@ -276,6 +337,65 @@ static const char *s_required_module(const char *label) {
     if (strcmp(label, RL_DIVI16)     == 0) return "arith/div16.asm";
     if (strcmp(label, RL_NEGHL)      == 0) return "neg16.asm";
     if (strcmp(label, RL_LOAD_DE_DE) == 0) return "lddede.asm";
+    /* S5.4 wide/float module map (LABEL_REQUIRED_MODULES, live-verified). */
+    if (strcmp(label, RL_ADDF)       == 0) return "arith/addf.asm";
+    if (strcmp(label, RL_SUBF)       == 0) return "arith/subf.asm";
+    if (strcmp(label, RL_MULF)       == 0) return "arith/mulf.asm";
+    if (strcmp(label, RL_DIVF)       == 0) return "arith/divf.asm";
+    if (strcmp(label, RL_MODF)       == 0) return "arith/modf.asm";
+    if (strcmp(label, RL_POWF)       == 0) return "math/pow.asm";
+    if (strcmp(label, RL_MULF16)     == 0) return "arith/mulf16.asm";
+    if (strcmp(label, RL_DIVF16)     == 0) return "arith/divf16.asm";
+    if (strcmp(label, RL_MODF16)     == 0) return "arith/modf16.asm";
+    if (strcmp(label, RL_MUL32)      == 0) return "arith/mul32.asm";
+    if (strcmp(label, RL_SUB32)      == 0) return "arith/sub32.asm";
+    if (strcmp(label, RL_DIVU32)     == 0) return "arith/div32.asm";
+    if (strcmp(label, RL_DIVI32)     == 0) return "arith/div32.asm";
+    if (strcmp(label, RL_MODU32)     == 0) return "arith/div32.asm";
+    if (strcmp(label, RL_MODI32)     == 0) return "arith/div32.asm";
+    if (strcmp(label, RL_NEG32)      == 0) return "neg32.asm";
+    if (strcmp(label, RL_ABS32)      == 0) return "abs32.asm";
+    if (strcmp(label, RL_SWAP32)     == 0) return "swap32.asm";
+    if (strcmp(label, RL_SHL32)      == 0) return "bitwise/shl32.asm";
+    if (strcmp(label, RL_SHRL32)     == 0) return "bitwise/shrl32.asm";
+    if (strcmp(label, RL_SHRA32)     == 0) return "bitwise/shra32.asm";
+    if (strcmp(label, RL_EQ32)       == 0) return "cmp/eq32.asm";
+    if (strcmp(label, RL_LTI32)      == 0) return "cmp/lti32.asm";
+    if (strcmp(label, RL_LEI32)      == 0) return "cmp/lei32.asm";
+    if (strcmp(label, RL_AND32)      == 0) return "bool/and32.asm";
+    if (strcmp(label, RL_OR32)       == 0) return "bool/or32.asm";
+    if (strcmp(label, RL_XOR32)      == 0) return "bool/xor32.asm";
+    if (strcmp(label, RL_NOT32)      == 0) return "bool/not32.asm";
+    if (strcmp(label, RL_BAND32)     == 0) return "bitwise/band32.asm";
+    if (strcmp(label, RL_BOR32)      == 0) return "bitwise/bor32.asm";
+    if (strcmp(label, RL_BXOR32)     == 0) return "bitwise/bxor32.asm";
+    if (strcmp(label, RL_BNOT32)     == 0) return "bitwise/bnot32.asm";
+    if (strcmp(label, RL_ILOAD32)    == 0) return "iload32.asm";
+    if (strcmp(label, RL_STORE32)    == 0) return "store32.asm";
+    if (strcmp(label, RL_ISTORE32)   == 0) return "store32.asm";
+    if (strcmp(label, RL_LOADF)      == 0) return "iloadf.asm";
+    if (strcmp(label, RL_ILOADF)     == 0) return "iloadf.asm";
+    if (strcmp(label, RL_STOREF)     == 0) return "storef.asm";
+    if (strcmp(label, RL_ISTOREF)    == 0) return "storef.asm";
+    if (strcmp(label, RL_FP_PUSH_REV)== 0) return "pushf.asm";
+    if (strcmp(label, RL_FTOU32REG)  == 0) return "ftou32reg.asm";
+    if (strcmp(label, RL_FTOF16REG)  == 0) return "ftof16reg.asm";
+    if (strcmp(label, RL_F16TOFREG)  == 0) return "f16tofreg.asm";
+    if (strcmp(label, RL_I32TOFREG)  == 0) return "u32tofreg.asm";
+    if (strcmp(label, RL_U32TOFREG)  == 0) return "u32tofreg.asm";
+    if (strcmp(label, RL_I8TOFREG)   == 0) return "u32tofreg.asm";
+    if (strcmp(label, RL_U8TOFREG)   == 0) return "u32tofreg.asm";
+    if (strcmp(label, RL_GEF)        == 0) return "cmp/gef.asm";
+    if (strcmp(label, RL_GTF)        == 0) return "cmp/gtf.asm";
+    if (strcmp(label, RL_LEF)        == 0) return "cmp/lef.asm";
+    if (strcmp(label, RL_LTF)        == 0) return "cmp/ltf.asm";
+    if (strcmp(label, RL_EQF)        == 0) return "cmp/eqf.asm";
+    if (strcmp(label, RL_NEF)        == 0) return "cmp/nef.asm";
+    if (strcmp(label, RL_ORF)        == 0) return "bool/orf.asm";
+    if (strcmp(label, RL_XORF)       == 0) return "bool/xorf.asm";
+    if (strcmp(label, RL_ANDF)       == 0) return "bool/andf.asm";
+    if (strcmp(label, RL_NOTF)       == 0) return "bool/notf.asm";
+    if (strcmp(label, RL_NEGF)       == 0) return "negf.asm";
     return NULL;
 }
 static char *s_runtime_call(Backend *b, const char *label) {
@@ -768,6 +888,1127 @@ static StrVec emit_store16(Backend *b, Quad *q) {
     return out;
 }
 
+/* ====================================================================
+ * S5.4 — 32-bit (i32/u32), fixed-point (f16) & float (5-byte) scalar
+ * emitters. Faithful ports of src/arch/z80/backend/_32bit.py (Bits32),
+ * _f16.py (Fixed16), _float.py (Float), generic.py _cast, common.py
+ * to_long/to_fixed/to_float, src/api/fp.py (via z80h_immediate_float).
+ * ==================================================================== */
+
+/* backend.common.is_float / float(op) — Python float() string parse. */
+static bool s_is_float(const char *op) { return z80h_is_float(op); }
+static double s_float_val(const char *op) {
+    double v = 0.0; z80h_float(op, &v); return v;
+}
+
+/* _f_ops (common.py:216-235): like _int_ops but for floats. swap=True:
+ *   is_float(op1) -> (op2, float(op1)); elif is_float(op2) -> (op1,
+ *   float(op2)); else None. (swap=False unused by the S5.4 ops here.) */
+static bool s_f_ops(const char *op1, const char *op2,
+                    const char **other, double *fval) {
+    if (s_is_float(op1)) { *other = op2; *fval = s_float_val(op1); return true; }
+    if (s_is_float(op2)) { *other = op1; *fval = s_float_val(op2); return true; }
+    return false;
+}
+
+/* tmp_labels.tmp_label() (src/api/tmp_labels.py:16-25):
+ *   ".LABEL.__LABEL<LABEL_COUNTER>"; records in TMP_LABELS; ++counter.
+ * gl.LABELS_NAMESPACE == ".LABEL" (global_.py:139). */
+static char *s_tmp_label(Backend *b) {
+    char buf[64];
+    snprintf(buf, sizeof(buf), ".LABEL.__LABEL%d", b->label_counter);
+    b->label_counter++;
+    char *r = arena_strdup(b->arena, buf);
+    hashmap_set(&b->tmp_labels, r, (void *)1);
+    return r;
+}
+
+/* Bits32.int32 (_32bit.py:24-32): (int(op) & 0xFFFFFFFF) -> (DE,HL). */
+static void s_int32(const char *op, unsigned *de, unsigned *hl) {
+    z80h_int32(op, de, hl);
+}
+
+/* Fixed16.f16 (_f16.py:21-44): float -> (DE,HL) 16.16, C2 for negatives. */
+static void s_f16(double op, unsigned *DE_out, unsigned *HL_out) {
+    bool negative = op < 0.0;
+    if (negative) op = -op;
+    long long DEl = (long long)op;                 /* int(op) */
+    unsigned HL = (unsigned)((long long)((op - (double)DEl) * 65536.0) & 0xFFFF);
+    unsigned DE = (unsigned)(DEl & 0xFFFF);
+    if (negative) {                                 /* Do C2 */
+        DE ^= 0xFFFF;
+        HL ^= 0xFFFF;
+        unsigned long DEHL = (((unsigned long)DE << 16) | HL) + 1UL;
+        HL = (unsigned)(DEHL & 0xFFFF);
+        DE = (unsigned)((DEHL >> 16) & 0xFFFF);
+    }
+    *DE_out = DE; *HL_out = HL;
+}
+
+/* Quad arg accessor matching Python ins[N] (1-based: ins[1]==args[0]). */
+static const char *q_ins(Quad *q, int n) {
+    int idx = n - 1;
+    if (idx < 0 || idx >= q->nargs) return "";
+    return q->args[idx];
+}
+
+/* ---- Bits32.get_oper (_32bit.py:34-184) ------------------------------ */
+static StrVec bits32_get_oper(Backend *b, const char *op1, const char *op2,
+                              bool reversed, bool preserveHL) {
+    StrVec out = sv_new();
+    const char *op = (op2 != NULL) ? op2 : op1;
+    bool int1 = false;                              /* op1 (2nd) is integer */
+
+    bool indirect = op[0] == '*';
+    if (indirect) op++;
+    bool immediate = op[0] == '#';
+    if (immediate) op++;
+
+    const char *hl = preserveHL ? "bc" : "hl";
+
+    if (s_is_int(op)) {
+        int1 = true;
+        if (indirect) {
+            if (immediate) sv_pushf(b, &out, "ld hl, %s", op);
+            else           sv_pushf(b, &out, "ld hl, (%s)", op);
+            sv_push(b, &out, s_runtime_call(b, RL_ILOAD32));
+            if (preserveHL) { sv_push(b, &out, "ld b, h");
+                              sv_push(b, &out, "ld c, l"); }
+        } else {
+            unsigned DE, HL; s_int32(op, &DE, &HL);
+            sv_pushf(b, &out, "ld de, %u", DE);
+            sv_pushf(b, &out, "ld %s, %u", hl, HL);
+        }
+    } else {
+        if (op[0] == '_') {
+            if (immediate) sv_pushf(b, &out, "ld %s, %s", hl, op);
+            else           sv_pushf(b, &out, "ld %s, (%s)", hl, op);
+        } else {
+            if (immediate) sv_pushf(b, &out, "ld %s, (%s) & 0xFFFF", hl, op);
+            else           sv_pushf(b, &out, "pop %s", hl);
+        }
+        if (indirect) {
+            sv_push(b, &out, s_runtime_call(b, RL_ILOAD32));
+            if (preserveHL) { sv_push(b, &out, "ld b, h");
+                              sv_push(b, &out, "ld c, l"); }
+        } else {
+            if (op[0] == '_') {
+                sv_pushf(b, &out, "ld de, (%s + 2)", op);
+            } else {
+                if (immediate) sv_pushf(b, &out, "ld de, (%s) >> 16", op);
+                else           sv_push(b, &out, "pop de");
+            }
+        }
+    }
+
+    if (op2 != NULL) {
+        op = op1;
+        indirect = op[0] == '*';
+        if (indirect) op++;
+        immediate = op[0] == '#';
+        if (immediate) op++;
+
+        if (s_is_int(op)) {
+            long opv = s_int_val(op);
+            if (indirect) {
+                sv_push(b, &out, "exx");
+                if (immediate) sv_pushf(b, &out, "ld hl, %ld", opv & 0xFFFF);
+                else           sv_pushf(b, &out, "ld hl, (%ld)", opv & 0xFFFF);
+                sv_push(b, &out, s_runtime_call(b, RL_ILOAD32));
+                sv_push(b, &out, "push de");
+                sv_push(b, &out, "push hl");
+                sv_push(b, &out, "exx");
+            } else {
+                unsigned DE, HL; char ob[24];
+                snprintf(ob, sizeof(ob), "%ld", opv);
+                s_int32(ob, &DE, &HL);
+                sv_pushf(b, &out, "ld bc, %u", DE);
+                sv_push(b, &out, "push bc");
+                sv_pushf(b, &out, "ld bc, %u", HL);
+                sv_push(b, &out, "push bc");
+            }
+        } else {
+            if (indirect) {
+                sv_push(b, &out, "exx");
+                if (op[0] == '_') {
+                    if (immediate) sv_pushf(b, &out, "ld hl, %s", op);
+                    else           sv_pushf(b, &out, "ld hl, (%s)", op);
+                } else {
+                    sv_push(b, &out, "pop hl");
+                }
+                sv_push(b, &out, s_runtime_call(b, RL_ILOAD32));
+                sv_push(b, &out, "push de");
+                sv_push(b, &out, "push hl");
+                sv_push(b, &out, "exx");
+            } else if (immediate) {
+                sv_pushf(b, &out, "ld bc, (%s) >> 16", op);
+                sv_push(b, &out, "push bc");
+                sv_pushf(b, &out, "ld bc, (%s) & 0xFFFF", op);
+                sv_push(b, &out, "push bc");
+            } else if (op[0] == '_') {              /* an address */
+                if (int1 || op1[0] == '_') {
+                    StrVec tmp = out; out = sv_new();
+                    sv_pushf(b, &out, "ld hl, (%s + 2)", op);
+                    sv_push(b, &out, "push hl");
+                    sv_pushf(b, &out, "ld hl, (%s)", op);
+                    sv_push(b, &out, "push hl");
+                    for (int i = 0; i < tmp.len; i++) vec_push(out, tmp.data[i]);
+                    vec_free(tmp);
+                } else {
+                    sv_pushf(b, &out, "ld bc, (%s + 2)", op);
+                    sv_push(b, &out, "push bc");
+                    sv_pushf(b, &out, "ld bc, (%s)", op);
+                    sv_push(b, &out, "push bc");
+                }
+            } else {
+                /* 2nd operand remains in the stack */
+            }
+        }
+    }
+
+    if (op2 != NULL && reversed)
+        sv_push(b, &out, s_runtime_call(b, RL_SWAP32));
+
+    return out;
+}
+
+/* ---- Bits32.load32 (_32bit.py:862-871) ------------------------------- */
+static StrVec emit_load32(Backend *b, Quad *q) {
+    StrVec out = bits32_get_oper(b, q_ins(q, 2), NULL, false, false);
+    sv_push(b, &out, "push de");
+    sv_push(b, &out, "push hl");
+    return out;
+}
+
+/* ---- Bits32.store32 (_32bit.py:873-913) ------------------------------ */
+static StrVec emit_store32(Backend *b, Quad *q) {
+    const char *op = q_ins(q, 1);
+    bool indirect = op[0] == '*';
+    if (indirect) op++;
+    bool immediate = op[0] == '#';
+    if (immediate) op++;
+
+    if (s_is_int(op) || op[0] == '_' || op[0] == '.' || immediate) {
+        StrVec out = bits32_get_oper(b, q_ins(q, 2), NULL, false, indirect);
+        char ibuf[24];
+        if (s_is_int(op)) {
+            snprintf(ibuf, sizeof(ibuf), "%ld", s_int_val(op) & 0xFFFF);
+            op = ibuf;
+        }
+        if (indirect) {
+            sv_pushf(b, &out, "ld hl, (%s)", op);
+            sv_push(b, &out, s_runtime_call(b, RL_STORE32));
+            return out;
+        }
+        sv_pushf(b, &out, "ld (%s), hl", op);
+        sv_pushf(b, &out, "ld (%s + 2), de", op);
+        return out;
+    }
+
+    StrVec out = bits32_get_oper(b, q_ins(q, 2), NULL, false, true);
+    sv_push(b, &out, "pop hl");
+    if (indirect) {
+        sv_push(b, &out, s_runtime_call(b, RL_ISTORE32));
+        return out;
+    }
+    sv_push(b, &out, s_runtime_call(b, RL_STORE32));
+    return out;
+}
+
+/* ---- Bits32.add32 (_32bit.py:229-272) -------------------------------- */
+static StrVec emit_add32(Backend *b, Quad *q) {
+    const char *op1 = q_ins(q, 2), *op2 = q_ins(q, 3);
+    const char *other; long iv;
+    if (s_int_ops(op1, op2, &other, &iv)) {
+        if (iv == 0) {                              /* int(o2)==0 -> nop */
+            StrVec out = bits32_get_oper(b, other, NULL, false, false);
+            sv_push(b, &out, "push de");
+            sv_push(b, &out, "push hl");
+            return out;
+        }
+    }
+    if (op1[0] == '_' && op2[0] != '_') {
+        const char *t = op1; op1 = op2; op2 = t;
+    }
+    if (op2[0] == '_') {
+        StrVec out = bits32_get_oper(b, op1, NULL, false, false);
+        sv_pushf(b, &out, "ld bc, (%s)", op2);
+        sv_push(b, &out, "add hl, bc");
+        sv_push(b, &out, "ex de, hl");
+        sv_pushf(b, &out, "ld bc, (%s + 2)", op2);
+        sv_push(b, &out, "adc hl, bc");
+        sv_push(b, &out, "push hl");
+        sv_push(b, &out, "push de");
+        return out;
+    }
+    StrVec out = bits32_get_oper(b, op1, op2, false, false);
+    sv_push(b, &out, "pop bc");
+    sv_push(b, &out, "add hl, bc");
+    sv_push(b, &out, "ex de, hl");
+    sv_push(b, &out, "pop bc");
+    sv_push(b, &out, "adc hl, bc");
+    sv_push(b, &out, "push hl");
+    sv_push(b, &out, "push de");
+    return out;
+}
+
+/* ---- Bits32.sub32 (_32bit.py:274-297) -------------------------------- */
+static StrVec emit_sub32(Backend *b, Quad *q) {
+    const char *op1 = q_ins(q, 2), *op2 = q_ins(q, 3);
+    if (s_is_int(op2) && s_int_val(op2) == 0) {
+        StrVec out = bits32_get_oper(b, op1, NULL, false, false);
+        sv_push(b, &out, "push de");
+        sv_push(b, &out, "push hl");
+        return out;
+    }
+    bool rev = op1[0] != 't' && !s_is_int(op1) && op2[0] == 't';
+    StrVec out = bits32_get_oper(b, op1, op2, rev, false);
+    sv_push(b, &out, s_runtime_call(b, RL_SUB32));
+    sv_push(b, &out, "push de");
+    sv_push(b, &out, "push hl");
+    return out;
+}
+
+/* ---- Bits32.mul32 (_32bit.py:299-332) -------------------------------- */
+static StrVec emit_mul32(Backend *b, Quad *q) {
+    const char *op1 = q_ins(q, 2), *op2 = q_ins(q, 3);
+    const char *other; long iv;
+    StrVec out;
+    if (s_int_ops(op1, op2, &other, &iv)) {
+        out = bits32_get_oper(b, other, NULL, false, false);
+        if (iv == 1) { sv_push(b, &out, "push de");
+                       sv_push(b, &out, "push hl"); return out; }
+        if (iv == 0) { sv_push(b, &out, "ld hl, 0");
+                       sv_push(b, &out, "push hl");
+                       sv_push(b, &out, "push hl"); return out; }
+        char ob[24]; snprintf(ob, sizeof(ob), "%ld", iv);
+        char *op2s = arena_strdup(b->arena, ob);
+        vec_free(out);
+        out = bits32_get_oper(b, other, op2s, false, false);
+    } else {
+        out = bits32_get_oper(b, op1, op2, false, false);
+    }
+    sv_push(b, &out, s_runtime_call(b, RL_MUL32));
+    sv_push(b, &out, "push de");
+    sv_push(b, &out, "push hl");
+    return out;
+}
+
+/* ---- Bits32.divu32 (_32bit.py:334-356) ------------------------------- */
+static StrVec emit_divu32(Backend *b, Quad *q) {
+    const char *op1 = q_ins(q, 2), *op2 = q_ins(q, 3);
+    if (s_is_int(op2) && s_int_val(op2) == 1) {
+        StrVec out = bits32_get_oper(b, op1, NULL, false, false);
+        sv_push(b, &out, "push de");
+        sv_push(b, &out, "push hl");
+        return out;
+    }
+    bool rev = s_is_int(op1) || op1[0] == 't' || op2[0] != 't';
+    StrVec out = bits32_get_oper(b, op1, op2, rev, false);
+    sv_push(b, &out, s_runtime_call(b, RL_DIVU32));
+    sv_push(b, &out, "push de");
+    sv_push(b, &out, "push hl");
+    return out;
+}
+
+static StrVec emit_neg32(Backend *b, Quad *q);
+
+/* ---- Bits32.divi32 (_32bit.py:358-384) ------------------------------- */
+static StrVec emit_divi32(Backend *b, Quad *q) {
+    const char *op1 = q_ins(q, 2), *op2 = q_ins(q, 3);
+    if (s_is_int(op2)) {
+        if (s_int_val(op2) == 1) {
+            StrVec out = bits32_get_oper(b, op1, NULL, false, false);
+            sv_push(b, &out, "push de");
+            sv_push(b, &out, "push hl");
+            return out;
+        }
+        if (s_int_val(op2) == -1) return emit_neg32(b, q);
+    }
+    bool rev = s_is_int(op1) || op1[0] == 't' || op2[0] != 't';
+    StrVec out = bits32_get_oper(b, op1, op2, rev, false);
+    sv_push(b, &out, s_runtime_call(b, RL_DIVI32));
+    sv_push(b, &out, "push de");
+    sv_push(b, &out, "push hl");
+    return out;
+}
+
+/* ---- Bits32.modu32 (_32bit.py:386-409) ------------------------------- */
+static StrVec emit_modu32(Backend *b, Quad *q) {
+    const char *op1 = q_ins(q, 2), *op2 = q_ins(q, 3);
+    if (s_is_int(op2) && s_int_val(op2) == 1) {
+        StrVec out = bits32_get_oper(b, op1, NULL, false, false);
+        sv_push(b, &out, "ld hl, 0");
+        sv_push(b, &out, "push hl");
+        sv_push(b, &out, "push hl");
+        return out;
+    }
+    bool rev = s_is_int(op1) || op1[0] == 't' || op2[0] != 't';
+    StrVec out = bits32_get_oper(b, op1, op2, rev, false);
+    sv_push(b, &out, s_runtime_call(b, RL_MODU32));
+    sv_push(b, &out, "push de");
+    sv_push(b, &out, "push hl");
+    return out;
+}
+
+/* ---- Bits32.modi32 (_32bit.py:411-434) ------------------------------- */
+static StrVec emit_modi32(Backend *b, Quad *q) {
+    const char *op1 = q_ins(q, 2), *op2 = q_ins(q, 3);
+    if (s_is_int(op2) && s_int_val(op2) == 1) {
+        StrVec out = bits32_get_oper(b, op1, NULL, false, false);
+        sv_push(b, &out, "ld hl, 0");
+        sv_push(b, &out, "push hl");
+        sv_push(b, &out, "push hl");
+        return out;
+    }
+    bool rev = s_is_int(op1) || op1[0] == 't' || op2[0] != 't';
+    StrVec out = bits32_get_oper(b, op1, op2, rev, false);
+    sv_push(b, &out, s_runtime_call(b, RL_MODI32));
+    sv_push(b, &out, "push de");
+    sv_push(b, &out, "push hl");
+    return out;
+}
+
+/* ---- Bits32.unary (_32bit.py:207-213) -------------------------------- */
+static StrVec bits32_unary(Backend *b, Quad *q, const char *label) {
+    StrVec out = bits32_get_oper(b, q_ins(q, 2), NULL, false, false);
+    sv_push(b, &out, s_runtime_call(b, label));
+    sv_push(b, &out, "push de");
+    sv_push(b, &out, "push hl");
+    return out;
+}
+static StrVec emit_neg32(Backend *b, Quad *q) {
+    return bits32_unary(b, q, RL_NEG32);            /* _32bit.py:711-714 */
+}
+static StrVec emit_abs32(Backend *b, Quad *q) {
+    return bits32_unary(b, q, RL_ABS32);            /* _32bit.py:716-719 */
+}
+
+/* ---- Bits32.bool_binary (_32bit.py:186-205) -------------------------- */
+static StrVec bits32_bool_binary(Backend *b, Quad *q, const char *label,
+                                 bool commutative) {
+    const char *op1 = q_ins(q, 2), *op2 = q_ins(q, 3);
+    bool rev = commutative && op1[0] != 't' && !s_is_int(op1) && op2[0] == 't';
+    const char *other; long iv;
+    if (commutative && s_int_ops(op1, op2, &other, &iv)) {
+        char ob[24]; snprintf(ob, sizeof(ob), "%ld", iv);
+        op1 = other; op2 = arena_strdup(b->arena, ob);
+    }
+    StrVec out = bits32_get_oper(b, op1, op2, rev, false);
+    sv_push(b, &out, s_runtime_call(b, label));
+    sv_push(b, &out, "push af");
+    return out;
+}
+
+/* ---- Bits32 comparisons (_32bit.py:436-600) -------------------------- */
+static StrVec emit_ltu32(Backend *b, Quad *q) {
+    const char *op1 = q_ins(q, 2), *op2 = q_ins(q, 3);
+    bool rev = op1[0] != 't' && !s_is_int(op1) && op2[0] == 't';
+    StrVec out = bits32_get_oper(b, op1, op2, rev, false);
+    sv_push(b, &out, s_runtime_call(b, RL_SUB32));
+    sv_push(b, &out, "sbc a, a");
+    sv_push(b, &out, "push af");
+    return out;
+}
+static StrVec emit_lti32(Backend *b, Quad *q) {
+    const char *op1 = q_ins(q, 2), *op2 = q_ins(q, 3);
+    bool rev = op1[0] != 't' && !s_is_int(op1) && op2[0] == 't';
+    StrVec out = bits32_get_oper(b, op1, op2, rev, false);
+    sv_push(b, &out, s_runtime_call(b, RL_LTI32));
+    sv_push(b, &out, "push af");
+    return out;
+}
+static StrVec emit_gtu32(Backend *b, Quad *q) {
+    const char *op1 = q_ins(q, 2), *op2 = q_ins(q, 3);
+    bool rev = op1[0] != 't' && !s_is_int(op1) && op2[0] == 't';
+    StrVec out = bits32_get_oper(b, op1, op2, rev, false);
+    sv_push(b, &out, "pop bc");
+    sv_push(b, &out, "or a");
+    sv_push(b, &out, "sbc hl, bc");
+    sv_push(b, &out, "ex de, hl");
+    sv_push(b, &out, "pop de");
+    sv_push(b, &out, "sbc hl, de");
+    sv_push(b, &out, "sbc a, a");
+    sv_push(b, &out, "push af");
+    return out;
+}
+static StrVec emit_gti32(Backend *b, Quad *q) {
+    const char *op1 = q_ins(q, 2), *op2 = q_ins(q, 3);
+    bool rev = op1[0] != 't' && !s_is_int(op1) && op2[0] == 't';
+    StrVec out = bits32_get_oper(b, op1, op2, rev, false);
+    sv_push(b, &out, s_runtime_call(b, RL_LEI32));
+    sv_push(b, &out, "sub 1");
+    sv_push(b, &out, "sbc a, a");
+    sv_push(b, &out, "push af");
+    return out;
+}
+static StrVec emit_leu32(Backend *b, Quad *q) {
+    const char *op1 = q_ins(q, 2), *op2 = q_ins(q, 3);
+    bool rev = op1[0] != 't' && !s_is_int(op1) && op2[0] == 't';
+    StrVec out = bits32_get_oper(b, op1, op2, rev, false);
+    sv_push(b, &out, "pop bc");
+    sv_push(b, &out, "or a");
+    sv_push(b, &out, "sbc hl, bc");
+    sv_push(b, &out, "ex de, hl");
+    sv_push(b, &out, "pop de");
+    sv_push(b, &out, "sbc hl, de");
+    sv_push(b, &out, "ccf");
+    sv_push(b, &out, "sbc a, a");
+    sv_push(b, &out, "push af");
+    return out;
+}
+static StrVec emit_lei32(Backend *b, Quad *q) {
+    const char *op1 = q_ins(q, 2), *op2 = q_ins(q, 3);
+    bool rev = op1[0] != 't' && !s_is_int(op1) && op2[0] == 't';
+    StrVec out = bits32_get_oper(b, op1, op2, rev, false);
+    sv_push(b, &out, s_runtime_call(b, RL_LEI32));
+    sv_push(b, &out, "push af");
+    return out;
+}
+static StrVec emit_geu32(Backend *b, Quad *q) {
+    const char *op1 = q_ins(q, 2), *op2 = q_ins(q, 3);
+    bool rev = op1[0] != 't' && !s_is_int(op1) && op2[0] == 't';
+    StrVec out = bits32_get_oper(b, op1, op2, rev, false);
+    sv_push(b, &out, s_runtime_call(b, RL_SUB32));
+    sv_push(b, &out, "ccf");
+    sv_push(b, &out, "sbc a, a");
+    sv_push(b, &out, "push af");
+    return out;
+}
+static StrVec emit_gei32(Backend *b, Quad *q) {
+    const char *op1 = q_ins(q, 2), *op2 = q_ins(q, 3);
+    bool rev = op1[0] != 't' && !s_is_int(op1) && op2[0] == 't';
+    StrVec out = bits32_get_oper(b, op1, op2, rev, false);
+    sv_push(b, &out, s_runtime_call(b, RL_LTI32));
+    sv_push(b, &out, "sub 1");
+    sv_push(b, &out, "sbc a, a");
+    sv_push(b, &out, "push af");
+    return out;
+}
+static StrVec emit_eq32(Backend *b, Quad *q) {
+    return bits32_bool_binary(b, q, RL_EQ32, false);
+}
+static StrVec emit_ne32(Backend *b, Quad *q) {
+    /* eq32(ins)[:-1] + sub 1 / sbc a,a / push af  (_32bit.py:589-600) */
+    StrVec out = bits32_bool_binary(b, q, RL_EQ32, false);
+    if (out.len > 0) out.len--;                     /* drop trailing push af */
+    sv_push(b, &out, "sub 1");
+    sv_push(b, &out, "sbc a, a");
+    sv_push(b, &out, "push af");
+    return out;
+}
+static StrVec emit_or32(Backend *b, Quad *q) {
+    return bits32_bool_binary(b, q, RL_OR32, false);
+}
+static StrVec emit_xor32(Backend *b, Quad *q) {
+    return bits32_bool_binary(b, q, RL_XOR32, false);
+}
+static StrVec emit_and32(Backend *b, Quad *q) {
+    const char *op1 = q_ins(q, 2), *op2 = q_ins(q, 3);
+    const char *other; long iv;
+    if (s_int_ops(op1, op2, &other, &iv) && iv == 0) {
+        StrVec out;
+        if (other[0] == 't') out = bits32_get_oper(b, other, NULL, false, false);
+        else                 out = sv_new();
+        sv_push(b, &out, "xor a");
+        sv_push(b, &out, "push af");
+        return out;
+    }
+    return bits32_bool_binary(b, q, RL_AND32, true);
+}
+static StrVec emit_not32(Backend *b, Quad *q) {
+    StrVec out = bits32_get_oper(b, q_ins(q, 2), NULL, false, false);
+    sv_push(b, &out, s_runtime_call(b, RL_NOT32));
+    sv_push(b, &out, "push af");
+    return out;
+}
+/* Bitwise band/bor/bxor/bnot32 (_32bit.py:613-709) */
+static StrVec bits32_bitwise(Backend *b, Quad *q, const char *label) {
+    StrVec out = bits32_get_oper(b, q_ins(q, 2), q_ins(q, 3), false, false);
+    sv_push(b, &out, s_runtime_call(b, label));
+    sv_push(b, &out, "push de");
+    sv_push(b, &out, "push hl");
+    return out;
+}
+static StrVec emit_band32(Backend *b, Quad *q) { return bits32_bitwise(b, q, RL_BAND32); }
+static StrVec emit_bor32(Backend *b, Quad *q)  { return bits32_bitwise(b, q, RL_BOR32); }
+static StrVec emit_bxor32(Backend *b, Quad *q) { return bits32_bitwise(b, q, RL_BXOR32); }
+static StrVec emit_bnot32(Backend *b, Quad *q) {
+    StrVec out = bits32_get_oper(b, q_ins(q, 2), NULL, false, false);
+    sv_push(b, &out, s_runtime_call(b, RL_BNOT32));
+    sv_push(b, &out, "push de");
+    sv_push(b, &out, "push hl");
+    return out;
+}
+
+/* ---- Bits32 shifts (_32bit.py:721-860) ------------------------------- */
+static StrVec bits32_shift(Backend *b, Quad *q, const char *label) {
+    const char *op1 = q_ins(q, 2), *op2 = q_ins(q, 3);
+    if (s_is_int(op2)) {
+        StrVec out = bits32_get_oper(b, op1, NULL, false, false);
+        if (s_int_val(op2) == 0) {
+            sv_push(b, &out, "push de");
+            sv_push(b, &out, "push hl");
+            return out;
+        }
+        if (s_int_val(op2) > 1) {
+            char *lab = s_tmp_label(b);
+            sv_pushf(b, &out, "ld b, %s", op2);
+            sv_pushf(b, &out, "%s:", lab);
+            sv_push(b, &out, s_runtime_call(b, label));
+            sv_pushf(b, &out, "djnz %s", lab);
+        } else {
+            sv_push(b, &out, s_runtime_call(b, label));
+        }
+        sv_push(b, &out, "push de");
+        sv_push(b, &out, "push hl");
+        return out;
+    }
+    StrVec out = bits8_get_oper(b, op2, NULL, false);
+    sv_push(b, &out, "ld b, a");
+    {
+        StrVec g = bits32_get_oper(b, op1, NULL, false, false);
+        for (int i = 0; i < g.len; i++) vec_push(out, g.data[i]);
+        vec_free(g);
+    }
+    char *lab = s_tmp_label(b);
+    char *lab2 = s_tmp_label(b);
+    sv_push(b, &out, "or a");
+    sv_pushf(b, &out, "jr z, %s", lab2);
+    sv_pushf(b, &out, "%s:", lab);
+    sv_push(b, &out, s_runtime_call(b, label));
+    sv_pushf(b, &out, "djnz %s", lab);
+    sv_pushf(b, &out, "%s:", lab2);
+    sv_push(b, &out, "push de");
+    sv_push(b, &out, "push hl");
+    return out;
+}
+static StrVec emit_shru32(Backend *b, Quad *q) { return bits32_shift(b, q, RL_SHRL32); }
+static StrVec emit_shri32(Backend *b, Quad *q) { return bits32_shift(b, q, RL_SHRA32); }
+static StrVec emit_shl32(Backend *b, Quad *q)  { return bits32_shift(b, q, RL_SHL32); }
+
+/* ---- Bits32.param32/ret32 (_32bit.py:961-974) ------------------------ */
+static StrVec emit_param32(Backend *b, Quad *q) {
+    StrVec out = bits32_get_oper(b, q_ins(q, 1), NULL, false, false);
+    sv_push(b, &out, "push de");
+    sv_push(b, &out, "push hl");
+    return out;
+}
+static StrVec emit_ret32(Backend *b, Quad *q) {
+    StrVec out = bits32_get_oper(b, q_ins(q, 1), NULL, false, false);
+    sv_push(b, &out, "#pragma opt require hl,de");
+    sv_pushf(b, &out, "jp %s", q_ins(q, 2));
+    return out;
+}
+
+/* ====================================================================
+ * Fixed16 (f16) — _f16.py. Most ops delegate to Bits32 after a numeric
+ * f16_to_32bit rewrite of the Quad's operands.
+ * ==================================================================== */
+
+/* f16_to_32bit (_f16.py:189-202): for each numeric (is_float) arg,
+ * replace it with str((de << 16) | hl) of Fixed16.f16(arg). Returns a
+ * rewritten Quad (same instr, copied args). */
+static Quad *f16_to_32bit(Backend *b, Quad *q) {
+    Quad *r = arena_alloc(b->arena, sizeof(Quad));
+    r->instr = q->instr;
+    r->nargs = q->nargs;
+    r->args = arena_alloc(b->arena, (size_t)q->nargs * sizeof(char *));
+    for (int i = 0; i < q->nargs; i++) {
+        const char *a = q->args[i];
+        if (s_is_float(a)) {
+            unsigned DE, HL; s_f16(s_float_val(a), &DE, &HL);
+            unsigned long packed = ((unsigned long)DE << 16) | HL;
+            char buf[24];
+            snprintf(buf, sizeof(buf), "%lu", packed);
+            r->args[i] = arena_strdup(b->arena, buf);
+        } else {
+            r->args[i] = (char *)a;
+        }
+    }
+    return r;
+}
+
+/* ---- Fixed16.get_oper (_f16.py:46-187) — parallels Bits32.get_oper
+ * but uses is_float/cls.f16 instead of is_int/int32, and use_bc==
+ * preserveHL. The non-float (label/temp) branch is identical shape. */
+static StrVec fixed16_get_oper(Backend *b, const char *op1, const char *op2,
+                               bool use_bc, bool reversed) {
+    StrVec out = sv_new();
+    const char *op = (op2 != NULL) ? op2 : op1;
+    bool float1 = false;
+
+    bool indirect = op[0] == '*';
+    if (indirect) op++;
+    bool immediate = op[0] == '#';
+    if (immediate) op++;
+
+    const char *hl = use_bc ? "bc" : "hl";
+
+    if (s_is_float(op)) {
+        float1 = true;
+        double opf = s_float_val(op);
+        if (indirect) {
+            long iop = (long)opf & 0xFFFF;          /* int(op) & 0xFFFF */
+            if (immediate) sv_pushf(b, &out, "ld hl, %ld", iop);
+            else           sv_pushf(b, &out, "ld hl, (%ld)", iop);
+            sv_push(b, &out, s_runtime_call(b, RL_ILOAD32));
+            if (use_bc) { sv_push(b, &out, "ld b, h");
+                          sv_push(b, &out, "ld c, l"); }
+        } else {
+            unsigned DE, HL; s_f16(opf, &DE, &HL);
+            sv_pushf(b, &out, "ld de, %u", DE);
+            sv_pushf(b, &out, "ld %s, %u", hl, HL);
+        }
+    } else {
+        if (op[0] == '_') {
+            if (immediate) sv_pushf(b, &out, "ld %s, %s", hl, op);
+            else           sv_pushf(b, &out, "ld %s, (%s)", hl, op);
+        } else {
+            sv_pushf(b, &out, "pop %s", hl);
+        }
+        if (indirect) {
+            sv_push(b, &out, s_runtime_call(b, RL_ILOAD32));
+            if (use_bc) { sv_push(b, &out, "ld b, h");
+                          sv_push(b, &out, "ld c, l"); }
+        } else {
+            if (op[0] == '_') sv_pushf(b, &out, "ld de, (%s + 2)", op);
+            else              sv_push(b, &out, "pop de");
+        }
+    }
+
+    if (op2 != NULL) {
+        op = op1;
+        indirect = op[0] == '*';
+        if (indirect) op++;
+        immediate = op[0] == '#';
+        if (immediate) op++;
+
+        if (s_is_float(op)) {
+            double opf = s_float_val(op);
+            if (indirect) {
+                long iop = (long)opf;               /* int(op) */
+                sv_push(b, &out, "exx");
+                if (immediate) sv_pushf(b, &out, "ld hl, %ld", iop & 0xFFFF);
+                else           sv_pushf(b, &out, "ld hl, (%ld)", iop & 0xFFFF);
+                sv_push(b, &out, s_runtime_call(b, RL_ILOAD32));
+                sv_push(b, &out, "push de");
+                sv_push(b, &out, "push hl");
+                sv_push(b, &out, "exx");
+            } else {
+                unsigned DE, HL; s_f16(opf, &DE, &HL);
+                sv_pushf(b, &out, "ld bc, %u", DE);
+                sv_push(b, &out, "push bc");
+                sv_pushf(b, &out, "ld bc, %u", HL);
+                sv_push(b, &out, "push bc");
+            }
+        } else {
+            if (indirect) {
+                sv_push(b, &out, "exx");
+                if (op[0] == '_') {
+                    if (immediate) sv_pushf(b, &out, "ld hl, %s", op);
+                    else           sv_pushf(b, &out, "ld hl, (%s)", op);
+                } else {
+                    sv_push(b, &out, "pop hl");
+                }
+                sv_push(b, &out, s_runtime_call(b, RL_ILOAD32));
+                sv_push(b, &out, "push de");
+                sv_push(b, &out, "push hl");
+                sv_push(b, &out, "exx");
+            } else if (op[0] == '_') {              /* an address */
+                if (float1 || op1[0] == '_') {
+                    StrVec tmp = out; out = sv_new();
+                    sv_pushf(b, &out, "ld hl, (%s + 2)", op);
+                    sv_push(b, &out, "push hl");
+                    sv_pushf(b, &out, "ld hl, (%s)", op);
+                    sv_push(b, &out, "push hl");
+                    for (int i = 0; i < tmp.len; i++) vec_push(out, tmp.data[i]);
+                    vec_free(tmp);
+                } else {
+                    sv_pushf(b, &out, "ld bc, (%s + 2)", op);
+                    sv_push(b, &out, "push bc");
+                    sv_pushf(b, &out, "ld bc, (%s)", op);
+                    sv_push(b, &out, "push bc");
+                }
+            } else {
+                /* 2nd operand remains in the stack */
+            }
+        }
+    }
+
+    if (op2 != NULL && reversed)
+        sv_push(b, &out, s_runtime_call(b, RL_SWAP32));
+
+    return out;
+}
+
+/* Fixed16.f16_binary (_f16.py:204-212). */
+static StrVec fixed16_f16_binary(Backend *b, Quad *q, const char *label,
+                                 bool reversible) {
+    const char *op1 = q_ins(q, 2), *op2 = q_ins(q, 3);
+    bool rev = reversible && !s_is_float(op1) && op1[0] != 't' && op2[0] == 't';
+    StrVec out = fixed16_get_oper(b, op1, op2, false, rev);
+    sv_push(b, &out, s_runtime_call(b, label));
+    sv_push(b, &out, "push de");
+    sv_push(b, &out, "push hl");
+    return out;
+}
+
+static StrVec emit_negf(Backend *b, Quad *q);   /* fwd (Float.negf) */
+
+/* addf16/subf16/negf16 -> Bits32.* (cls.f16_to_32bit(ins)) */
+static StrVec emit_addf16(Backend *b, Quad *q) {
+    return emit_add32(b, f16_to_32bit(b, q));
+}
+static StrVec emit_subf16(Backend *b, Quad *q) {
+    return emit_sub32(b, f16_to_32bit(b, q));
+}
+static StrVec emit_negf16(Backend *b, Quad *q) {
+    return emit_neg32(b, f16_to_32bit(b, q));
+}
+/* mulf16 (_f16.py:235-261) */
+static StrVec emit_mulf16(Backend *b, Quad *q) {
+    const char *op1 = q_ins(q, 2), *op2 = q_ins(q, 3);
+    const char *other; double fv;
+    if (s_f_ops(op1, op2, &other, &fv)) {
+        if (fv == 1.0) {
+            StrVec out = fixed16_get_oper(b, other, NULL, false, false);
+            sv_push(b, &out, "push de");
+            sv_push(b, &out, "push hl");
+            return out;
+        }
+        if (fv == -1.0) return emit_neg32(b, q);
+        StrVec out = fixed16_get_oper(b, other, NULL, false, false);
+        if (fv == 0.0) {
+            sv_push(b, &out, "ld hl, 0");
+            sv_push(b, &out, "ld e, h");
+            sv_push(b, &out, "ld d, l");
+            sv_push(b, &out, "push de");
+            sv_push(b, &out, "push hl");
+            return out;
+        }
+        vec_free(out);
+    }
+    return fixed16_f16_binary(b, q, RL_MULF16, false);
+}
+/* divf16 (_f16.py:263-284) */
+static StrVec emit_divf16(Backend *b, Quad *q) {
+    const char *op1 = q_ins(q, 2), *op2 = q_ins(q, 3);
+    if (s_is_float(op2)) {
+        if (s_float_val(op2) == 1.0) {
+            StrVec out = fixed16_get_oper(b, op1, NULL, false, false);
+            sv_push(b, &out, "push de");
+            sv_push(b, &out, "push hl");
+            return out;
+        }
+        if (s_float_val(op2) == -1.0) return emit_negf(b, q);
+    }
+    return fixed16_f16_binary(b, q, RL_DIVF16, true);
+}
+/* modf16 (_f16.py:286-301) */
+static StrVec emit_modf16(Backend *b, Quad *q) {
+    const char *op1 = q_ins(q, 2), *op2 = q_ins(q, 3);
+    if (s_is_float(op2) && s_float_val(op2) == 1.0) {
+        StrVec out = fixed16_get_oper(b, op1, NULL, false, false);
+        sv_push(b, &out, "ld hl, 0");
+        sv_push(b, &out, "push hl");
+        sv_push(b, &out, "push hl");
+        return out;
+    }
+    return fixed16_f16_binary(b, q, RL_MODF16, true);
+}
+/* comparisons/bool -> Bits32.* on f16_to_32bit */
+static StrVec emit_ltf16(Backend *b, Quad *q) { return emit_lti32(b, f16_to_32bit(b, q)); }
+static StrVec emit_gtf16(Backend *b, Quad *q) { return emit_gti32(b, f16_to_32bit(b, q)); }
+static StrVec emit_lef16(Backend *b, Quad *q) { return emit_lei32(b, f16_to_32bit(b, q)); }
+static StrVec emit_gef16(Backend *b, Quad *q) { return emit_gei32(b, f16_to_32bit(b, q)); }
+static StrVec emit_eqf16(Backend *b, Quad *q) { return emit_eq32(b, f16_to_32bit(b, q)); }
+static StrVec emit_nef16(Backend *b, Quad *q) { return emit_ne32(b, f16_to_32bit(b, q)); }
+static StrVec emit_orf16(Backend *b, Quad *q) { return emit_or32(b, f16_to_32bit(b, q)); }
+static StrVec emit_xorf16(Backend *b, Quad *q){ return emit_xor32(b, f16_to_32bit(b, q)); }
+static StrVec emit_andf16(Backend *b, Quad *q){ return emit_and32(b, f16_to_32bit(b, q)); }
+static StrVec emit_notf16(Backend *b, Quad *q){ return emit_not32(b, f16_to_32bit(b, q)); }
+static StrVec emit_absf16(Backend *b, Quad *q){ return emit_abs32(b, f16_to_32bit(b, q)); }
+/* loadf16 (_f16.py:417-426) */
+static StrVec emit_loadf16(Backend *b, Quad *q) {
+    StrVec out = fixed16_get_oper(b, q_ins(q, 2), NULL, false, false);
+    sv_push(b, &out, "push de");
+    sv_push(b, &out, "push hl");
+    return out;
+}
+/* storef16 (_f16.py:428-441): rewrite immediate float -> packed int,
+ * then delegate to Bits32.store32. */
+static StrVec emit_storef16(Backend *b, Quad *q) {
+    const char *value = q_ins(q, 2);
+    if (s_is_float(value)) {
+        unsigned DE, HL; s_f16(s_float_val(value), &DE, &HL);
+        unsigned long packed = ((unsigned long)DE << 16) | HL;
+        Quad *r = arena_alloc(b->arena, sizeof(Quad));
+        r->instr = q->instr;
+        r->nargs = q->nargs;
+        r->args = arena_alloc(b->arena, (size_t)q->nargs * sizeof(char *));
+        for (int i = 0; i < q->nargs; i++) r->args[i] = q->args[i];
+        char buf[24]; snprintf(buf, sizeof(buf), "%lu", packed);
+        if (q->nargs >= 3) r->args[2] = arena_strdup(b->arena, buf);
+        q = r;
+    }
+    return emit_store32(b, q);
+}
+static StrVec emit_paramf16(Backend *b, Quad *q) {
+    StrVec out = fixed16_get_oper(b, q_ins(q, 1), NULL, false, false);
+    sv_push(b, &out, "push de");
+    sv_push(b, &out, "push hl");
+    return out;
+}
+static StrVec emit_retf16(Backend *b, Quad *q) {
+    StrVec out = fixed16_get_oper(b, q_ins(q, 1), NULL, false, false);
+    sv_push(b, &out, "#pragma opt require hl,de");
+    sv_pushf(b, &out, "jp %s", q_ins(q, 2));
+    return out;
+}
+
+/* ====================================================================
+ * Float (5-byte ZX FP) — _float.py.
+ * ==================================================================== */
+
+/* Float.fpop/fpush (_float.py:23-39). */
+static void float_fpop(Backend *b, StrVec *out) {
+    sv_push(b, out, "pop af");
+    sv_push(b, out, "pop de");
+    sv_push(b, out, "pop bc");
+}
+static void float_fpush(Backend *b, StrVec *out) {
+    sv_push(b, out, "push bc");
+    sv_push(b, out, "push de");
+    sv_push(b, out, "push af");
+}
+
+/* Float.get_oper (_float.py:41-128). NO operand inversion. 1st op -> A DE BC. */
+static StrVec float_get_oper(Backend *b, const char *op1, const char *op2) {
+    StrVec out = sv_new();
+    const char *op = (op2 != NULL) ? op2 : op1;
+
+    bool indirect = op[0] == '*';
+    if (indirect) op++;
+
+    if (s_is_float(op)) {
+        double opf = s_float_val(op);
+        if (indirect) {
+            long iop = (long)opf & 0xFFFF;          /* int(op) & 0xFFFF */
+            sv_pushf(b, &out, "ld hl, (%ld)", iop);
+            sv_push(b, &out, s_runtime_call(b, RL_ILOADF));
+        } else {
+            char C[8], DE[8], BC[8];
+            z80h_immediate_float(opf, C, DE, BC);
+            sv_pushf(b, &out, "ld a, %s", C);
+            sv_pushf(b, &out, "ld de, %s", DE);
+            sv_pushf(b, &out, "ld bc, %s", BC);
+        }
+    } else {
+        if (indirect) {
+            if (op[0] == '_') sv_pushf(b, &out, "ld hl, (%s)", op);
+            else              sv_push(b, &out, "pop hl");
+            sv_push(b, &out, s_runtime_call(b, RL_LOADF));
+        } else {
+            if (op[0] == '_') {
+                sv_pushf(b, &out, "ld a, (%s)", op);
+                sv_pushf(b, &out, "ld de, (%s + 1)", op);
+                sv_pushf(b, &out, "ld bc, (%s + 3)", op);
+            } else {
+                float_fpop(b, &out);
+            }
+        }
+    }
+
+    if (op2 != NULL) {
+        op = op1;
+        if (s_is_float(op)) {
+            char C[8], DE[8], BC[8];
+            z80h_immediate_float(s_float_val(op), C, DE, BC);
+            sv_pushf(b, &out, "ld hl, %s", BC);
+            sv_push(b, &out, "push hl");
+            sv_pushf(b, &out, "ld hl, %s", DE);
+            sv_push(b, &out, "push hl");
+            sv_pushf(b, &out, "ld h, %s", C);
+            sv_push(b, &out, "push hl");
+        } else if (op[0] == '*') {                  /* Indirect */
+            op++;
+            sv_push(b, &out, "exx");
+            sv_push(b, &out, "ex af, af'");
+            if (s_is_int(op)) {
+                sv_pushf(b, &out, "ld hl, %ld", s_int_val(op));
+            } else if (op[0] == '_') {
+                sv_pushf(b, &out, "ld hl, (%s)", op);
+            } else {
+                sv_push(b, &out, "pop hl");
+            }
+            sv_push(b, &out, s_runtime_call(b, RL_ILOADF));
+            float_fpush(b, &out);
+            sv_push(b, &out, "ex af, af'");
+            sv_push(b, &out, "exx");
+        } else if (op[0] == '_') {
+            if (s_is_float(op2)) {
+                StrVec tmp = out; out = sv_new();
+                sv_pushf(b, &out, "ld hl, %s + 4", op);
+                sv_push(b, &out, s_runtime_call(b, RL_FP_PUSH_REV));
+                for (int i = 0; i < tmp.len; i++) vec_push(out, tmp.data[i]);
+                vec_free(tmp);
+            } else {
+                sv_pushf(b, &out, "ld hl, %s + 4", op);
+                sv_push(b, &out, s_runtime_call(b, RL_FP_PUSH_REV));
+            }
+        } else {
+            /* leave the op onto the stack */
+        }
+    }
+    return out;
+}
+
+/* Float.float_binary (_float.py:134-142). */
+static StrVec float_binary(Backend *b, Quad *q, const char *label) {
+    StrVec out = float_get_oper(b, q_ins(q, 2), q_ins(q, 3));
+    sv_push(b, &out, s_runtime_call(b, label));
+    float_fpush(b, &out);
+    return out;
+}
+/* Float.bool_binary (_float.py:218-225). */
+static StrVec float_bool_binary(Backend *b, Quad *q, const char *label) {
+    StrVec out = float_get_oper(b, q_ins(q, 2), q_ins(q, 3));
+    sv_push(b, &out, s_runtime_call(b, label));
+    sv_push(b, &out, "push af");
+    return out;
+}
+/* addf (_float.py:144-157) */
+static StrVec emit_addf(Backend *b, Quad *q) {
+    const char *op1 = q_ins(q, 2), *op2 = q_ins(q, 3);
+    const char *other; double fv;
+    if (s_f_ops(op1, op2, &other, &fv) && fv == 0.0) {
+        StrVec out = float_get_oper(b, other, NULL);
+        float_fpush(b, &out);
+        return out;
+    }
+    return float_binary(b, q, RL_ADDF);
+}
+/* subf (_float.py:159-170) */
+static StrVec emit_subf(Backend *b, Quad *q) {
+    const char *op1 = q_ins(q, 2), *op2 = q_ins(q, 3);
+    if (s_is_float(op2) && s_float_val(op2) == 0.0) {
+        StrVec out = float_get_oper(b, op1, NULL);
+        float_fpush(b, &out);
+        return out;
+    }
+    return float_binary(b, q, RL_SUBF);
+}
+/* mulf (_float.py:172-185) */
+static StrVec emit_mulf(Backend *b, Quad *q) {
+    const char *op1 = q_ins(q, 2), *op2 = q_ins(q, 3);
+    const char *other; double fv;
+    if (s_f_ops(op1, op2, &other, &fv) && fv == 1.0) {
+        StrVec out = float_get_oper(b, other, NULL);
+        float_fpush(b, &out);
+        return out;
+    }
+    return float_binary(b, q, RL_MULF);
+}
+/* divf (_float.py:187-198) */
+static StrVec emit_divf(Backend *b, Quad *q) {
+    const char *op1 = q_ins(q, 2), *op2 = q_ins(q, 3);
+    if (s_is_float(op2) && s_float_val(op2) == 1.0) {
+        StrVec out = float_get_oper(b, op1, NULL);
+        float_fpush(b, &out);
+        return out;
+    }
+    return float_binary(b, q, RL_DIVF);
+}
+/* modf (_float.py:200-203) */
+static StrVec emit_modf(Backend *b, Quad *q) {
+    return float_binary(b, q, RL_MODF);
+}
+/* powf (_float.py:205-216) */
+static StrVec emit_powf(Backend *b, Quad *q) {
+    const char *op1 = q_ins(q, 2), *op2 = q_ins(q, 3);
+    if (s_is_float(op2) && s_float_val(op2) == 1.0) {
+        StrVec out = float_get_oper(b, op1, NULL);
+        float_fpush(b, &out);
+        return out;
+    }
+    return float_binary(b, q, RL_POWF);
+}
+static StrVec emit_ltf(Backend *b, Quad *q) { return float_bool_binary(b, q, RL_LTF); }
+static StrVec emit_gtf(Backend *b, Quad *q) { return float_bool_binary(b, q, RL_GTF); }
+static StrVec emit_lef(Backend *b, Quad *q) { return float_bool_binary(b, q, RL_LEF); }
+static StrVec emit_gef(Backend *b, Quad *q) { return float_bool_binary(b, q, RL_GEF); }
+static StrVec emit_eqf(Backend *b, Quad *q) { return float_bool_binary(b, q, RL_EQF); }
+static StrVec emit_nef(Backend *b, Quad *q) { return float_bool_binary(b, q, RL_NEF); }
+static StrVec emit_orf(Backend *b, Quad *q) { return float_bool_binary(b, q, RL_ORF); }
+static StrVec emit_xorf(Backend *b, Quad *q) { return float_bool_binary(b, q, RL_XORF); }
+static StrVec emit_andf(Backend *b, Quad *q) { return float_bool_binary(b, q, RL_ANDF); }
+/* notf (_float.py:317-323) */
+static StrVec emit_notf(Backend *b, Quad *q) {
+    StrVec out = float_get_oper(b, q_ins(q, 2), NULL);
+    sv_push(b, &out, s_runtime_call(b, RL_NOTF));
+    sv_push(b, &out, "push af");
+    return out;
+}
+/* negf (_float.py:325-331) */
+static StrVec emit_negf(Backend *b, Quad *q) {
+    StrVec out = float_get_oper(b, q_ins(q, 2), NULL);
+    sv_push(b, &out, s_runtime_call(b, RL_NEGF));
+    float_fpush(b, &out);
+    return out;
+}
+/* absf (_float.py:333-339) */
+static StrVec emit_absf(Backend *b, Quad *q) {
+    StrVec out = float_get_oper(b, q_ins(q, 2), NULL);
+    sv_push(b, &out, "res 7, e");
+    float_fpush(b, &out);
+    return out;
+}
+/* loadf (_float.py:341-349) */
+static StrVec emit_loadf(Backend *b, Quad *q) {
+    StrVec out = float_get_oper(b, q_ins(q, 2), NULL);
+    float_fpush(b, &out);
+    return out;
+}
+/* storef (_float.py:351-383) */
+static StrVec emit_storef(Backend *b, Quad *q) {
+    StrVec out = float_get_oper(b, q_ins(q, 2), NULL);
+    const char *op = q_ins(q, 1);
+    bool indirect = op[0] == '*';
+    if (indirect) op++;
+    bool immediate = op[0] == '#';
+    if (immediate) op++;
+
+    if (s_is_int(op) || op[0] == '_' || op[0] == '.') {
+        char ibuf[24];
+        if (s_is_int(op)) {
+            snprintf(ibuf, sizeof(ibuf), "%ld", s_int_val(op) & 0xFFFF);
+            op = ibuf;
+        }
+        if (indirect) sv_pushf(b, &out, "ld hl, (%s)", op);
+        else          sv_pushf(b, &out, "ld hl, %s", op);
+    } else {
+        sv_push(b, &out, "pop hl");
+        if (indirect) {
+            sv_push(b, &out, s_runtime_call(b, RL_ISTOREF));
+            return out;
+        }
+    }
+    sv_push(b, &out, s_runtime_call(b, RL_STOREF));
+    return out;
+}
+static StrVec emit_paramf(Backend *b, Quad *q) {
+    StrVec out = float_get_oper(b, q_ins(q, 1), NULL);
+    float_fpush(b, &out);
+    return out;
+}
+static StrVec emit_retf(Backend *b, Quad *q) {
+    StrVec out = float_get_oper(b, q_ins(q, 1), NULL);
+    sv_push(b, &out, "#pragma opt require a,bc,de");
+    sv_pushf(b, &out, "jp %s", q_ins(q, 2));
+    return out;
+}
+
 /* ---- _label (generic.py:92-94): ["%s:" % str(ins[1])] ----------------- */
 static StrVec emit_label(Backend *b, Quad *q) {
     StrVec out = sv_new();
@@ -917,23 +2158,38 @@ static int s_yy_size(const char *t) {
     return 0;
 }
 
-/* to_byte (common.py:318-339) — S5.3 integer slice. is_int_type(stype)
- * == stype[0] in ('u','i') (common.py:238-240): i16/u16/i32/u32 -> "ld a,l"
- * (i8/u8 short-circuit to []). bool/f16/f are out of the integer-scalar
- * slice (no bool/float DIM in the S5.3 corpus) — loud, not silent. */
+/* is_int_type (common.py:238-240): stype[0] in ('u','i'). */
+static bool s_is_int_type(const char *t) { return t[0] == 'u' || t[0] == 'i'; }
+
+/* normalize_boolean (common.py:308-316): Size strategy -> a single
+ * __NORMALIZE_BOOLEAN call; else the 3-instr sub/sbc/inc sequence. */
+static void s_normalize_boolean(Backend *b, StrVec *out) {
+    if (b->opt_strategy == 0 /* OPT_STRATEGY_SIZE */) {
+        sv_push(b, out, s_runtime_call(b,
+                ZXBC_NAMESPACE ".__NORMALIZE_BOOLEAN"));
+        return;
+    }
+    sv_push(b, out, "sub 1");
+    sv_push(b, out, "sbc a, a");
+    sv_push(b, out, "inc a");
+}
+
+/* to_byte (common.py:319-339). */
 static void cast_to_byte(Backend *b, StrVec *out, const char *tA) {
+    if (!strcmp(tA, "bool")) { s_normalize_boolean(b, out); return; }
     if (!strcmp(tA, "i8") || !strcmp(tA, "u8")) return;     /* [] */
-    if (tA[0] == 'u' || tA[0] == 'i') {                     /* is_int_type */
+    if (s_is_int_type(tA)) { sv_push(b, out, "ld a, l"); return; }
+    if (!strcmp(tA, "f16")) { sv_push(b, out, "ld a, e"); return; }
+    if (!strcmp(tA, "f")) {
+        sv_push(b, out, s_runtime_call(b, RL_FTOU32REG));
         sv_push(b, out, "ld a, l");
         return;
     }
-    fprintf(stderr, "zxbc: cast to_byte from %s not in S5.3 scope\n", tA);
 }
-/* to_word (common.py:342-367) — S5.3 integer slice. u8 -> ld l,a / ld h,0;
- * i8 -> ld l,a / add a,a / sbc a,a / ld h,a; i16/u16/i32/u32 -> [].
- * bool prepends normalize_boolean (out of the integer-scalar slice). */
+/* to_word (common.py:342-367). */
 static void cast_to_word(Backend *b, StrVec *out, const char *tA) {
-    if (!strcmp(tA, "u8")) {
+    if (!strcmp(tA, "bool")) s_normalize_boolean(b, out);
+    if (!strcmp(tA, "bool") || !strcmp(tA, "u8")) {
         sv_push(b, out, "ld l, a");
         sv_push(b, out, "ld h, 0");
         return;
@@ -945,8 +2201,94 @@ static void cast_to_word(Backend *b, StrVec *out, const char *tA) {
         sv_push(b, out, "ld h, a");
         return;
     }
-    if (tA[0] == 'u' || tA[0] == 'i') return;   /* i16/u16/i32/u32 -> [] */
-    fprintf(stderr, "zxbc: cast to_word from %s not in S5.3 scope\n", tA);
+    if (!strcmp(tA, "f16")) { sv_push(b, out, "ex de, hl"); return; }
+    if (!strcmp(tA, "f")) {
+        sv_push(b, out, s_runtime_call(b, RL_FTOU32REG));
+        return;
+    }
+    /* i16/u16/i32/u32 -> [] */
+}
+/* to_long (common.py:370-418). */
+static void cast_to_long(Backend *b, StrVec *out, const char *tA) {
+    if (!strcmp(tA, "bool")) {
+        s_normalize_boolean(b, out);
+        sv_push(b, out, "ld l, a");
+        sv_push(b, out, "ld h, 0");
+        sv_push(b, out, "ld e, h");
+        sv_push(b, out, "ld d, h");
+        return;
+    }
+    if (!strcmp(tA, "i8") || !strcmp(tA, "u8")) {            /* byte to word */
+        cast_to_word(b, out, tA);
+        sv_push(b, out, "ld e, h");
+        sv_push(b, out, "ld d, h");
+        return;
+    }
+    if (!strcmp(tA, "i16")) {
+        sv_push(b, out, "ld a, h");
+        sv_push(b, out, "add a, a");
+        sv_push(b, out, "sbc a, a");
+        sv_push(b, out, "ld e, a");
+        sv_push(b, out, "ld d, a");
+        return;
+    }
+    if (!strcmp(tA, "f16")) {
+        sv_push(b, out, "ex de, hl");
+        sv_push(b, out, "ld de, 0");
+        return;
+    }
+    if (!strcmp(tA, "u32") || !strcmp(tA, "i32")) return;    /* [] */
+    if (!strcmp(tA, "u16")) { sv_push(b, out, "ld de, 0"); return; }
+    if (!strcmp(tA, "f")) {
+        sv_push(b, out, s_runtime_call(b, RL_FTOU32REG));
+        return;
+    }
+}
+/* to_fixed (common.py:421-448). */
+static void cast_to_fixed(Backend *b, StrVec *out, const char *tA) {
+    if (!strcmp(tA, "bool")) {
+        cast_to_word(b, out, tA);
+        sv_push(b, out, "ex de, hl");
+        sv_push(b, out, "ld hl, 0");
+        return;
+    }
+    if (s_is_int_type(tA)) {
+        cast_to_word(b, out, tA);
+        sv_push(b, out, "ex de, hl");
+        sv_push(b, out, "ld hl, 0");
+        return;
+    }
+    if (!strcmp(tA, "f")) {
+        sv_push(b, out, s_runtime_call(b, RL_FTOF16REG));
+        return;
+    }
+}
+/* to_float (common.py:451-483). */
+static void cast_to_float(Backend *b, StrVec *out, const char *tA) {
+    if (!strcmp(tA, "f")) return;                            /* nothing */
+    if (!strcmp(tA, "f16")) {
+        sv_push(b, out, s_runtime_call(b, RL_F16TOFREG));
+        return;
+    }
+    if (!strcmp(tA, "bool")) s_normalize_boolean(b, out);
+    if (!strcmp(tA, "bool") || !strcmp(tA, "u8")) {
+        sv_push(b, out, s_runtime_call(b, RL_U8TOFREG));
+        return;
+    }
+    if (!strcmp(tA, "i8")) {
+        sv_push(b, out, s_runtime_call(b, RL_I8TOFREG));
+        return;
+    }
+    if (!strcmp(tA, "i16") || !strcmp(tA, "i32") ||
+        !strcmp(tA, "u16") || !strcmp(tA, "u32")) {
+        if (!strcmp(tA, "i16") || !strcmp(tA, "u16"))
+            cast_to_long(b, out, tA);
+        if (!strcmp(tA, "i16") || !strcmp(tA, "i32"))
+            sv_push(b, out, s_runtime_call(b, RL_I32TOFREG));
+        else
+            sv_push(b, out, s_runtime_call(b, RL_U32TOFREG));
+        return;
+    }
 }
 
 /* ---- _cast (generic.py:339-390) -------------------------------------- */
@@ -967,8 +2309,14 @@ static StrVec emit_cast(Backend *b, Quad *q) {
         out = bits8_get_oper(b, src, NULL, false);
     } else if (!strcmp(tA, "u16") || !strcmp(tA, "i16")) {
         out = bits16_get_oper(b, src, NULL, false);
+    } else if (!strcmp(tA, "u32") || !strcmp(tA, "i32")) {
+        out = bits32_get_oper(b, src, NULL, false, false);
+    } else if (!strcmp(tA, "f16")) {
+        out = fixed16_get_oper(b, src, NULL, false, false);
+    } else if (!strcmp(tA, "f")) {
+        out = float_get_oper(b, src, NULL);
     } else {
-        fprintf(stderr, "zxbc: cast from %s not in S5.3 scope\n", tA);
+        fprintf(stderr, "zxbc: invalid typecast from %s to %s\n", tA, tB);
         return sv_new();
     }
 
@@ -976,14 +2324,20 @@ static StrVec emit_cast(Backend *b, Quad *q) {
         cast_to_byte(b, &out, tA);
     } else if (!strcmp(tB, "u16") || !strcmp(tB, "i16")) {
         cast_to_word(b, &out, tA);
+    } else if (!strcmp(tB, "u32") || !strcmp(tB, "i32")) {
+        cast_to_long(b, &out, tA);
+    } else if (!strcmp(tB, "f16")) {
+        cast_to_fixed(b, &out, tA);
+    } else if (!strcmp(tB, "f")) {
+        cast_to_float(b, &out, tA);
     } else {
-        fprintf(stderr, "zxbc: cast to %s not in S5.3 scope\n", tB);
+        fprintf(stderr, "zxbc: invalid typecast from %s to %s\n", tA, tB);
         return out;
     }
 
     xsB += sB % 2;                       /* round up to even */
     if (xsB > 4) {
-        fprintf(stderr, "zxbc: cast fpush not in S5.3 scope\n");
+        float_fpush(b, &out);
     } else {
         if (xsB > 2) sv_push(b, &out, "push de");
         if (sB > 1)  sv_push(b, &out, "push hl");
@@ -1021,6 +2375,94 @@ static StrVec quad_emit(Backend *b, Quad *q) {
     if (strcmp(I, "varx")     == 0) return emit_varx(b, q);
     if (strcmp(I, "deflabel") == 0) return emit_deflabel(b, q);
     if (strcmp(I, "label")    == 0) return emit_label(b, q);
+
+    /* ---- S5.4 — wide (i32/u32), fixed (f16), float (f) _QUAD_TABLE rows
+     * (main.py:158-585). STOREI32/STOREU32 -> Bits32.store32 etc.;
+     * VAR/VARD/STORE are the type-generic emitters above. */
+    /* store / load */
+    if (strcmp(I, "storei32") == 0 || strcmp(I, "storeu32") == 0) return emit_store32(b, q);
+    if (strcmp(I, "storef16") == 0) return emit_storef16(b, q);
+    if (strcmp(I, "storef")   == 0) return emit_storef(b, q);
+    if (strcmp(I, "loadi32")  == 0 || strcmp(I, "loadu32")  == 0) return emit_load32(b, q);
+    if (strcmp(I, "loadf16")  == 0) return emit_loadf16(b, q);
+    if (strcmp(I, "loadf")    == 0) return emit_loadf(b, q);
+    /* add / sub / mul / div / mod */
+    if (strcmp(I, "addi32") == 0 || strcmp(I, "addu32") == 0) return emit_add32(b, q);
+    if (strcmp(I, "addf16") == 0) return emit_addf16(b, q);
+    if (strcmp(I, "addf")   == 0) return emit_addf(b, q);
+    if (strcmp(I, "subi32") == 0 || strcmp(I, "subu32") == 0) return emit_sub32(b, q);
+    if (strcmp(I, "subf16") == 0) return emit_subf16(b, q);
+    if (strcmp(I, "subf")   == 0) return emit_subf(b, q);
+    if (strcmp(I, "muli32") == 0 || strcmp(I, "mulu32") == 0) return emit_mul32(b, q);
+    if (strcmp(I, "mulf16") == 0) return emit_mulf16(b, q);
+    if (strcmp(I, "mulf")   == 0) return emit_mulf(b, q);
+    if (strcmp(I, "divu32") == 0) return emit_divu32(b, q);
+    if (strcmp(I, "divi32") == 0) return emit_divi32(b, q);
+    if (strcmp(I, "divf16") == 0) return emit_divf16(b, q);
+    if (strcmp(I, "divf")   == 0) return emit_divf(b, q);
+    if (strcmp(I, "powf")   == 0) return emit_powf(b, q);
+    if (strcmp(I, "modu32") == 0) return emit_modu32(b, q);
+    if (strcmp(I, "modi32") == 0) return emit_modi32(b, q);
+    if (strcmp(I, "modf16") == 0) return emit_modf16(b, q);
+    if (strcmp(I, "modf")   == 0) return emit_modf(b, q);
+    /* shifts (i32/u32) */
+    if (strcmp(I, "shru32") == 0) return emit_shru32(b, q);
+    if (strcmp(I, "shri32") == 0) return emit_shri32(b, q);
+    if (strcmp(I, "shlu32") == 0 || strcmp(I, "shli32") == 0) return emit_shl32(b, q);
+    /* comparisons */
+    if (strcmp(I, "ltu32") == 0) return emit_ltu32(b, q);
+    if (strcmp(I, "lti32") == 0) return emit_lti32(b, q);
+    if (strcmp(I, "ltf16") == 0) return emit_ltf16(b, q);
+    if (strcmp(I, "ltf")   == 0) return emit_ltf(b, q);
+    if (strcmp(I, "gtu32") == 0) return emit_gtu32(b, q);
+    if (strcmp(I, "gti32") == 0) return emit_gti32(b, q);
+    if (strcmp(I, "gtf16") == 0) return emit_gtf16(b, q);
+    if (strcmp(I, "gtf")   == 0) return emit_gtf(b, q);
+    if (strcmp(I, "leu32") == 0) return emit_leu32(b, q);
+    if (strcmp(I, "lei32") == 0) return emit_lei32(b, q);
+    if (strcmp(I, "lef16") == 0) return emit_lef16(b, q);
+    if (strcmp(I, "lef")   == 0) return emit_lef(b, q);
+    if (strcmp(I, "geu32") == 0) return emit_geu32(b, q);
+    if (strcmp(I, "gei32") == 0) return emit_gei32(b, q);
+    if (strcmp(I, "gef16") == 0) return emit_gef16(b, q);
+    if (strcmp(I, "gef")   == 0) return emit_gef(b, q);
+    if (strcmp(I, "equ32") == 0 || strcmp(I, "eqi32") == 0) return emit_eq32(b, q);
+    if (strcmp(I, "eqf16") == 0) return emit_eqf16(b, q);
+    if (strcmp(I, "eqf")   == 0) return emit_eqf(b, q);
+    if (strcmp(I, "neu32") == 0 || strcmp(I, "nei32") == 0) return emit_ne32(b, q);
+    if (strcmp(I, "nef16") == 0) return emit_nef16(b, q);
+    if (strcmp(I, "nef")   == 0) return emit_nef(b, q);
+    /* abs / neg */
+    if (strcmp(I, "absi32") == 0) return emit_abs32(b, q);
+    if (strcmp(I, "absf16") == 0) return emit_absf16(b, q);
+    if (strcmp(I, "absf")   == 0) return emit_absf(b, q);
+    if (strcmp(I, "negu32") == 0 || strcmp(I, "negi32") == 0) return emit_neg32(b, q);
+    if (strcmp(I, "negf16") == 0) return emit_negf16(b, q);
+    if (strcmp(I, "negf")   == 0) return emit_negf(b, q);
+    /* logical / bitwise */
+    if (strcmp(I, "andu32") == 0 || strcmp(I, "andi32") == 0) return emit_and32(b, q);
+    if (strcmp(I, "andf16") == 0) return emit_andf16(b, q);
+    if (strcmp(I, "andf")   == 0) return emit_andf(b, q);
+    if (strcmp(I, "oru32")  == 0 || strcmp(I, "ori32")  == 0) return emit_or32(b, q);
+    if (strcmp(I, "orf16")  == 0) return emit_orf16(b, q);
+    if (strcmp(I, "orf")    == 0) return emit_orf(b, q);
+    if (strcmp(I, "xoru32") == 0 || strcmp(I, "xori32") == 0) return emit_xor32(b, q);
+    if (strcmp(I, "xorf16") == 0) return emit_xorf16(b, q);
+    if (strcmp(I, "xorf")   == 0) return emit_xorf(b, q);
+    if (strcmp(I, "notu32") == 0 || strcmp(I, "noti32") == 0) return emit_not32(b, q);
+    if (strcmp(I, "notf16") == 0) return emit_notf16(b, q);
+    if (strcmp(I, "notf")   == 0) return emit_notf(b, q);
+    if (strcmp(I, "bandu32")== 0 || strcmp(I, "bandi32")== 0) return emit_band32(b, q);
+    if (strcmp(I, "boru32") == 0 || strcmp(I, "bori32") == 0) return emit_bor32(b, q);
+    if (strcmp(I, "bxoru32")== 0 || strcmp(I, "bxori32")== 0) return emit_bxor32(b, q);
+    if (strcmp(I, "bnotu32")== 0 || strcmp(I, "bnoti32")== 0) return emit_bnot32(b, q);
+    /* param / ret */
+    if (strcmp(I, "parami32") == 0 || strcmp(I, "paramu32") == 0) return emit_param32(b, q);
+    if (strcmp(I, "paramf16") == 0) return emit_paramf16(b, q);
+    if (strcmp(I, "paramf")   == 0) return emit_paramf(b, q);
+    if (strcmp(I, "reti32")   == 0 || strcmp(I, "retu32")   == 0) return emit_ret32(b, q);
+    if (strcmp(I, "retf16")   == 0) return emit_retf16(b, q);
+    if (strcmp(I, "retf")     == 0) return emit_retf(b, q);
 
     /* Python KeyErrors here; an unported IC reaching this point is a real
      * gap, not silence (later S5.x add entries). */
@@ -1081,10 +2523,13 @@ static char *label_resub(Backend *b, const char *ins, const char *op,
     return arena_strdup(b->arena, outbuf);
 }
 
-/* TMP_LABELS membership (src.api.tmp_labels). S5.2 emits no temp labels
- * (the degenerate calibration has no temporaries); the set is genuinely
- * empty. Later sprints that emit temporaries populate this. */
-static bool is_tmp_label(const char *s) { (void)s; return false; }
+/* TMP_LABELS membership (src.api.tmp_labels). Populated by s_tmp_label()
+ * when wide-shift emitters (Bits32.shru32/shri32/shl32) emit djnz loop
+ * labels; remove_unused_labels reads this set (main.py:715). */
+static bool is_tmp_label(Backend *b, const char *s) {
+    if (b == NULL || s == NULL) return false;
+    return hashmap_has(&b->tmp_labels, s);
+}
 
 /* ---- remove_unused_labels (main.py:700-743) -------------------------- */
 static void remove_unused_labels(Backend *b, StrVec *output) {
@@ -1101,7 +2546,7 @@ static void remove_unused_labels(Backend *b, StrVec *output) {
             char *lab = arena_strndup(b->arena, ins, L - 1);
             hashmap_set(&labels, lab, (void *)1);
             if (prev != NULL) {
-                bool cond = (!is_tmp_label(prev) && is_tmp_label(lab)) ||
+                bool cond = (!is_tmp_label(b, prev) && is_tmp_label(b, lab)) ||
                             hashmap_has(&label_alias, prev);
                 if (cond) hashmap_set(&label_alias, lab, (void *)prev);
                 else      hashmap_set(&label_alias, prev, (void *)lab);
@@ -1116,7 +2561,7 @@ static void remove_unused_labels(Backend *b, StrVec *output) {
         const char *ins = output->data[i];
         size_t L = strlen(ins);
         char *try_label = arena_strndup(b->arena, ins, L > 0 ? L - 1 : 0);
-        if (is_tmp_label(try_label)) {
+        if (is_tmp_label(b, try_label)) {
             if (hashmap_has(&labels_used, try_label))
                 hashmap_remove(&labels_to_del, try_label);
             else

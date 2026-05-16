@@ -167,6 +167,7 @@ int codegen_emit(CompilerState *cs, AstNode *ast) {
     b.headerless = cs->opts.headerless;
     b.autorun = cs->opts.autorun;
     b.opt_level = cs->opts.optimization_level;
+    b.opt_strategy = (int)cs->opts.opt_strategy;
     peephole_init(a);
     peephole_main();
 

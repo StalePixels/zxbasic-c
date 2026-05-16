@@ -96,5 +96,14 @@ bool z80h_is_unknown(const char *x);
 bool z80h_is_int(const char *op);
 /* Bits16.int16(op): int(op) & 0xFFFF (Python int() parse). */
 bool z80h_int16(const char *op, int *out);
+/* backend.common.is_float(op): True iff Python float(op) succeeds. */
+bool z80h_is_float(const char *op);
+/* float(op): Python float() value (caller ensures z80h_is_float). */
+bool z80h_float(const char *op, double *out);
+/* Bits32.int32(op): (int(op) & 0xFFFFFFFF) -> *de=hi16, *hl=lo16. */
+bool z80h_int32(const char *op, unsigned *de, unsigned *hl);
+/* src/api/fp.py immediate_float(x): the ZX 40-bit FP (C, ED, LH) hex
+ * operand triple ("0XXh"/"0XXXXh"). Each buffer must hold >= 8 bytes. */
+void z80h_immediate_float(double x, char *C, char *ED, char *LH);
 
 #endif /* ZXBC_Z80ASM_H */

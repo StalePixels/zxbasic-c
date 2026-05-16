@@ -27,6 +27,11 @@ void backend_common_reset(Backend *b) {
     hashmap_free(&b->inits);
     hashmap_init(&b->inits);
 
+    /* tmp_labels.reset() (common.py:248): LABEL_COUNTER=0, TMP_LABELS clear */
+    b->label_counter = 0;
+    hashmap_free(&b->tmp_labels);
+    hashmap_init(&b->tmp_labels);
+
     vec_clear(b->at_end);
 }
 
@@ -37,6 +42,8 @@ void backend_init(Backend *b, Arena *arena) {
     hashmap_init(&b->asms);
     hashmap_init(&b->requires_);
     hashmap_init(&b->inits);
+    hashmap_init(&b->tmp_labels);
+    b->label_counter = 0;
 
     backend_common_reset(b); /* common.init() */
     vec_clear(b->memory);    /* Backend.init(): self.MEMORY.clear() */
@@ -48,6 +55,7 @@ void backend_init(Backend *b, Arena *arena) {
     b->headerless = false;
     b->autorun = false;
     b->opt_level = 2;
+    b->opt_strategy = 1;   /* OPT_STRATEGY_SPEED — config.py default */
 }
 
 char *backend_new_asmid(Backend *b) {
@@ -63,4 +71,5 @@ void backend_free(Backend *b) {
     hashmap_free(&b->asms);
     hashmap_free(&b->requires_);
     hashmap_free(&b->inits);
+    hashmap_free(&b->tmp_labels);
 }

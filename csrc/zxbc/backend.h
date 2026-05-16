@@ -55,6 +55,13 @@ typedef struct Backend {
     HashMap inits;            /* set of #init call routines (common.INITS) */
     StrVec  at_end;           /* common.AT_END */
 
+    /* src/api/tmp_labels.py — module-global LABEL_COUNTER + TMP_LABELS set,
+     * reset by common.init() (common.py:248). tmp_label() emits
+     * ".LABEL.__LABEL<n>" and records it so remove_unused_labels' TMP_LABELS
+     * membership (main.py:715) is faithful. */
+    int     label_counter;    /* tmp_labels.LABEL_COUNTER */
+    HashMap tmp_labels;       /* tmp_labels.TMP_LABELS (set of str) */
+
     /* OPTIONS the emitter reads (Python reads the OPTIONS global; the C
      * port threads them onto the Backend — the driver sets these from
      * cs->opts before emit). Defaults match options.c / backend.init(). */
@@ -62,6 +69,7 @@ typedef struct Backend {
     bool headerless; /* OPTIONS.headerless (default false) */
     bool autorun;    /* OPTIONS.autorun (default false) */
     int  opt_level;  /* OPTIONS.optimization_level (default 2) */
+    int  opt_strategy; /* OPTIONS.opt_strategy (OptStrategy; common.normalize_boolean) */
 } Backend;
 
 /* common.init() reset (ASMCOUNT=0, FLAG_end_emitted=False, REQUIRES/INITS/

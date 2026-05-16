@@ -718,3 +718,164 @@ bool z80h_int16(const char *op, int *out) {
     *out = (int)(v & 0xFFFF);
     return true;
 }
+
+/* --------------------------------------------------------------------
+ * backend.common.is_float / float(op) — Python float() string parse.
+ * Python float() accepts: optional surrounding whitespace, optional sign,
+ * decimal/exponent forms, "inf"/"infinity"/"nan" (case-insensitive),
+ * underscores between digits (3.6+). It rejects trailing junk, empty,
+ * and hex/binary suffix forms (those are NOT valid float() input — e.g.
+ * float("1Fh") raises). The f16/float corpus operands are plain decimal
+ * /float literals, temp names ("t0"), or labels ("_a"); only the literal
+ * forms must parse. We mirror Python: strtod over a copy with the
+ * underscores stripped only when they sit strictly between digits, then
+ * require the whole (whitespace-trimmed) string be consumed.
+ * ------------------------------------------------------------------ */
+static bool py_float_parse(const char *op, double *out) {
+    if (op == NULL) return false;
+
+    /* Trim Python whitespace both ends into a stack copy. */
+    const char *b = op;
+    while (*b && py_ws((unsigned char)*b)) b++;
+    const char *e = b + strlen(b);
+    while (e > b && py_ws((unsigned char)e[-1])) e--;
+    size_t n = (size_t)(e - b);
+    if (n == 0) return false;
+
+    char buf[256];
+    if (n >= sizeof(buf)) return false;
+
+    /* Copy, dropping underscores that are strictly between two digits
+     * (Python 3.6 numeric-literal grouping; any other underscore makes
+     * float() raise — reproduce by leaving it in so strtod stops short
+     * and the full-consume check below fails). */
+    size_t w = 0;
+    for (size_t i = 0; i < n; i++) {
+        char c = b[i];
+        if (c == '_' && i > 0 && i + 1 < n &&
+            isdigit((unsigned char)b[i - 1]) &&
+            isdigit((unsigned char)b[i + 1]))
+            continue;
+        buf[w++] = c;
+    }
+    buf[w] = '\0';
+
+    char *endp = NULL;
+    double v = strtod(buf, &endp);
+    if (endp == buf) return false;          /* nothing parsed */
+    if (*endp != '\0') return false;        /* trailing junk -> float() raises */
+    if (out) *out = v;
+    return true;
+}
+
+bool z80h_is_float(const char *op) {
+    return py_float_parse(op, NULL);
+}
+
+bool z80h_float(const char *op, double *out) {
+    return py_float_parse(op, out);
+}
+
+/* --------------------------------------------------------------------
+ * src/api/fp.py — the ZX Spectrum 40-bit FP encoder (BYTE-CRITICAL).
+ * Faithful port of fp() + immediate_float(). Reproduces Python's
+ * int()-truncation, 32-bit binary string, and the mantissa bit-walk
+ * exactly (all ops are exact in IEEE-754 double — /2, *2, and integer
+ * truncation of a value in [0,1)).
+ * ------------------------------------------------------------------ */
+
+/* bin(int(f) & 0xFFFFFFFF)[2:].zfill(32) — 32-char MSB-first binary of
+ * the low 32 bits of int(f) (truncate toward zero). */
+static void fp_bin32(double f, char out[33]) {
+    long long i = (long long)f;                 /* Python int(f): trunc */
+    unsigned long u = (unsigned long)((unsigned long long)i & 0xFFFFFFFFULL);
+    for (int b = 0; b < 32; b++)
+        out[b] = (char)('0' + (int)((u >> (31 - b)) & 1u));
+    out[32] = '\0';
+}
+
+/* bindec32(f): "0" (or bin32(f) if f>=1) + "." + 32 fraction bits.
+ * Writes the full string; returns its length. */
+static int fp_bindec32(double f, char *result) {
+    int w = 0;
+    char b32[33];
+    if (f >= 1.0) {
+        fp_bin32(f, b32);
+        for (int k = 0; b32[k]; k++) result[w++] = b32[k];
+    } else {
+        result[w++] = '0';
+    }
+    result[w++] = '.';
+
+    double a = f;
+    long long c = (long long)a;                 /* int(a) */
+    for (int i = 0; i < 32; i++) {
+        a -= (double)c;
+        a *= 2.0;
+        c = (long long)a;                        /* int(a) (trunc) */
+        result[w++] = (char)('0' + (int)c);
+    }
+    result[w] = '\0';
+    return w;
+}
+
+/* fp(x) -> (M, E): M is the 32-char sign+mantissa string, E the 8-char
+ * exponent string. immediate_float(x) -> the (C, ED, LH) "0XXh" triple. */
+void z80h_immediate_float(double x, char *C, char *ED, char *LH) {
+    int e = 0;
+    int s = (x < 0.0) ? 1 : 0;
+    double m = (x < 0.0) ? -x : x;              /* abs(x) */
+
+    while (m >= 1.0)       { m /= 2.0; e += 1; }
+    while (m > 0.0 && m < 0.5) { m *= 2.0; e -= 1; }
+
+    char dec[80];
+    fp_bindec32(m, dec);                        /* len 34 (here m<1) */
+
+    /* M = str(s) + bindec32(m)[3:]  -> 32 chars (1 + 31) */
+    char M[40];
+    int mw = 0;
+    M[mw++] = (char)('0' + s);
+    for (int k = 3; dec[k]; k++) M[mw++] = dec[k];
+    M[mw] = '\0';
+
+    /* E = bin32(e + 128)[-8:]  if x != 0 else bin32(0)[-8:] */
+    char eb[33];
+    fp_bin32(x != 0.0 ? (double)(e + 128) : 0.0, eb);
+    const char *E = eb + 24;                    /* last 8 chars */
+
+    /* bin2hex(y) = "%02X" % int(y, 2) over a binary substring. */
+    #define FP_B2H(dst, ptr, len) do {                                  \
+        unsigned _v = 0;                                                \
+        for (int _i = 0; _i < (len); _i++)                              \
+            _v = (_v << 1) | (unsigned)((ptr)[_i] - '0');               \
+        snprintf((dst), sizeof(dst), "%02X", _v);                       \
+    } while (0)
+
+    char he[4], hm0[4], hm1[4], hm2[4], hm3[4];
+    FP_B2H(he,  E,        8);
+    FP_B2H(hm0, M + 8,    8);   /* M[8:16] */
+    FP_B2H(hm1, M,        8);   /* M[:8]   */
+    FP_B2H(hm2, M + 24,   8);   /* M[24:]  */
+    FP_B2H(hm3, M + 16,   8);   /* M[16:24]*/
+    #undef FP_B2H
+
+    /* C = "0"+bin2hex(E)+"h"; ED = "0"+b2h(M[8:16])+b2h(M[:8])+"h";
+     * LH = "0"+b2h(M[24:])+b2h(M[16:24])+"h" */
+    snprintf(C,  8,  "0%sh", he);
+    snprintf(ED, 8,  "0%s%sh", hm0, hm1);
+    snprintf(LH, 8,  "0%s%sh", hm2, hm3);
+}
+
+/* Bits32.int32(op): (int(op) & 0xFFFFFFFF) -> (DE=hi16, HL=lo16).
+ * Python int(op) here is fed an integer-valued operand (is_int true) or,
+ * for f16/f, a stringified packed int from f16_to_32bit — both decimal. */
+bool z80h_int32(const char *op, unsigned *de, unsigned *hl) {
+    if (op == NULL) return false;
+    /* int(op): accept the Python int() decimal form (sign + digits). */
+    long long v = strtoll(op, NULL, 10);
+    unsigned long long u = (unsigned long long)v & 0xFFFFFFFFULL;
+    if (de) *de = (unsigned)((u >> 16) & 0xFFFF);
+    if (hl) *hl = (unsigned)(u & 0xFFFF);
+    return true;
+}
