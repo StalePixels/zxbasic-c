@@ -1,0 +1,2 @@
+DIM a AS UBYTE
+LET a = 1

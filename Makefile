@@ -24,6 +24,7 @@ PY_AST_DIFF     = csrc/tests/diff_ast_json.py
 .PHONY: build clean \
         test test-zxbpp test-zxbasm test-zxbc-parse test-zxbc-ast-equiv \
         test-semantic-fidelity verify-phase1-calibration \
+        test-zxbc-codegen verify-phase5-calibration \
         sweep-asm-zero-byte regenerate-zxbc-baselines
 
 build:
@@ -76,6 +77,20 @@ test-semantic-fidelity: $(ZXBC_AST_DUMP_C)
 # after the S1.2 fix; that transition is the encoded red/green.
 verify-phase1-calibration: $(ZXBC_AST_DUMP_C)
 	./csrc/tests/run_phase1_calibration.sh $(ZXBC_AST_DUMP_C)
+
+# Phase 5 codegen meter (S5.1). Measurement — the five-bucket count IS
+# the meter; the C_NO_CODEGEN -> PASS transition across S5.x is the
+# red/green. All-RED by design at the Phase-5 entry (C emits no asm).
+# FALSE_POS must stay 0 (C asm where Python rejects = hard regression).
+test-zxbc-codegen: $(ZXBC_C)
+	./csrc/tests/run_zxbc_codegen_tests.sh $(ZXBC_C) $(ZXBC_TESTS)
+
+# Phase 5 named calibration gate (codegen byte-equivalence). Verifier —
+# exits non-zero on drift/absence. RED at the Phase-5 entry baseline
+# (C emits no asm), GREEN once the C translator/emitter reproduces
+# Python's asm for the calibration fixture.
+verify-phase5-calibration: $(ZXBC_C)
+	./csrc/tests/run_phase5_calibration.sh $(ZXBC_C)
 
 sweep-asm-zero-byte:
 	@matches=$$(find tests/functional -name '*.bin' -size 0); \
