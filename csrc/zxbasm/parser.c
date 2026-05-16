@@ -522,6 +522,7 @@ static bool parse_idx_addr(Parser *p, const char **reg, Expr **offset, bool brac
     TokenType regtype = p->cur.type;
     if (regtype != TOK_IX && regtype != TOK_IY) return false;
     *reg = reg_name(regtype);
+    int op_lineno = p->cur.lineno;   /* IX/IY token's line == Python p.lineno(2) */
     parser_advance(p);
 
     /* Next should be +/- followed by expression, or closing paren for +0 */
@@ -530,6 +531,33 @@ static bool parse_idx_addr(Parser *p, const char **reg, Expr **offset, bool brac
         /* (IX) or [IX] → offset 0 */
         *offset = expr_int(p->as, 0, p->cur.lineno);
     } else {
+        /* Python p_ind8_I (src/zxbasm/asmparse.py:291-321): the bare
+         * `LP IX expr RP` form requires the offset to lead with a unary
+         * '+'/'-'; a value/identifier with no sign is rejected by the
+         * explicit semantic check at asmparse.py:319-320. (Other non-sign
+         * leads — '(', '*', … — fail in PLY's grammar with a generic
+         * p_error; the C's '[%d]' formatter can't reproduce that token-
+         * name text, so those stay out of this check's scope.)
+         *
+         * Record the error but still consume the operand as the grammar
+         * production does — `LP IX expr RP` reduces as a unit, so PLY
+         * emits exactly one error and parsing continues from after the
+         * ')'. Returning early here would instead leave the rest of the
+         * operand in the stream and trigger a cascade. */
+        if (p->cur.type == TOK_INTEGER || p->cur.type == TOK_ID) {
+            char tokbuf[64];
+            const char *toktext;
+            if (p->cur.type == TOK_ID) {
+                toktext = p->cur.sval ? p->cur.sval : "?";
+            } else {
+                snprintf(tokbuf, sizeof(tokbuf), "%lld",
+                         (long long)p->cur.ival);
+                toktext = tokbuf;
+            }
+            asm_error(p->as, op_lineno,
+                      "Unexpected token '%s'. Expected '+' or '-'",
+                      toktext);
+        }
         /* Parse the full offset expression: handles IX+N, IX-N, IX+A-B etc. */
         *offset = parse_any_expr(p);
     }
