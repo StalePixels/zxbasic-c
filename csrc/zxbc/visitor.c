@@ -14,6 +14,7 @@
 #include "visitor.h"
 #include "passes/unreachable.h"
 #include "passes/functiongraph.h"
+#include "passes/optimizer.h"
 
 #include <string.h>
 
@@ -99,5 +100,5 @@ void visitor_run_passes(CompilerState *cs, AstNode *ast) {
         return;
     unreachable_run(cs, ast);   /* pass 1 — Python zxbc.py:113-114 */
     functiongraph_run(cs, ast); /* pass 2 — Python zxbc.py:117-118 */
-    /* S2.4 appends optimizer_run() — Python zxbc.py:121-122. */
+    optimizer_run(cs, ast);     /* pass 3 — Python zxbc.py:121-122 */
 }

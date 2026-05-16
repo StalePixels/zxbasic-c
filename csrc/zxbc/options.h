@@ -116,7 +116,11 @@ void compiler_options_init(CompilerOptions *opts);
 /* ----------------------------------------------------------------
  * Default values (from api/global_.py)
  * ---------------------------------------------------------------- */
-#define DEFAULT_OPTIMIZATION_LEVEL 0
+/* Python global_.py:178 DEFAULT_OPTIMIZATION_LEVEL=2 (effective
+ * parse-only default; -O unset keeps the config default via
+ * ignore_none). Without this S2.4's OptimizerVisitor O-gate makes the
+ * pass inert and Phase-5 AST-equivalence cannot converge. */
+#define DEFAULT_OPTIMIZATION_LEVEL 2
 #define DEFAULT_MAX_SYNTAX_ERRORS  20
 
 #endif /* ZXBC_OPTIONS_H */
