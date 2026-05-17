@@ -298,6 +298,7 @@ static int s_log2(long x) { int n = 0; while (x > 1) { x >>= 1; n++; } return n;
 #define RL_BOR32      ZXBC_NAMESPACE ".__BOR32"
 #define RL_BXOR32     ZXBC_NAMESPACE ".__BXOR32"
 #define RL_BNOT32     ZXBC_NAMESPACE ".__BNOT32"
+#define RL_PLOADF     ZXBC_NAMESPACE ".__PLOADF"  /* core.py:104 */
 #define RL_ILOAD32    ZXBC_NAMESPACE ".__ILOAD32"
 #define RL_STORE32    ZXBC_NAMESPACE ".__STORE32"
 #define RL_ISTORE32   ZXBC_NAMESPACE ".__ISTORE32"
@@ -387,6 +388,7 @@ static const char *s_required_module(const char *label) {
     if (strcmp(label, RL_BOR32)      == 0) return "bitwise/bor32.asm";
     if (strcmp(label, RL_BXOR32)     == 0) return "bitwise/bxor32.asm";
     if (strcmp(label, RL_BNOT32)     == 0) return "bitwise/bnot32.asm";
+    if (strcmp(label, RL_PLOADF)     == 0) return "ploadf.asm"; /* core.py:233 */
     if (strcmp(label, RL_ILOAD32)    == 0) return "iload32.asm";
     if (strcmp(label, RL_STORE32)    == 0) return "store32.asm";
     if (strcmp(label, RL_ISTORE32)   == 0) return "store32.asm";
@@ -1531,6 +1533,152 @@ static StrVec emit_ret32(Backend *b, Quad *q) {
     StrVec out = bits32_get_oper(b, q_ins(q, 1), NULL, false, false);
     sv_push(b, &out, "#pragma opt require hl,de");
     sv_pushf(b, &out, "jp %s", q_ins(q, 2));
+    return out;
+}
+
+/* ====================================================================
+ * S5.7b — caller/callee ABI emitters (params, fparams, per-width ret,
+ * paddr, pload). Verbatim ports.
+ * ==================================================================== */
+
+/* Bits8.param8/ret8/fparam8 (_8bit.py:1158-1179). get_oper(ins[1]) ->
+ * value in A; param8 then `push af`; ret8 `#pragma opt require a` +
+ * `jp leave`; fparam8 is just get_oper (value already where needed). */
+static StrVec emit_param8(Backend *b, Quad *q) {
+    StrVec out = bits8_get_oper(b, q_ins(q, 1), NULL, false);
+    sv_push(b, &out, "push af");
+    return out;
+}
+static StrVec emit_ret8(Backend *b, Quad *q) {
+    StrVec out = bits8_get_oper(b, q_ins(q, 1), NULL, false);
+    sv_push(b, &out, "#pragma opt require a");
+    sv_pushf(b, &out, "jp %s", q_ins(q, 2));
+    return out;
+}
+static StrVec emit_fparam8(Backend *b, Quad *q) {
+    return bits8_get_oper(b, q_ins(q, 1), NULL, false);
+}
+
+/* Bits16.param16/ret16/fparam16 (_16bit.py:1112-1133). get_oper -> HL;
+ * param16 `push hl`; ret16 `#pragma opt require hl` + `jp leave`. */
+static StrVec emit_param16(Backend *b, Quad *q) {
+    StrVec out = bits16_get_oper(b, q_ins(q, 1), NULL, false);
+    sv_push(b, &out, "push hl");
+    return out;
+}
+static StrVec emit_ret16(Backend *b, Quad *q) {
+    StrVec out = bits16_get_oper(b, q_ins(q, 1), NULL, false);
+    sv_push(b, &out, "#pragma opt require hl");
+    sv_pushf(b, &out, "jp %s", q_ins(q, 2));
+    return out;
+}
+static StrVec emit_fparam16(Backend *b, Quad *q) {
+    return bits16_get_oper(b, q_ins(q, 1), NULL, false);
+}
+
+/* Bits32.fparam32 (_32bit.py:977-983): get_oper only (value in DEHL). */
+static StrVec emit_fparam32(Backend *b, Quad *q) {
+    return bits32_get_oper(b, q_ins(q, 1), NULL, false, false);
+}
+
+/* _paddr (_pload.py:19-46): code that points HL at a local/param.
+ * oper may be `*`-indirect; i = int(oper); i>=0 -> i += 4 (ret addr +
+ * pushed IX); push IX/pop HL; ld de,i; add hl,de; indirect -> deref;
+ * push hl. IDX_REG == "ix". */
+static StrVec emit_paddr(Backend *b, Quad *q) {
+    StrVec out = sv_new();
+    const char *oper = q_ins(q, 1);
+    bool indirect = (oper[0] == '*');
+    if (indirect) oper++;
+    long i = s_int_val(oper);
+    if (i >= 0) i += 4;  /* Return Address + "push IX" */
+    sv_push(b, &out, "push ix");
+    sv_push(b, &out, "pop hl");
+    sv_pushf(b, &out, "ld de, %ld", i);
+    sv_push(b, &out, "add hl, de");
+    if (indirect) {
+        sv_push(b, &out, "ld e, (hl)");
+        sv_push(b, &out, "inc hl");
+        sv_push(b, &out, "ld h, (hl)");
+        sv_push(b, &out, "ld l, e");
+    }
+    sv_push(b, &out, "push hl");
+    return out;
+}
+
+/* _pload(offset, size) (_pload.py:49-114): the shared (IX+offset)
+ * loader. Verbatim port; size in {1,2,4,5}. Used by _pload8/16/32 (and
+ * _ploadf for size 5). IDX_REG == "ix". */
+static void s_pload(Backend *b, StrVec *out, const char *offset, int size) {
+    bool indirect = (offset[0] == '*');
+    if (indirect) offset++;
+    long i = s_int_val(offset);
+    if (i >= 0)  /* parameter: round up to even bytes (ret addr + push IX) */
+        i += 4 + (indirect ? 0 : (size % 2));
+    bool ix_changed = (indirect || size < 5) &&
+                      ((labs(i) + size) > 127);
+    if (ix_changed) {
+        sv_push(b, out, "push ix");
+        sv_pushf(b, out, "ld de, %ld", i);
+        sv_push(b, out, "add ix, de");
+        i = 0;
+    } else if (size == 5) {
+        sv_push(b, out, "push ix");
+        sv_push(b, out, "pop hl");
+        sv_pushf(b, out, "ld de, %ld", i);
+        sv_push(b, out, "add hl, de");
+        i = 0;
+    }
+    if (indirect) {
+        sv_pushf(b, out, "ld h, (ix%+ld)", i + 1);
+        sv_pushf(b, out, "ld l, (ix%+ld)", i);
+        if (size == 1) {
+            sv_push(b, out, "ld a, (hl)");
+        } else if (size == 2) {
+            sv_push(b, out, "ld c, (hl)");
+            sv_push(b, out, "inc hl");
+            sv_push(b, out, "ld h, (hl)");
+            sv_push(b, out, "ld l, c");
+        } else if (size == 4) {
+            sv_push(b, out, s_runtime_call(b, RL_ILOAD32));
+        } else {
+            sv_push(b, out, s_runtime_call(b, RL_ILOADF));
+        }
+    } else {
+        if (size == 1) {
+            sv_pushf(b, out, "ld a, (ix%+ld)", i);
+        } else if (size <= 4) {
+            sv_pushf(b, out, "ld l, (ix%+ld)", i);
+            sv_pushf(b, out, "ld h, (ix%+ld)", i + 1);
+            if (size > 2) {
+                sv_pushf(b, out, "ld e, (ix%+ld)", i + 2);
+                sv_pushf(b, out, "ld d, (ix%+ld)", i + 3);
+            }
+        } else {
+            sv_push(b, out, s_runtime_call(b, RL_PLOADF));
+        }
+    }
+    if (ix_changed)
+        sv_push(b, out, "pop ix");
+}
+/* _pload8/16/32 (_pload.py:117-152): _pload(ins[2], N) then push. */
+static StrVec emit_pload8(Backend *b, Quad *q) {
+    StrVec out = sv_new();
+    s_pload(b, &out, q_ins(q, 2), 1);
+    sv_push(b, &out, "push af");
+    return out;
+}
+static StrVec emit_pload16(Backend *b, Quad *q) {
+    StrVec out = sv_new();
+    s_pload(b, &out, q_ins(q, 2), 2);
+    sv_push(b, &out, "push hl");
+    return out;
+}
+static StrVec emit_pload32(Backend *b, Quad *q) {
+    StrVec out = sv_new();
+    s_pload(b, &out, q_ins(q, 2), 4);
+    sv_push(b, &out, "push de");
+    sv_push(b, &out, "push hl");
     return out;
 }
 
@@ -3178,12 +3326,25 @@ static StrVec quad_emit(Backend *b, Quad *q) {
     if (strcmp(I, "bxoru32")== 0 || strcmp(I, "bxori32")== 0) return emit_bxor32(b, q);
     if (strcmp(I, "bnotu32")== 0 || strcmp(I, "bnoti32")== 0) return emit_bnot32(b, q);
     /* param / ret */
+    /* S5.7b — 8/16-bit param/fparam/ret + 32-bit fparam + paddr/pload
+     * (main.py:336-355,362-373; _8bit/_16bit/_32bit/_pload). */
+    if (strcmp(I, "parami8")  == 0 || strcmp(I, "paramu8")  == 0) return emit_param8(b, q);
+    if (strcmp(I, "parami16") == 0 || strcmp(I, "paramu16") == 0) return emit_param16(b, q);
     if (strcmp(I, "parami32") == 0 || strcmp(I, "paramu32") == 0) return emit_param32(b, q);
     if (strcmp(I, "paramf16") == 0) return emit_paramf16(b, q);
     if (strcmp(I, "paramf")   == 0) return emit_paramf(b, q);
+    if (strcmp(I, "fparami8")  == 0 || strcmp(I, "fparamu8")  == 0) return emit_fparam8(b, q);
+    if (strcmp(I, "fparami16") == 0 || strcmp(I, "fparamu16") == 0) return emit_fparam16(b, q);
+    if (strcmp(I, "fparami32") == 0 || strcmp(I, "fparamu32") == 0) return emit_fparam32(b, q);
+    if (strcmp(I, "reti8")    == 0 || strcmp(I, "retu8")    == 0) return emit_ret8(b, q);
+    if (strcmp(I, "reti16")   == 0 || strcmp(I, "retu16")   == 0) return emit_ret16(b, q);
     if (strcmp(I, "reti32")   == 0 || strcmp(I, "retu32")   == 0) return emit_ret32(b, q);
     if (strcmp(I, "retf16")   == 0) return emit_retf16(b, q);
     if (strcmp(I, "retf")     == 0) return emit_retf(b, q);
+    if (strcmp(I, "paddr")    == 0) return emit_paddr(b, q);
+    if (strcmp(I, "ploadi8")  == 0 || strcmp(I, "ploadu8")  == 0) return emit_pload8(b, q);
+    if (strcmp(I, "ploadi16") == 0 || strcmp(I, "ploadu16") == 0) return emit_pload16(b, q);
+    if (strcmp(I, "ploadi32") == 0 || strcmp(I, "ploadu32") == 0) return emit_pload32(b, q);
 
     /* Python KeyErrors here; an unported IC reaching this point is a real
      * gap, not silence (later S5.x add entries). */

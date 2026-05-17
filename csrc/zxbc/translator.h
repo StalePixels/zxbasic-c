@@ -74,6 +74,23 @@ typedef struct Translator {
     int             pending_len;
     int             pending_cap;
     int             pending_head;   /* FIFO read cursor (pop(0)) */
+
+    /* S5.7b — processed-function guard (node identity on the FUNCTION
+     * *entry* ID). Python's invariant: each function body is emitted
+     * exactly once — `p_funcdeclforward` (zxbparser.py:2918-2930) returns
+     * None for a `DECLARE`, so a forward declaration produces NO FUNCDECL
+     * node and only the real definition's FUNCDECL ever reaches
+     * gl.FUNCTIONS. The C parser, by contrast, emits a (empty-body)
+     * FUNCDECL for the `DECLARE` *and* one for the definition, both
+     * carrying the *same shared entry ID node*. Draining both would emit
+     * the function label twice and, worse, any caller/queue re-entry on
+     * the shared entry is unbounded. This set keys on the entry ID node
+     * so visit_FUNCTION runs at most once per function — faithfully
+     * reproducing Python's "each FUNCDECL processed once" without
+     * changing the parser's AST shape. */
+    AstNode       **emitted_funcs;
+    int             emitted_len;
+    int             emitted_cap;
 } Translator;
 
 /* zxbc.py:125-126  translator.visit(zxbparser.ast) — appends Quads to

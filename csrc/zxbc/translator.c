@@ -407,7 +407,29 @@ static void tr_ic_fparam(Translator *tr, const TypeInfo *type_, const char *t) {
     tr_emit_quad(tr, tr_flow_name(tr, "fparam", type_), 1, args);
 }
 
-/* runtime_call (translator_visitor.py:119-123): ic_call(label,num); the
+/* ic_load (translator_inst_visitor.py:160-161): emit(f"load{TSUFFIX}",t1,t2).
+ * Used by visit_ARGUMENT's byref-global arm: ic_load(uinteger,t,"#"+mangled). */
+static void tr_ic_load(Translator *tr, const TypeInfo *type_,
+                       const char *t1, const char *t2) {
+    const char *suf = tr_tsuffix(type_);
+    char base[16];
+    snprintf(base, sizeof(base), "load%s", suf);
+    const char *args[2] = { t1, t2 };
+    tr_emit_quad(tr, base, 2, args);
+}
+/* ic_paddr / ic_pload (translator_inst_visitor.py:202-215) are the
+ * inside-function parameter/local address+load surface. Their Python
+ * call sites (visit_ARGUMENT's byref-parameter/byref-local arms
+ * translator.py:238-245, and the dynamic-`$`-string byval heap-dup
+ * :216-222) all key off node.value.offset — the inside-function stack
+ * model S5.7b explicitly DEFERS (loud stderr residue, never wrong code).
+ * The C ic_paddr/ic_pload wrappers therefore land with their first real
+ * caller (S5.7c local arrays / the offset model), not here, to avoid
+ * dead code. The corresponding backend `_paddr`/`_pload*` emitters ARE
+ * shipped now (dispatch-reachable, exercised once the offset model
+ * lands) so the ABI is complete from the backend side.
+ *
+ * runtime_call (translator_visitor.py:119-123): ic_call(label,num); the
  * label->REQUIRES module is wired by the backend's s_runtime_call when the
  * "call" Quad is emitted (REQUIRES set there, mirroring Python adding to
  * backend.REQUIRES). Faithful: the Quad("call",label,num) carries the
@@ -543,6 +565,174 @@ static AstNode *tr_visit_return(Visitor *v, AstNode *node) {
         tr_ic_leave(tr, "__fastcall__");
     }
     return node;
+}
+
+/* ==================================================================== *
+ *  S5.7b — caller-side param/ABI (shared Translator handlers)          *
+ *                                                                      *
+ *  visit_CALL / visit_FUNCCALL / visit_ARGLIST / visit_ARGUMENT        *
+ *  (translator.py:200-263, :470-477). Faithful to the Python           *
+ *  generators' EXACT traversal: the handler fully controls which       *
+ *  children are visited (Python's NodeVisitor.visit drives the         *
+ *  generator; there is NO automatic generic_visit of a node that has   *
+ *  a visit_<token>). In particular visit_CALL/visit_FUNCCALL           *
+ *  `yield node.args` ONLY — they NEVER visit node.entry (the callee     *
+ *  ID). The callee ID for a self-/mutually-recursive function is the   *
+ *  SAME shared symbol-table node the FUNCDECL carries; walking it (or   *
+ *  letting generic descent reach it) is exactly the unbounded re-entry  *
+ *  the first S5.7b attempt hit on warn_unreach0. We therefore visit     *
+ *  ONLY child[1] (the ARGLIST), never child[0].                        *
+ * ==================================================================== */
+
+/* visit_ARGUMENT (translator.py:214-263). C ARGUMENT: child[0]=value
+ * expr, u.argument.byref. ARGUMENT.t==value.t, .type_==value.type_
+ * (argument.py:28-50). The dynamic-`$`-string heap-dup (`:216-222`) and
+ * the byref arms that read an enclosing param/local `node.value.offset`
+ * (`:238-245`) need the inside-function stack-offset model that S5.7b
+ * explicitly defers — emit a loud stderr residue note and fall back to
+ * the faithful byval value+param shape rather than emit wrong code. The
+ * byval-scalar arm (the corpus-dominant case) is exact. */
+static AstNode *tr_visit_argument(Visitor *v, AstNode *node) {
+    Translator *tr = v->ctx;
+    AstNode *value = node->child_count > 0 ? node->children[0] : NULL;
+    bool byref = node->u.argument.byref;
+    const TypeInfo *uint_t =
+        tr->cs->symbol_table->basic_types[TYPE_uinteger]; /* gl.PTR_TYPE */
+
+    if (!byref) {
+        /* :216-222 dynamic `$`-string VAR heap-dup — needs value.offset
+         * (param/local). Deferred (S5.8 string ABI). Loud, not silent. */
+        if (value && value->tag == AST_ID && value->type_ &&
+            value->type_->basic_type == TYPE_string &&
+            value->u.id.scope != SCOPE_global) {
+            fprintf(stderr,
+                "zxbc: visit_ARGUMENT dynamic-$string byval (scope %d) "
+                "param/local offset — S5.8 string ABI residue\n",
+                (int)value->u.id.scope);
+        }
+        /* :224 yield node.value */
+        if (value) visitor_visit(v, value);
+        /* :225 ic_param(node.type_, node.t) — type_/t are value's. */
+        tr_ic_param(tr, value ? value->type_ : NULL,
+                    (value && value->t) ? value->t : "");
+        return node;
+    }
+
+    /* ByRef. :229-248 non-array byref: address of the argument. The
+     * global arm (`:236-237` ic_load(uinteger,t,"#"+mangled)) is exact;
+     * the parameter/local arms (`:238-245`) read node.value.offset (the
+     * inside-function stack model S5.7b defers) — loud residue + the
+     * faithful global-shaped fallback (never wrong code). */
+    if (value && value->tag == AST_ID && value->u.id.scope == SCOPE_global) {
+        const char *mg = value->u.id.mangled ? value->u.id.mangled : "";
+        size_t ml = strlen(mg);
+        char *hm = arena_alloc(&tr->cs->arena, ml + 2);
+        hm[0] = '#';
+        memcpy(hm + 1, mg, ml + 1);
+        const char *t = (value->t && value->t[0]) ? value->t
+                       : compiler_new_temp(tr->cs);
+        tr_ic_load(tr, uint_t, t, hm);          /* :237 */
+        tr_ic_param(tr, uint_t, t);             /* :247 */
+        return node;
+    }
+
+    /* parameter/local byref, or byref array (`:250-263` ADDRESS UNARY) —
+     * all need the deferred inside-function offset / ADDRESS lowering.
+     * Loud residue; do NOT emit wrong code. */
+    fprintf(stderr,
+        "zxbc: visit_ARGUMENT byref non-global (scope %d) — inside-"
+        "function offset / @array ADDRESS is S5.7c/S5.8 residue\n",
+        (value && value->tag == AST_ID) ? (int)value->u.id.scope : -1);
+    if (value) visitor_visit(v, value);
+    return node;
+}
+
+/* visit_ARGLIST (translator.py:210-212): visit children in REVERSE
+ * order (last arg pushed first → first arg ends on top, matching the
+ * callee's IX+offset layout). */
+static AstNode *tr_visit_arglist(Visitor *v, AstNode *node) {
+    for (int i = node->child_count - 1; i >= 0; i--)
+        visitor_visit(v, node->children[i]);
+    return node;
+}
+
+/* Shared CALL / FUNCCALL lowering. is_funccall selects the Python
+ * variant: visit_CALL (translator.py:200-208) calls with size 0 (discard
+ * return) and frees a returned string; visit_FUNCCALL
+ * (translator.py:470-477) calls with node.entry.size (return bytes).
+ *
+ * CALLEE-CLASS GATE: Python only ever builds CALL/FUNCCALL for an actual
+ * callable. The C parser also tags string-slice / unresolved forms as
+ * FUNCCALL; emitting an ic_call for those regressed const_str1 (first
+ * attempt). Gate strictly on the callee being CLASS_function/CLASS_sub;
+ * otherwise fall back to generic descent (faithful no-op for codegen,
+ * the value paths own those nodes). */
+static AstNode *tr_visit_call_common(Visitor *v, AstNode *node,
+                                     bool is_funccall) {
+    Translator *tr = v->ctx;
+    AstNode *callee = node->child_count > 0 ? node->children[0] : NULL;
+    AstNode *args   = node->child_count > 1 ? node->children[1] : NULL;
+
+    if (!callee || callee->tag != AST_ID ||
+        (callee->u.id.class_ != CLASS_function &&
+         callee->u.id.class_ != CLASS_sub)) {
+        /* Not a callable. The C parser tags string-slice `s(i)` on a
+         * CONST/VAR string (and the unresolved no-parens sentence-CALL
+         * id) as FUNCCALL/CALL too; Python never builds a CALL/FUNCCALL
+         * visitor invocation for those (they are STRSLICE / value-path /
+         * later-slice owned). Emitting param pushes + ic_call here is the
+         * const_str1 regression. The faithful choice is to emit NOTHING
+         * and NOT descend (descending would fire tr_visit_argument and
+         * push orphan params with no matching call). Loud residue note,
+         * no wrong code — and crucially the callee (child[0]) is never
+         * walked, so no unbounded re-entry. */
+        fprintf(stderr,
+            "zxbc: %s callee class %d not CLASS_function/sub "
+            "(string-slice / unresolved) — codegen residue (no IC)\n",
+            is_funccall ? "FUNCCALL" : "CALL",
+            (callee && callee->tag == AST_ID) ? (int)callee->u.id.class_ : -1);
+        return node;
+    }
+
+    /* :201 / :471  yield node.args  — visit ONLY the ARGLIST. The callee
+     * (child[0]) is NEVER visited (Python's generator never yields it);
+     * this is the unbounded-re-entry fix. */
+    if (args) visitor_visit(v, args);
+
+    /* :202-204 / :473-475  fastcall first-arg → ic_fparam. node.args[0]
+     * is the first ARGUMENT; its type_ == value.type_. */
+    if (callee->u.id.convention == CONV_fastcall && args &&
+        args->child_count > 0) {
+        AstNode *a0 = args->children[0];
+        AstNode *a0v = (a0 && a0->child_count > 0) ? a0->children[0] : NULL;
+        tr_ic_fparam(tr, a0v ? a0v->type_ : NULL,
+                     compiler_new_temp(tr->cs)); /* optemps.new_t() */
+    }
+
+    const char *mg = callee->u.id.mangled ? callee->u.id.mangled : "";
+
+    if (is_funccall) {
+        /* :477 ic_call(entry.mangled, entry.size) — size == type_.size
+         * (FunctionRef.size, funcref.py:70-74). */
+        int sz = callee->type_ ? type_size(callee->type_) : 0;
+        tr_ic_call(tr, mg, sz);
+    } else {
+        /* :206 ic_call(entry.mangled, 0) — procedure, discard return. */
+        tr_ic_call(tr, mg, 0);
+        /* :207-208 discard a returned string. */
+        if (callee->u.id.class_ == CLASS_function && callee->type_ &&
+            callee->type_->basic_type == TYPE_string) {
+            tr_runtime_call(tr, ".core.__MEM_FREE", 0);
+        }
+    }
+    return node;
+}
+
+static AstNode *tr_visit_call(Visitor *v, AstNode *node) {
+    return tr_visit_call_common(v, node, false);
+}
+static AstNode *tr_visit_funccall(Visitor *v, AstNode *node) {
+    return tr_visit_call_common(v, node, true);
 }
 
 /* visit_END (translator.py:65-68) — already ported above as tr_visit_end. */
@@ -996,6 +1186,29 @@ static void tr_pending_push(Translator *tr, AstNode *fdecl) {
     tr->pending_funcs[tr->pending_len++] = fdecl;
 }
 
+/* S5.7b — processed-function guard. Returns true (and records it) the
+ * FIRST time `entry` is seen; true thereafter means "already emitted —
+ * skip". Mirrors Python's de-facto invariant that each function body is
+ * emitted exactly once (one FUNCDECL per function reaches gl.FUNCTIONS,
+ * drained once). Same ptr-identity-set shape as the optimizer's
+ * ptr_seen_or_add (optimizer.c:122-128) / FunctionGraph's visited set —
+ * an unconditional bound on visit_FUNCTION re-entry regardless of how a
+ * function-entry got (re-)queued (declare+def, caller paths, nested). */
+static bool tr_func_already_emitted(Translator *tr, AstNode *entry) {
+    for (int i = 0; i < tr->emitted_len; i++)
+        if (tr->emitted_funcs[i] == entry)
+            return true;
+    if (tr->emitted_len >= tr->emitted_cap) {
+        int nc = tr->emitted_cap ? tr->emitted_cap * 2 : 16;
+        AstNode **np = realloc(tr->emitted_funcs, (size_t)nc * sizeof(*np));
+        if (!np) return false;
+        tr->emitted_funcs = np;
+        tr->emitted_cap = nc;
+    }
+    tr->emitted_funcs[tr->emitted_len++] = entry;
+    return false;
+}
+
 /* Translator.visit_FUNCDECL (translator.py:196-198) AND
  * FunctionTranslator.visit_FUNCDECL (function_translator.py:174-176):
  * both just append to the (aliased) gl.FUNCTIONS list and emit nothing
@@ -1007,6 +1220,16 @@ static void tr_pending_push(Translator *tr, AstNode *fdecl) {
  * two methods are byte-equivalent (append node.entry). */
 static AstNode *tr_visit_funcdecl(Visitor *v, AstNode *node) {
     Translator *tr = v->ctx;
+    /* S5.7b — a C-port-only forward-declaration FUNCDECL (synthesised for
+     * `DECLARE`) is NOT enqueued: Python's p_funcdeclforward
+     * (zxbparser.py:2918-2930) returns None so no such node ever reaches
+     * gl.FUNCTIONS — only the real definition's FUNCDECL does. Skipping it
+     * here makes the C pending queue exactly Python's gl.FUNCTIONS set
+     * (definition only), and prevents the shared function-entry node from
+     * being queued twice (declare + def) — the unbounded re-entry the
+     * first S5.7b attempt hit on warn_unreach0. */
+    if (node->u.funcdecl.is_forward)
+        return node;
     tr_pending_push(tr, node);
     return node;
 }
@@ -1022,6 +1245,18 @@ static void tr_register_handlers(Visitor *v) {
     visitor_on_tag(v, AST_TYPECAST, tr_visit_typecast);
     visitor_on_tag(v, AST_ID, tr_visit_var);  /* VAR == ID node */
     visitor_on_tag(v, AST_FUNCDECL, tr_visit_funcdecl);
+    /* S5.7b — caller-side param/ABI. CALL/FUNCCALL appear as tag nodes
+     * (parser.c make_call / the FUNCCALL→CALL statement rewrite,
+     * parser.c:1530-1531) and the no-parens sub-call SENTENCE "CALL"
+     * (parser.c:1592). All three share child[0]=callee ID,
+     * child[1]=ARGLIST and the same lowering (tr_visit_call_common gates
+     * on the callee class and is shape-agnostic). ARGLIST/ARGUMENT are
+     * tag nodes. */
+    visitor_on_tag(v, AST_CALL, tr_visit_call);
+    visitor_on_tag(v, AST_FUNCCALL, tr_visit_funccall);
+    visitor_on_tag(v, AST_ARGLIST, tr_visit_arglist);
+    visitor_on_tag(v, AST_ARGUMENT, tr_visit_argument);
+    visitor_on_sentence(v, "CALL", tr_visit_call);
     visitor_on_sentence(v, "LET", tr_visit_let);
     visitor_on_sentence(v, "END", tr_visit_end);
     /* S5.5 control-flow sentence handlers. */
@@ -1063,6 +1298,9 @@ void translator_visit(Translator *tr, AstNode *ast) {
     tr->pending_len = 0;
     tr->pending_cap = 0;
     tr->pending_head = 0;
+    tr->emitted_funcs = NULL;
+    tr->emitted_len = 0;
+    tr->emitted_cap = 0;
 
     Visitor v;
     visitor_init(&v, tr->cs);
@@ -1098,6 +1336,14 @@ static void tr_visit_function(Translator *tr, AstNode *fdecl) {
     AstNode *entry = fdecl->child_count > 0 ? fdecl->children[0] : NULL;
     AstNode *body  = fdecl->child_count > 2 ? fdecl->children[2] : NULL;
     if (!entry) return;
+
+    /* S5.7b — emit each function body at most once (Python invariant).
+     * Belt-and-braces with tr_visit_funcdecl's is_forward skip: even if
+     * an entry were (re-)queued via any path, visit_FUNCTION runs once
+     * per function-entry, so the prologue/`__leave` label can never be
+     * emitted twice and no caller/queue re-entry is unbounded. */
+    if (tr_func_already_emitted(tr, entry))
+        return;
 
     const char *mangled = entry->u.id.mangled ? entry->u.id.mangled : "";
     bool fastcall = (entry->u.id.convention == CONV_fastcall);
@@ -1169,4 +1415,7 @@ void translator_function_start(Translator *tr) {
     free(tr->pending_funcs);
     tr->pending_funcs = NULL;
     tr->pending_len = tr->pending_cap = tr->pending_head = 0;
+    free(tr->emitted_funcs);
+    tr->emitted_funcs = NULL;
+    tr->emitted_len = tr->emitted_cap = 0;
 }

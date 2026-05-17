@@ -2426,6 +2426,52 @@ static AstNode *parse_print_statement(Parser *p) {
 /* ----------------------------------------------------------------
  * FUNCTION / SUB declaration
  * ---------------------------------------------------------------- */
+
+/* S5.7b — PARAMLIST.append_child cumulative offset/size accumulator
+ * (paramlist.py:53-58) combined with VarRef.size (varref.py:45-57):
+ *
+ *   for each param appended left-to-right:
+ *       param.ref.offset = self.size
+ *       self.size       += param.size
+ *
+ *   VarRef.size for a SCOPE.parameter:
+ *       byref  -> BasicType(gl.PTR_TYPE).size           (== 2 on zx48k)
+ *       byval  -> type_.size + (type_.size % PARAM_ALIGN) (PARAM_ALIGN==2)
+ *
+ * Array params are always byref (parser.c:2486 sets byref=true for
+ * `name()`), so they fall in the byref arm → PTR_TYPE.size. gl.PTR_TYPE
+ * == uinteger (size 2), gl.PARAM_ALIGN == 2 (src/arch/zx48k/__init__.py).
+ *
+ * Returns the running total (== SymbolPARAMLIST.size, i.e. the byte count
+ * ic_leave pops and the caller pushes), and stamps each ARGUMENT child's
+ * cumulative .offset. Pure size/offset bookkeeping over the just-parsed
+ * PARAMLIST — no AST shape change, faithful to the Python accumulator. */
+static int parser_assign_param_offsets(Parser *p, AstNode *params) {
+    (void)p;
+    const int PTR_SIZE = 2;    /* BasicType(gl.PTR_TYPE).size, zx48k */
+    const int PARAM_ALIGN = 2; /* gl.PARAM_ALIGN, zx48k */
+    int size = 0;
+    if (!params)
+        return 0;
+    for (int i = 0; i < params->child_count; i++) {
+        AstNode *param = params->children[i];
+        if (!param || param->tag != AST_ARGUMENT)
+            continue;
+        int psz;
+        if (param->u.argument.byref || param->u.argument.is_array) {
+            psz = PTR_SIZE;
+        } else if (param->type_ == NULL) {
+            psz = 0; /* varref.py:46-47 — type_ is None -> size 0 */
+        } else {
+            int ts = type_size(param->type_);
+            psz = ts + (ts % PARAM_ALIGN); /* even-size (Float and Byte) */
+        }
+        param->u.argument.offset = size;
+        size += psz;
+    }
+    return size;
+}
+
 static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function, bool is_declare) {
     if (is_function) {
         consume(p, BTOK_FUNCTION, "Expected FUNCTION");
@@ -2574,12 +2620,29 @@ static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function, bool is_decl
     id_node->u.id.convention = conv;
     id_node->type_ = ret_type;
 
+    /* S5.7b — cumulative param offsets + total params byte size
+     * (paramlist.py:53-58 / varref.py:45-57). entry.param_size is what
+     * the optimizer's O>1 zero-param/zero-local→fastcall gate checks
+     * (optimizer.c:476, optimize.py:314-315) and what ic_leave pops
+     * (function_translator.py:169). Stamp it on the shared entry node so
+     * both the DECLARE and the definition carry the same value. Python's
+     * function_header_pre (zxbparser.py:2957) sets params_size = p[2].size
+     * for declare and definition alike. */
+    id_node->u.id.param_size = parser_assign_param_offsets(p, params);
+
     if (is_declare) {
         /* Forward declaration — no body to parse */
         id_node->u.id.forwarded = true;
 
         /* Create a minimal FUNCDECL node with empty body */
         AstNode *decl = ast_new(p->cs, AST_FUNCDECL, lineno);
+        /* S5.7b — mark as the C-port-only forward-declaration FUNCDECL.
+         * Python's p_funcdeclforward (zxbparser.py:2918-2930) returns None
+         * → no node enters the AST/gl.FUNCTIONS for a DECLARE; only the
+         * real definition's FUNCDECL is emitted. tr_visit_funcdecl uses
+         * this flag to NOT enqueue the declare, so the C pending queue is
+         * the exact set Python's is (the definition only). */
+        decl->u.funcdecl.is_forward = true;
         AstNode *body = make_block_node(p, lineno);
         ast_add_child(p->cs, decl, id_node);
         ast_add_child(p->cs, decl, params);

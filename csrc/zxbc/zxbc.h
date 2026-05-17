@@ -194,8 +194,21 @@ struct AstNode {
             char *func;       /* backend function name */
         } builtin;
 
+        /* AST_FUNCDECL: child[0]=ID, child[1]=PARAMLIST, child[2]=body.
+         * S5.7b — `is_forward` marks the C-port-only FUNCDECL the parser
+         * synthesises for a `DECLARE` (parser.c is_declare branch). Python
+         * has no such node (p_funcdeclforward returns None,
+         * zxbparser.py:2918-2930) — only the real definition's FUNCDECL
+         * reaches gl.FUNCTIONS. The deferred-function enqueue
+         * (tr_visit_funcdecl) skips is_forward nodes so the C queue holds
+         * exactly the same set Python's gl.FUNCTIONS does. Not serialised
+         * by zxbc-ast-dump (parse-isolated). FUNCDECL nodes never use any
+         * other `u.*` member, so this dedicated struct cannot alias. */
+        struct {
+            bool is_forward;
+        } funcdecl;
+
         /* AST_CALL/FUNCCALL: child[0] = callee ID, child[1] = ARGLIST */
-        /* AST_FUNCDECL: child[0] = ID, child[1] = PARAMLIST, child[2] = body */
         /* AST_VARDECL: child[0] = ID, child[1] = initializer (or NULL) */
         /* AST_ARRAYDECL: child[0] = ID, child[1] = BOUNDLIST */
         /* AST_ARRAYACCESS/ARRAYLOAD: child[0] = array ID, child[1..n] = indices */
@@ -205,6 +218,12 @@ struct AstNode {
             char *name;       /* parameter name */
             bool byref;
             bool is_array;
+            /* S5.7b — cumulative parameter offset, assigned left-to-right
+             * by parser_assign_param_offsets (paramlist.py:53-58
+             * PARAMLIST.append_child: param.ref.offset = self.size;
+             * self.size += param.size). Only meaningful on a PARAMLIST's
+             * ARGUMENT children. -1 == not assigned. */
+            int offset;
         } argument;
 
         /* AST_BOUND: child[0] = lower, child[1] = upper */
