@@ -156,6 +156,23 @@ static void emit_output(FILE *f, StrVec mem, Arena *a) {
     }
 }
 
+/* S5.6 — locate the parser-built ARRAYDECL node whose child[0] is the
+ * given array symbol-table entry. The parser emits one ARRAYDECL per
+ * `DIM name(...)` (parser.c:2156-2172) with the entry id_node as child[0];
+ * recursively search the program AST for it. Array-confined: only ever
+ * called for CLASS_array entries from the array drain. */
+static AstNode *codegen_find_arraydecl(AstNode *node, AstNode *entry) {
+    if (node == NULL) return NULL;
+    if (node->tag == AST_ARRAYDECL && node->child_count > 0 &&
+        node->children[0] == entry)
+        return node;
+    for (int i = 0; i < node->child_count; i++) {
+        AstNode *r = codegen_find_arraydecl(node->children[i], entry);
+        if (r != NULL) return r;
+    }
+    return NULL;
+}
+
 int codegen_emit(CompilerState *cs, AstNode *ast) {
     Arena *a = &cs->arena;
 
@@ -218,6 +235,29 @@ int codegen_emit(CompilerState *cs, AstNode *ast) {
             ast_add_child(cs, vd, e);
             vd->type_ = e->type_;
             ast_add_child(cs, dast, vd);
+        }
+
+        /* S5.6 — array declarations second pass (zxbparser.py:549-551):
+         *   for var in SYMBOL_TABLE.arrays:
+         *       data_ast.append_child(make_array_declaration(var))
+         * make_array_declaration(entry) == sym.ARRAYDECL(entry)
+         * (zxbparser.py:270-272). SYMBOL_TABLE.arrays is the scope-
+         * insertion-order list of CLASS.array entries
+         * (symboltable.py:794-802); sym_entries_ordered mirrors that
+         * single insert point. The geometry (bounds / init / addr) lives
+         * on the parser-built ARRAYDECL node whose child[0] *is* this
+         * entry (parser.c:2166-2172) — we relink that node into data_ast
+         * (the faithful analogue of Python rebuilding ARRAYDECL(entry)
+         * from the entry's ArrayRef). This pass is array-confined: it
+         * touches only CLASS_array global entries and never alters the
+         * scalar VARDECL drain above. */
+        vec_foreach(cs->sym_entries_ordered, e) {
+            if (!e || e->u.id.class_ != CLASS_array ||
+                e->u.id.scope != SCOPE_global)
+                continue;
+            AstNode *adecl = codegen_find_arraydecl(cs->ast, e);
+            if (adecl != NULL)
+                ast_add_child(cs, dast, adecl);
         }
         cs->data_ast = dast;
     }

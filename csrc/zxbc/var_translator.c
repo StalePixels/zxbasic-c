@@ -94,10 +94,12 @@ static void vt_ic_label(Translator *tr, const char *label) {
 }
 
 /* Translator.traverse_const, NUMBER/CONST leaf only (translator_visitor.py
- * :177-184). The S5.3 corpus's CONSTEXPR initializers — when present — are
- * scalar NUMBER/CONST; UNARY/BINARY constant folding is out of the S5.3
- * NUMBER-literal slice. Fail loud past the leaf rather than mis-evaluate
- * silently (CLAUDE.md rules 8 & 9). */
+ * :177-184) — the S5.3/S5.4/S5.5 scalar behaviour, kept BYTE-IDENTICAL.
+ * Scalar callers (DIM AT / DIM = CONSTEXPR) only ever pass NUMBER/CONST
+ * leaves in the landed slices; UNARY/BINARY here is out-of-scalar-scope —
+ * fail loud past the leaf (unchanged from S5.5). S5.6's array-init path
+ * uses vt_traverse_const_expr (below) instead, so this stays scoped to
+ * non-array constructs and cannot regress DIM-AT/scalar fixtures. */
 static const char *vt_traverse_const(Translator *tr, AstNode *node) {
     if (!node) return "";
     if (node->tag == AST_NUMBER || node->tag == AST_CONSTEXPR) {
@@ -116,8 +118,108 @@ static const char *vt_traverse_const(Translator *tr, AstNode *node) {
     if (node->tag == AST_ID) /* CONST entry: traverse_const returns node.t */
         return node->t ? node->t : "";
     fprintf(stderr,
-            "zxbc: traverse_const non-leaf (tag=%d) not in S5.3 scope\n",
+            "zxbc: traverse_const non-leaf (tag=%d) not in scalar scope\n",
             (int)node->tag);
+    return node->t ? node->t : "";
+}
+
+/* str(value) for a NUMBER (visit_NUMBER / Symbol.t lazy form, ast.c:71-77). */
+static const char *vt_number_str(Translator *tr, AstNode *node) {
+    if (node->t == NULL) {
+        double value = node->u.number.value;
+        char b[64];
+        if (value == (double)(int64_t)value)
+            snprintf(b, sizeof(b), "%lld", (long long)(int64_t)value);
+        else
+            snprintf(b, sizeof(b), "%g", value);
+        node->t = arena_strdup(&tr->cs->arena, b);
+    }
+    return node->t ? node->t : "";
+}
+
+/* operator map (translator_visitor.py:201-211): token -> infix glyph. */
+static const char *vt_binary_glyph(const char *op) {
+    if (!op) return NULL;
+    if (strcmp(op, "PLUS")  == 0) return "+";
+    if (strcmp(op, "MINUS") == 0) return "-";
+    if (strcmp(op, "MUL")   == 0 || strcmp(op, "MULT") == 0) return "*";
+    if (strcmp(op, "DIV")   == 0) return "/";
+    if (strcmp(op, "MOD")   == 0) return "%";
+    if (strcmp(op, "POW")   == 0) return "^";
+    if (strcmp(op, "SHL")   == 0) return ">>";
+    if (strcmp(op, "SHR")   == 0) return "<<";
+    return NULL;
+}
+
+/* TranslatorVisitor.traverse_const (translator_visitor.py:177-221) — the
+ * FULL constant-expression stringifier. Ported branch-for-branch:
+ *   NUMBER / CONST           -> node.t
+ *   UNARY MINUS              -> " -" + traverse_const(operand)
+ *   UNARY ADDRESS            -> traverse_const(operand) (operand must be
+ *                               global / LABEL / FUNCTION)
+ *   BINARY {PLUS,MINUS,MUL,DIV,MOD,POW,SHL,SHR}
+ *                            -> "(L) <op> (R)"
+ * S5.6-scoped: ONLY the array-init / array-AT path calls this
+ * (var_translator.py:79 -> array_default_value -> default_value ->
+ * traverse_const; and entry.addr for arrays). Scalar callers keep the
+ * leaf-only vt_traverse_const above, so non-array output is unchanged. */
+static const char *vt_traverse_const_expr(Translator *tr, AstNode *node) {
+    if (!node) return "";
+
+    if (node->tag == AST_NUMBER)
+        return vt_number_str(tr, node);
+
+    if (node->tag == AST_CONSTEXPR) {
+        if (node->child_count > 0)
+            return vt_traverse_const_expr(tr, node->children[0]);
+        return node->t ? node->t : "";
+    }
+
+    if (node->tag == AST_ID) {
+        /* CONST entry: traverse_const returns node.t. An ADDRESS operand
+         * resolved to a symbol-table ID carries .mangled ("_a"). */
+        if (node->t != NULL) return node->t;
+        if (node->u.id.mangled != NULL) return node->u.id.mangled;
+        return node->u.id.name ? node->u.id.name : "";
+    }
+
+    if (node->tag == AST_UNARY) {
+        const char *mid = node->u.unary.operator;
+        AstNode *operand = node->child_count > 0 ? node->children[0] : NULL;
+        if (mid && strcmp(mid, "MINUS") == 0) {
+            const char *r = vt_traverse_const_expr(tr, operand);
+            size_t rl = strlen(r);
+            char *out = arena_alloc(&tr->cs->arena, rl + 3);
+            out[0] = ' '; out[1] = '-';
+            memcpy(out + 2, r, rl + 1);
+            return out;
+        }
+        if (mid && strcmp(mid, "ADDRESS") == 0)
+            return vt_traverse_const_expr(tr, operand);
+        fprintf(stderr, "zxbc: traverse_const invalid unary op '%s'\n",
+                mid ? mid : "");
+        return "";
+    }
+
+    if (node->tag == AST_BINARY) {
+        const char *mid = vt_binary_glyph(node->u.binary.operator);
+        if (mid == NULL) {
+            fprintf(stderr, "zxbc: traverse_const invalid binary op '%s'\n",
+                    node->u.binary.operator ? node->u.binary.operator : "");
+            return "";
+        }
+        AstNode *l = node->child_count > 0 ? node->children[0] : NULL;
+        AstNode *r = node->child_count > 1 ? node->children[1] : NULL;
+        const char *ls = vt_traverse_const_expr(tr, l);
+        const char *rs = vt_traverse_const_expr(tr, r);
+        size_t need = strlen(ls) + strlen(rs) + strlen(mid) + 8;
+        char *out = arena_alloc(&tr->cs->arena, need);
+        snprintf(out, need, "(%s) %s (%s)", ls, mid, rs);
+        return out;
+    }
+
+    fprintf(stderr,
+            "zxbc: traverse_const unhandled node tag=%d\n", (int)node->tag);
     return node->t ? node->t : "";
 }
 
@@ -250,6 +352,231 @@ int tr_default_value(Translator *tr, const TypeInfo *type_,
     return n;
 }
 
+/* ==================================================================== *
+ *  S5.6 — Array data image (var_translator.py:45-103)                   *
+ * ==================================================================== */
+
+/* ic_data (translator_inst_visitor.py:94-95): emit("data",TSUFFIX,data). */
+static void vt_ic_data(Translator *tr, const TypeInfo *type_,
+                       char **data, int n) {
+    const char *args[2] = { tr_tsuffix(type_), py_list_repr(tr, data, n) };
+    tr_emit_quad(tr, "data", 2, args);
+}
+
+/* Translator.array_default_value (translator.py:1081-1092):
+ *   if not list: return default_value(type_, values)
+ *   else: l=[]; for row in values: l += array_default_value(type_, row)
+ * The Python `values` nesting is the ARRAYINIT tree: an ARRAYINIT node is
+ * the list (recurse its children as rows); any other node is a scalar
+ * leaf (-> default_value). Appends arena-owned 2-hex strings to *out. */
+static int vt_array_default_value(Translator *tr, const TypeInfo *type_,
+                                  AstNode *values, char **out,
+                                  int out_off, int out_cap) {
+    if (values && values->tag == AST_ARRAYINIT) {
+        int off = out_off;
+        for (int i = 0; i < values->child_count; i++)
+            off = vt_array_default_value(tr, type_, values->children[i],
+                                         out, off, out_cap);
+        return off;
+    }
+    /* scalar leaf -> Translator.default_value(type_, leaf) */
+    char buf[5];
+    char *tmp[5];
+    int got = tr_default_value(tr, type_, values, tmp, 5);
+    (void)buf;
+    int off = out_off;
+    for (int i = 0; i < got && off < out_cap; i++)
+        out[off++] = tmp[i];
+    return off;
+}
+
+/* SymbolBOUND geometry: BOUND child is [lower NUMBER, upper NUMBER]
+ * (parser.c:2099-2102; bound.py:33-37 lower/upper/count). For the S5.6
+ * numeric corpus these are NUMBER literals; read the integer value. */
+static long vt_bound_val(AstNode *n) {
+    if (!n) return 0;
+    if (n->tag == AST_NUMBER) return (long)n->u.number.value;
+    if (n->tag == AST_CONSTEXPR && n->child_count > 0)
+        return vt_bound_val(n->children[0]);
+    return 0;
+}
+
+/* VarTranslator.visit_ARRAYDECL (var_translator.py:45-103). The central
+ * S5.6 data-image emitter. node is the parser ARRAYDECL:
+ *   child[0] = entry (CLASS_array ID), child[1] = BOUNDLIST,
+ *   then optional AT-addr expr and/or ARRAYINIT (parser.c:2156-2172).
+ *
+ * Faithfulness notes / scope: is_dynamically_accessed / lbound_used /
+ * ubound_used are not yet modelled on the C ID (S5.7+); they default
+ * false, so bound_ptrs stays ["0","0"] for the zero-based numeric corpus
+ * (41/44/05/array0x), exactly matching Python there. The always-emitted
+ * 2-ptr DATA row, the dim-0-omitting "%04X" idx table, the unconditional
+ * data_ptr VARX, and the ARRAYINIT default lowering are ported verbatim. */
+static void vt_visit_arraydecl(Translator *tr, AstNode *node) {
+    AstNode *entry = node->child_count > 0 ? node->children[0] : NULL;
+    if (!entry) return;
+
+    AstNode *boundlist = NULL;
+    AstNode *addr_expr = NULL;
+    AstNode *init_node = NULL;
+    for (int i = 1; i < node->child_count; i++) {
+        AstNode *c = node->children[i];
+        if (!c) continue;
+        if (c->tag == AST_BOUNDLIST) { boundlist = c; continue; }
+        /* ARRAYINIT or expression initializer; an AT-addr expr is any
+         * other non-BOUNDLIST expr that precedes/replaces the init. The
+         * parser appends AT-addr before init (parser.c:2170-2171). */
+        if (c->tag == AST_ARRAYINIT) { init_node = c; continue; }
+        if (init_node == NULL && addr_expr == NULL) addr_expr = c;
+        else init_node = c;
+    }
+    int ndims = boundlist ? boundlist->child_count : 0;
+
+    /* if not entry.accessed: warning_not_used; O>1 -> drop (DCE). */
+    if (!entry->u.id.accessed) {
+        warn_not_used(tr->cs, entry->lineno,
+                      entry->u.id.name ? entry->u.id.name : "", "Variable");
+        if (tr->cs->opts.optimization_level > 1)
+            return;
+    }
+
+    const char *mangled = entry->u.id.mangled ? entry->u.id.mangled : "";
+    size_t ml = strlen(mangled);
+
+    char *lbound_label = arena_alloc(&tr->cs->arena, ml + 12);
+    snprintf(lbound_label, ml + 12, "%s.__LBOUND__", mangled);
+    char *ubound_label = arena_alloc(&tr->cs->arena, ml + 12);
+    snprintf(ubound_label, ml + 12, "%s.__UBOUND__", mangled);
+
+    /* is_zero_based: all bounds' lower == 0 (arrayref.py:89-91). */
+    bool is_zero_based = true;
+    for (int i = 0; i < ndims; i++) {
+        AstNode *bd = boundlist->children[i];
+        long lo = vt_bound_val(bd && bd->child_count > 0 ? bd->children[0]
+                                                         : NULL);
+        if (lo != 0) { is_zero_based = false; break; }
+    }
+    /* is_dynamically_accessed / lbound_used / ubound_used: not modelled
+     * in the C ID yet (S5.7+). OPTIONS.array_check defaults off. */
+    bool is_dynamically_accessed = false;
+    bool lbound_used = false;
+    bool ubound_used = false;
+    bool array_check = false;
+
+    char *bound_ptrs[2] = { "0", "0" };
+    if (!is_zero_based && (is_dynamically_accessed || lbound_used))
+        bound_ptrs[0] = lbound_label;
+    if (ubound_used || array_check)
+        bound_ptrs[1] = ubound_label;
+
+    char *data_label = arena_alloc(&tr->cs->arena, ml + 10);
+    snprintf(data_label, ml + 10, "%s.__DATA__", mangled);
+    char *data_ptr_label = arena_alloc(&tr->cs->arena, ml + 18);
+    snprintf(data_ptr_label, ml + 18, "%s.__DATA__.__PTR__", mangled);
+
+    char *idx_table_label = backend_tmp_label(tr->backend);
+
+    /* idx table: ["%04X" % (ndims-1)] + ["%04X"%(u-l+1) for bounds[1:]]
+     * + ["%02X" % type_.size]  (var_translator.py:66-71). */
+    char *idx[64];
+    int idxn = 0;
+    {
+        char b[8];
+        snprintf(b, sizeof(b), "%04X", (unsigned)((ndims - 1) & 0xFFFF));
+        idx[idxn++] = arena_strdup(&tr->cs->arena, b);
+        for (int i = 1; i < ndims && idxn < 63; i++) {
+            AstNode *bd = boundlist->children[i];
+            long lo = vt_bound_val(bd && bd->child_count > 0
+                                       ? bd->children[0] : NULL);
+            long hi = vt_bound_val(bd && bd->child_count > 1
+                                       ? bd->children[1] : NULL);
+            snprintf(b, sizeof(b), "%04X",
+                     (unsigned)((hi - lo + 1) & 0xFFFF));
+            idx[idxn++] = arena_strdup(&tr->cs->arena, b);
+        }
+        int esz = type_size(node->type_);
+        snprintf(b, sizeof(b), "%02X", (unsigned)(esz & 0xFF));
+        idx[idxn++] = arena_strdup(&tr->cs->arena, b);
+    }
+
+    /* count = product of bound counts; size = count * elem_size
+     * (arrayref.py:40-47, arraydecl.py:34-37). */
+    long count = 1;
+    for (int i = 0; i < ndims; i++) {
+        AstNode *bd = boundlist->children[i];
+        long lo = vt_bound_val(bd && bd->child_count > 0 ? bd->children[0]
+                                                         : NULL);
+        long hi = vt_bound_val(bd && bd->child_count > 1 ? bd->children[1]
+                                                         : NULL);
+        count *= (hi - lo + 1);
+    }
+    long size = count * type_size(node->type_);
+
+    char *arr_data[1024];
+    int arr_n = 0;
+    bool has_addr = (addr_expr != NULL);
+
+    if (has_addr) {
+        /* entry.addr -> ic_deflabel(data_label, addr) (no data row).
+         * Array AT-addr can be @label / @a+1 -> full traverse_const. */
+        const char *addr = vt_traverse_const_expr(tr, addr_expr);
+        vt_ic_deflabel(tr, data_label, addr);
+    } else if (init_node != NULL) {
+        arr_n = vt_array_default_value(tr, node->type_, init_node,
+                                       arr_data, 0, 1024);
+    } else {
+        for (long i = 0; i < size && arr_n < 1024; i++)
+            arr_data[arr_n++] = "00";
+    }
+
+    /* PTR_TYPE == uinteger (u16) — gl.PTR_TYPE on zx48k. */
+    const TypeInfo *ptr = tr->cs->symbol_table->basic_types[TYPE_uinteger];
+
+    /* ic_varx(node.mangled, PTR_TYPE, [idx_table_label]). */
+    { char *one[1]; one[0] = idx_table_label;
+      vt_ic_varx(tr, mangled, ptr, one, 1); }
+
+    if (has_addr) {
+        /* ic_varx(data_ptr_label, PTR_TYPE, [traverse_const(addr)]);
+         * then ic_data(PTR_TYPE, bound_ptrs). */
+        char *one[1]; one[0] = (char *)vt_traverse_const_expr(tr, addr_expr);
+        vt_ic_varx(tr, data_ptr_label, ptr, one, 1);
+        vt_ic_data(tr, ptr, bound_ptrs, 2);
+    } else {
+        char *one[1]; one[0] = data_label;
+        vt_ic_varx(tr, data_ptr_label, ptr, one, 1);
+        vt_ic_data(tr, ptr, bound_ptrs, 2);
+        vt_ic_vard(tr, data_label, arr_data, arr_n);
+    }
+
+    vt_ic_vard(tr, idx_table_label, idx, idxn);
+
+    if (strcmp(bound_ptrs[0], "0") != 0) {
+        char *lb[64]; int n = 0;
+        for (int i = 0; i < ndims && n < 64; i++) {
+            AstNode *bd = boundlist->children[i];
+            long lo = vt_bound_val(bd && bd->child_count > 0
+                                       ? bd->children[0] : NULL);
+            char b[8];
+            snprintf(b, sizeof(b), "%04X", (unsigned)(lo & 0xFFFF));
+            lb[n++] = arena_strdup(&tr->cs->arena, b);
+        }
+        vt_ic_vard(tr, lbound_label, lb, n);
+    }
+    if (strcmp(bound_ptrs[1], "0") != 0) {
+        char *ub[64]; int n = 0;
+        for (int i = 0; i < ndims && n < 64; i++) {
+            AstNode *bd = boundlist->children[i];
+            long hi = vt_bound_val(bd && bd->child_count > 1
+                                       ? bd->children[1] : NULL);
+            char b[8];
+            snprintf(b, sizeof(b), "%04X", (unsigned)(hi & 0xFFFF));
+            ub[n++] = arena_strdup(&tr->cs->arena, b);
+        }
+        vt_ic_vard(tr, ubound_label, ub, n);
+    }
+}
+
 /* VarTranslator.visit_VARDECL (var_translator.py:26-43). node.children[0]
  * is the entry ID; VARDECL.type_/mangled/size/default_value forward to it
  * (vardecl.py:22-37). */
@@ -316,6 +643,7 @@ void var_translator_visit(Translator *tr, AstNode *data_ast) {
         AstNode *ch = data_ast->children[i];
         if (!ch) continue;
         if (ch->tag == AST_VARDECL)      vt_visit_vardecl(tr, ch);
+        else if (ch->tag == AST_ARRAYDECL) vt_visit_arraydecl(tr, ch);
         else if (ch->tag == AST_SENTENCE &&
                  ch->u.sentence.kind &&
                  strcmp(ch->u.sentence.kind, "LABEL") == 0)

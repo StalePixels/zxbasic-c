@@ -2652,6 +2652,60 @@ static bool s_re_hexa(const char *x) {
     return true;
 }
 
+/* ---- _data (generic.py:102-138) -------------------------------------- *
+ * Quad("data", TSUFFIX, list-repr). i8/u8 -> DEFB; i16/u16 -> DEFW;
+ * i32/u32 -> per expr lo/hi DEFW pair; str/f branches ported for
+ * fidelity. The S5.6 array DATA bound-ptr row uses u16. */
+static StrVec emit_data(Backend *b, Quad *q) {
+    StrVec out = sv_new();
+    const char *t = q->args[0];
+    char *items[64];
+    int n = eval_str_list(b, q->args[1], items, 64);
+
+    const char *size;
+    if (strcmp(t, "i8") == 0 || strcmp(t, "u8") == 0) {
+        size = "B";
+    } else if (strcmp(t, "i16") == 0 || strcmp(t, "u16") == 0) {
+        size = "W";
+    } else if (strcmp(t, "i32") == 0 || strcmp(t, "u32") == 0) {
+        for (int i = 0; i < n; i++) {
+            sv_pushf(b, &out, "DEFW (%s) & 0xFFFF", items[i]);
+            sv_pushf(b, &out, "DEFW (%s) >> 16", items[i]);
+        }
+        return out;
+    } else if (strcmp(t, "str") == 0) {
+        size = "B";
+        for (int i = 0; i < n; i++) {
+            /* '"%s"' % x.replace('"','""') */
+            const char *x = items[i];
+            size_t xl = strlen(x), q2 = 0;
+            for (size_t k = 0; k < xl; k++) if (x[k] == '"') q2++;
+            char *s = arena_alloc(b->arena, xl + q2 + 3);
+            size_t w = 0; s[w++] = '"';
+            for (size_t k = 0; k < xl; k++) {
+                s[w++] = x[k];
+                if (x[k] == '"') s[w++] = '"';
+            }
+            s[w++] = '"'; s[w] = '\0';
+            sv_pushf(b, &out, "DEFB %s", s);
+        }
+        return out;
+    } else if (strcmp(t, "f") == 0) {
+        for (int i = 0; i < n; i++) {
+            char Cs[8], DEs[8], HLs[8];
+            z80h_immediate_float(strtod(items[i], NULL), Cs, DEs, HLs);
+            sv_pushf(b, &out, "DEFB %s", Cs);
+            sv_pushf(b, &out, "DEFW %s, %s", DEs, HLs);
+        }
+        return out;
+    } else {
+        fprintf(stderr, "zxbc: _data unimplemented size '%s'\n", t);
+        return out;
+    }
+    for (int i = 0; i < n; i++) sv_pushf(b, &out, "DEF%s %s", size, items[i]);
+    return out;
+}
+
 /* ---- _vard (generic.py:180-208) -------------------------------------- */
 static StrVec emit_vard(Backend *b, Quad *q) {
     StrVec out = sv_new();
@@ -2946,6 +3000,7 @@ static StrVec quad_emit(Backend *b, Quad *q) {
     if (strcmp(I, "var")      == 0) return emit_var(b, q);
     if (strcmp(I, "vard")     == 0) return emit_vard(b, q);
     if (strcmp(I, "varx")     == 0) return emit_varx(b, q);
+    if (strcmp(I, "data")     == 0) return emit_data(b, q);
     if (strcmp(I, "deflabel") == 0) return emit_deflabel(b, q);
     if (strcmp(I, "label")    == 0) return emit_label(b, q);
 

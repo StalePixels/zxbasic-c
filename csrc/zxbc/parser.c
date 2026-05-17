@@ -720,9 +720,24 @@ static AstNode *parse_call_or_array(Parser *p, const char *name, int lineno, boo
     }
 
     if (entry && entry->u.id.class_ == CLASS_array) {
-        /* Array access */
+        /* Array access. ARRAYACCESS-node construction itself does NOT mark
+         * the array accessed in Python: make_call's array branch
+         * (zxbparser.py:389-397) and ARRAYACCESS.make_node never call
+         * mark_entry_as_accessed. Only the expression-read production
+         * p_arr_access_expr (`func_call : ARRAY_ID arg_list`,
+         * zxbparser.py:2723-2730) marks it; the LETARRAY write-target
+         * production p_let_arr (zxbparser.py:1207-1218) does NOT (except
+         * the entry.addr case it handles itself). expr_context is true on
+         * every read/@-address path (parser.c:517,555) and false only for
+         * the LETARRAY lvalue target (parser.c:1483), so this single gate
+         * makes a write-only array's `accessed` False — exactly Python —
+         * which lets visit_ARRAYDECL's O>1 DCE drop it (matching
+         * str_base0 / let_array_substr / array01..05). Array-node-local:
+         * confined to the CLASS_array branch; the STRSLICE (parser.c:736)
+         * and FUNCCALL (parser.c:747) branches are untouched. */
         AstNode *n = ast_new(p->cs, AST_ARRAYACCESS, lineno);
-        entry->u.id.accessed = true;
+        if (expr_context)
+            entry->u.id.accessed = true;
         ast_add_child(p->cs, n, entry);
         for (int i = 0; i < arglist->child_count; i++)
             ast_add_child(p->cs, n, arglist->children[i]);
