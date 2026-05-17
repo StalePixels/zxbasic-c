@@ -1085,14 +1085,107 @@ static AstNode *parse_statement(Parser *p) {
         return s;
     }
 
-    /* RETURN */
+    /* RETURN — S5.7e. Faithful port of Python p_return (zxbparser.py:
+     * 2099-2110, "statement : RETURN") and p_return_expr (:2113-2154,
+     * "statement : RETURN expr"). The enclosing-function scope stack is
+     * p->cs->function_level (Python's gl.FUNCTION_LEVEL); its top entry is
+     * the resolved FUNCTION/SUB symbol-table ID (parser.c:2791
+     * vec_push(function_level, id_node) — class_/convention/type_/mangled
+     * all set). The faithful node shapes:
+     *   - global scope (function_level empty), bare RETURN  -> 0 children
+     *     (GOSUB return); RETURN expr -> error, drop.
+     *   - inside a SUB, bare RETURN -> [funcref]   (1 child).
+     *   - inside a FUNCTION, RETURN expr ->
+     *       [funcref, make_typecast(func->type_, expr, ln)]  (2 children;
+     *       make_typecast returning NULL collapses to [funcref], exactly
+     *       as Python's SymbolSENTENCE drops None children, sentence.py:20).
+     * visit_RETURN (translator.py:699-706 / tr_visit_return) reads
+     * child[0] only for the func mangled (`<mangled>__leave`) and
+     * child[1] for the value's type_/t. */
     if (match(p, BTOK_RETURN)) {
         int ln = p->previous.lineno;
-        AstNode *s = make_sentence_node(p, "RETURN", ln);
-        if (!check(p, BTOK_NEWLINE) && !check(p, BTOK_EOF) && !check(p, BTOK_CO)) {
-            AstNode *expr = parse_expression(p, PREC_NONE + 1);
-            if (expr) ast_add_child(p->cs, s, expr);
+        bool has_expr = !check(p, BTOK_NEWLINE) && !check(p, BTOK_EOF) &&
+                        !check(p, BTOK_CO);
+        AstNode *func = (p->cs->function_level.len > 0)
+                          ? p->cs->function_level.data[p->cs->function_level.len - 1]
+                          : NULL;
+
+        if (!has_expr) {
+            /* p_return (zxbparser.py:2099-2110) */
+            if (!func) {
+                /* not FUNCTION_LEVEL -> GOSUB return, 0-child sentence. */
+                return make_sentence_node(p, "RETURN", ln);
+            }
+            if (func->u.id.class_ != CLASS_sub) {
+                /* error(...) "Function must RETURN a value."; p[0]=None. */
+                zxbc_error(p->cs, ln,
+                           "Syntax Error: Function must RETURN a value.");
+                return NULL;
+            }
+            /* make_sentence(lineno, "RETURN", FUNCTION_LEVEL[-1]) -> 1 child */
+            AstNode *s = make_sentence_node(p, "RETURN", ln);
+            ast_add_child(p->cs, s, func);
+            return s;
         }
+
+        /* p_return_expr (zxbparser.py:2113-2154) */
+        if (!func) {
+            /* not FUNCTION_LEVEL -> error, drop. Consume the expr so the
+             * statement stream stays aligned (Python's parser still
+             * reduces `expr`; only p[0] becomes None). */
+            zxbc_error(p->cs, ln,
+                       "Syntax Error: Returning value out of FUNCTION");
+            (void)parse_expression(p, PREC_NONE + 1);
+            return NULL;
+        }
+        if (func->u.id.class_ == CLASS_unknown) {
+            /* This function was not correctly declared -> p[0]=None. */
+            (void)parse_expression(p, PREC_NONE + 1);
+            return NULL;
+        }
+        if (func->u.id.class_ != CLASS_function) {
+            zxbc_error(p->cs, ln,
+                       "Syntax Error: SUBs cannot return a value");
+            (void)parse_expression(p, PREC_NONE + 1);
+            return NULL;
+        }
+        if (func->type_ == NULL) {
+            /* There was an error in the Function declaration -> None. */
+            (void)parse_expression(p, PREC_NONE + 1);
+            return NULL;
+        }
+
+        AstNode *expr = parse_expression(p, PREC_NONE + 1);
+
+        /* is_numeric(p[2]) == expr is basic & numeric == not a string.
+         * Python's two string/numeric gates (zxbparser.py:2133-2147):
+         *   is_numeric(expr) and func.type_==string  -> error
+         *   not is_numeric(expr) and func.type_!=string -> error
+         * make_typecast already enforces the string<->number conversion
+         * ban (compiler.c:596-603); replicate the *parser-level* gates
+         * here so the dropped-statement (p[0]=None) shape matches. */
+        if (expr) {
+            bool expr_is_string = type_is_string(expr->type_);
+            bool func_is_string = type_is_string(func->type_);
+            if (!expr_is_string && func_is_string) {
+                zxbc_error(p->cs, expr->lineno,
+                           "Type Error: Function must return a string, not a numeric value");
+                return NULL;
+            }
+            if (expr_is_string && !func_is_string) {
+                zxbc_error(p->cs, expr->lineno,
+                           "Type Error: Function must return a numeric value, not a string");
+                return NULL;
+            }
+        }
+
+        /* make_sentence(lineno, "RETURN", FUNCTION_LEVEL[-1],
+         *   make_typecast(FUNCTION_LEVEL[-1].type_, p[2], lineno)).
+         * make_typecast NULL -> SENTENCE drops it -> [funcref] (1 child). */
+        AstNode *cast = make_typecast(p->cs, func->type_, expr, ln);
+        AstNode *s = make_sentence_node(p, "RETURN", ln);
+        ast_add_child(p->cs, s, func);
+        if (cast) ast_add_child(p->cs, s, cast);
         return s;
     }
 
@@ -1578,9 +1671,44 @@ static AstNode *parse_statement(Parser *p) {
             return s;
         }
 
-        /* Sub call without parentheses: ID expr, expr, ...
-         * Check if the identifier is callable (sub/function/unknown).
-         * Variables and constants can't be called. */
+        /* Sub call WITHOUT parentheses, or a bare-ID label reference.
+         * S5.7f — faithful port of Python p_statement_call
+         * (zxbparser.py:1067-1081, "statement : ID arg_list | ID
+         * arguments | ID"):
+         *   bare ID (no args): entry = SYMBOL_TABLE.get_entry(p[1]);
+         *     if entry is not None and entry.class_ in (label, unknown)
+         *       -> make_label(p[1])         (a label reference)
+         *     else
+         *       -> make_sub_call(p[1], make_arg_list(None))
+         *   ID args -> make_sub_call(p[1], p[2])
+         * make_sub_call -> SymbolCALL.make_node (symbols/call.py:90-112):
+         *   access_func(id_) (auto-declares CLASS_unknown if absent),
+         *   AST child[0] = resolved entry, child[1] = ARGLIST, and
+         *   gl.FUNCTION_CALLS.append(result) for the pending-call check.
+         * The C lexer diverts label *definitions* (`xx:`) to BTOK_LABEL
+         * (parser.c:935) so only bare-ID *uses* reach here; the genuine
+         * ambiguity is bare-ID-use vs label-ref, disambiguated exactly
+         * as Python via the get_entry class. The pre-resolution VAR/CONST
+         * guard is kept verbatim (Python access_func rejects the same). */
+        bool has_args = !check(p, BTOK_NEWLINE) && !check(p, BTOK_EOF) &&
+                        !check(p, BTOK_CO);
+
+        if (!has_args) {
+            AstNode *e = symboltable_lookup(p->cs->symbol_table, name);
+            if (e && (e->u.id.class_ == CLASS_label ||
+                      e->u.id.class_ == CLASS_unknown)) {
+                /* make_label(p[1], lineno): a label reference. Same
+                 * statement shape the label-definition path emits
+                 * (parser.c:978-983) so ast-dump stays identical. */
+                AstNode *ls = make_sentence_node(p, "LABEL", ln);
+                AstNode *lid = ast_new(p->cs, AST_ID, ln);
+                lid->u.id.name = arena_strdup(&p->cs->arena, name);
+                lid->u.id.class_ = CLASS_label;
+                ast_add_child(p->cs, ls, lid);
+                return ls;
+            }
+        }
+
         {
             AstNode *entry = symboltable_lookup(p->cs->symbol_table, name);
             if (entry && entry->u.id.class_ == CLASS_var) {
@@ -1589,13 +1717,39 @@ static AstNode *parse_statement(Parser *p) {
                 zxbc_error(p->cs, ln, "'%s' is a CONST, not a FUNCTION", name);
             }
         }
-        AstNode *s = make_sentence_node(p, "CALL", ln);
-        AstNode *id_node = ast_new(p->cs, AST_ID, ln);
-        id_node->u.id.name = arena_strdup(&p->cs->arena, name);
+        /* make_sub_call -> SymbolCALL.make_node -> access_func(id_): the
+         * resolved/auto-declared FUNCTION/SUB symbol-table entry IS
+         * child[0] (call.py:33-67). Python's p_statement_call returns the
+         * SymbolCALL AST node *directly* (no SENTENCE wrapper); the C
+         * equivalent is an AST_FUNCCALL tag node retagged to AST_CALL,
+         * exactly as the with-parens statement path does
+         * (parse_call_or_array, parser.c:760-785, then the FUNCCALL->CALL
+         * retag at parser.c:1623-1624). The tag-node form is load-bearing:
+         * FunctionGraph marks callees accessed only for AST_CALL/
+         * AST_FUNCCALL *tag* nodes (functiongraph.c:52,120-121); a
+         * SENTENCE "CALL" is invisible to it, so the callee body would be
+         * DCE'd and the call never folded to its __leave. */
+        AstNode *s = ast_new(p->cs, AST_FUNCCALL, ln);
+        AstNode *id_node =
+            symboltable_access_func(p->cs->symbol_table, p->cs, name, ln, NULL);
+        if (id_node) {
+            /* S5.7a: do NOT mark accessed here (FunctionGraph does it,
+             * scope-aware). n->type_ = entry.type_ exactly as the
+             * with-parens FUNCCALL branch (parser.c:774). */
+            s->type_ = id_node->type_;
+        } else {
+            /* access_func reported the error — placeholder, no register */
+            id_node = ast_new(p->cs, AST_ID, ln);
+            id_node->u.id.name = arena_strdup(&p->cs->arena, name);
+            s->type_ = p->cs->default_type;
+        }
         ast_add_child(p->cs, s, id_node);
+        /* Python make_sub_call always passes a SymbolARGLIST (empty for a
+         * bare ID via make_arg_list(None)); ARGLIST is therefore always
+         * child[1] — never the 1-child shape the old C arm produced. */
+        AstNode *arglist = ast_new(p->cs, AST_ARGLIST, ln);
 
-        if (!check(p, BTOK_NEWLINE) && !check(p, BTOK_EOF) && !check(p, BTOK_CO)) {
-            AstNode *arglist = ast_new(p->cs, AST_ARGLIST, ln);
+        if (has_args) {
             do {
                 /* Check for named argument: name := expr */
                 if ((check(p, BTOK_ID) || is_name_token(p))) {
@@ -1627,8 +1781,28 @@ static AstNode *parse_statement(Parser *p) {
                     ast_add_child(p->cs, arglist, arg);
                 }
             } while (match(p, BTOK_COMMA));
-            ast_add_child(p->cs, s, arglist);
         }
+        /* ARGLIST is always child[1] (Python make_arg_list(None) for the
+         * bare-ID form too) — never the old 1-child CALL shape. */
+        ast_add_child(p->cs, s, arglist);
+
+        /* gl.FUNCTION_CALLS.append(result) (symbols/call.py:109) — the
+         * pending-call list check_pending_calls (compiler.c:1135) walks
+         * to validate/back-patch the callee class, exactly as the
+         * with-parens path registers the FUNCCALL node (parser.c:785).
+         * Skip when the callee is a VAR/CONST mis-resolution — matches
+         * Python make_node returning before FUNCTION_CALLS.append. */
+        if (id_node && id_node->tag == AST_ID &&
+            id_node->u.id.class_ != CLASS_var &&
+            id_node->u.id.class_ != CLASS_const) {
+            vec_push(p->cs->function_calls, s);
+        }
+
+        /* Statement-level sub call: FUNCCALL -> CALL, exactly as the
+         * with-parens statement path (parser.c:1623-1624). The tag node
+         * (not a SENTENCE) is what FunctionGraph keys on. */
+        if (s->tag == AST_FUNCCALL)
+            s->tag = AST_CALL;
         return s;
     }
 

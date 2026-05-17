@@ -648,7 +648,14 @@ static AstNode *tr_visit_return(Visitor *v, AstNode *node) {
         AstNode *func = node->children[0];
         AstNode *val  = node->children[1];
         visitor_visit(v, val);
-        const char *fm = func ? tr_label_mangled(tr, func) : "";
+        /* Python visit_RETURN (translator.py:701): addr =
+         * "%s__leave" % node.children[0].mangled — the *function*
+         * mangled ("_<name>", _id.py:60), NOT a .LABEL._ label
+         * mangle. The S5.7e parser now supplies the resolved
+         * FUNCTION/SUB symbol-table entry as child[0], so read its
+         * .mangled directly (instrumented Python ground truth:
+         * 37.bas -> '_test__leave'; subrec.bas -> '_fact__leave'). */
+        const char *fm = (func && func->u.id.mangled) ? func->u.id.mangled : "";
         size_t fl = strlen(fm);
         char *addr = arena_alloc(&tr->cs->arena, fl + 8);
         memcpy(addr, fm, fl);
@@ -658,9 +665,11 @@ static AstNode *tr_visit_return(Visitor *v, AstNode *node) {
     } else if (node->child_count == 1 &&
                node->children[0] && node->children[0]->tag == AST_ID &&
                node->children[0]->u.id.class_ != CLASS_label) {
-        /* len==1: a bare function-ref child -> ic_return(func__leave). */
+        /* len==1: a bare function-ref child -> ic_return(func__leave).
+         * Python visit_RETURN (translator.py:704): addr =
+         * "%s__leave" % node.children[0].mangled (the func mangled). */
         AstNode *func = node->children[0];
-        const char *fm = tr_label_mangled(tr, func);
+        const char *fm = func->u.id.mangled ? func->u.id.mangled : "";
         size_t fl = strlen(fm);
         char *addr = arena_alloc(&tr->cs->arena, fl + 8);
         memcpy(addr, fm, fl);
