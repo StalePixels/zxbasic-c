@@ -733,8 +733,9 @@ static AstNode *parse_call_or_array(Parser *p, const char *name, int lineno, boo
          * makes a write-only array's `accessed` False — exactly Python —
          * which lets visit_ARRAYDECL's O>1 DCE drop it (matching
          * str_base0 / let_array_substr / array01..05). Array-node-local:
-         * confined to the CLASS_array branch; the STRSLICE (parser.c:736)
-         * and FUNCCALL (parser.c:747) branches are untouched. */
+         * confined to the CLASS_array branch (the FUNCCALL branch below
+         * is untouched; the STRSLICE branch takes the identical gate
+         * under S5.8a for the same reason — see its comment). */
         AstNode *n = ast_new(p->cs, AST_ARRAYACCESS, lineno);
         if (expr_context)
             entry->u.id.accessed = true;
@@ -746,9 +747,32 @@ static AstNode *parse_call_or_array(Parser *p, const char *name, int lineno, boo
     }
 
     if (entry && entry->u.id.class_ == CLASS_var && type_is_string(entry->type_)) {
-        /* String slicing: name(expr) */
+        /* String slicing: name(expr).  S5.8a: STRSLICE-node construction
+         * does NOT mark the string accessed in Python.  The substring
+         * *lvalue* write-target productions p_substr_assignment_no_let
+         * (zxbparser.py:1221-1245), p_substr_assignment (:1248-1305) and
+         * p_str_assign (:1308-1335) resolve the target only via
+         * SYMBOL_TABLE.access_call / access_var, and access_id /
+         * access_var / access_call (src/api/symboltable/symboltable.py
+         * :326 / :368 / :434) NEVER set .accessed — only the explicit
+         * mark_entry_as_accessed (zxbparser.py:167) does, and none of the
+         * three productions call it.  So a string used only as a
+         * substring lvalue stays accessed=False in Python, and
+         * OptimizerVisitor.visit_LETSUBSTR (optimize.py:360-365, O>1 +
+         * not accessed → NOP) + VarTranslator.visit_VARDECL DCE prune it
+         * to the bare wrapper + W150.  The C port's already-correct
+         * ports of those gates (passes/optimizer.c opt_visit_letsubstr,
+         * var_translator.c vt_visit_vardecl) were defeated only by this
+         * branch unconditionally marking accessed at parse time.  Gate it
+         * by expr_context exactly like the CLASS_array branch above
+         * (true on every read/@-address path parser.c:517,555; false on
+         * the substring-lvalue write target) so a write-only string's
+         * accessed is False — byte-identical to Python.  Resolves R2
+         * (lvalsubstr_nolet / opt2_letsubstr_not_used / sys_letsubstr0);
+         * STRSLICE-node-local, mirrors the S5.6 array-gate precedent. */
         AstNode *n = ast_new(p->cs, AST_STRSLICE, lineno);
-        entry->u.id.accessed = true;
+        if (expr_context)
+            entry->u.id.accessed = true;
         ast_add_child(p->cs, n, entry);
         for (int i = 0; i < arglist->child_count; i++)
             ast_add_child(p->cs, n, arglist->children[i]);
