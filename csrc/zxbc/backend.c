@@ -373,6 +373,12 @@ static int s_log2(long x) { int n = 0; while (x > 1) { x >>= 1; n++; } return n;
 #define RL_LETSUBSTR ZXBC_NAMESPACE ".__LETSUBSTR"
 #define RL_STRSLICE  ZXBC_NAMESPACE ".__STRSLICE"
 
+/* S5.8d — DATA/READ/RESTORE RuntimeLabels
+ * (runtime/datarestore.py:12-13; NAMESPACE == .core). REQUIRED_MODULES
+ * (datarestore.py:16-19) maps both to "read_restore.asm". */
+#define RL_READ      ZXBC_NAMESPACE ".__READ"
+#define RL_RESTORE   ZXBC_NAMESPACE ".__RESTORE"
+
 /* runtime_call (common.py:156-161): REQUIRES.add(LABEL_REQUIRED_MODULES
  * [label]) if present; returns "call {label}". The label->module map is
  * runtime/core.py:160-225 (only the S5.3-reachable labels). */
@@ -480,6 +486,9 @@ static const char *s_required_module(const char *label) {
     if (strcmp(label, RL_STRLEN)     == 0) return "strlen.asm";
     if (strcmp(label, RL_LETSUBSTR)  == 0) return "letsubstr.asm";
     if (strcmp(label, RL_STRSLICE)   == 0) return "strslice.asm";
+    /* S5.8d — DATA/READ/RESTORE (datarestore.py:16-19). */
+    if (strcmp(label, RL_READ)       == 0) return "read_restore.asm";
+    if (strcmp(label, RL_RESTORE)    == 0) return "read_restore.asm";
     return NULL;
 }
 static char *s_runtime_call(Backend *b, const char *label) {

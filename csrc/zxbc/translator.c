@@ -12,6 +12,7 @@
 #include "translator.h"
 #include "visitor.h"
 #include "ic.h"
+#include "errmsg.h"  /* S5.8d — err_no_data_defined (visit_READ/RESTORE) */
 
 #include <stdio.h>
 #include <stdint.h>
@@ -29,6 +30,15 @@ static void tr_ic_pstore(Translator *tr, const TypeInfo *type_,
  * bound-table flush); translator_emit_strings calls it earlier. */
 static void tr_ic_vard(Translator *tr, const char *name,
                        char **data, int n);
+/* S5.8d — DATA helpers defined alongside emit_data_blocks (just before
+ * translator_emit_strings) but first called by tr_visit_read /
+ * tr_visit_restore higher up; tr_traverse_const is defined far below
+ * (its historical first caller was the scalar-default path). Forward-
+ * declare all three, same discipline as the S5.7d block above. */
+static void tr_ic_data(Translator *tr, const TypeInfo *type_,
+                       char **data, int n);
+static int tr_data_type_code(const TypeInfo *type_);
+static const char *tr_traverse_const(Translator *tr, AstNode *node);
 
 /* TranslatorInstVisitor.emit (translator_inst_visitor.py:21-25):
  *   quad = Quad(*args); self.backend.MEMORY.append(quad) */
@@ -1250,6 +1260,129 @@ static AstNode *tr_visit_continue_for(Visitor *v, AstNode *node) {
 }
 
 /* ====================================================================
+ *  S5.8d — visit_RESTORE / visit_READ                                  *
+ *  (src/arch/z80/visitor/translator.py:479-496 / :498-529)             *
+ *                                                                      *
+ *  RuntimeLabel.RESTORE == ".core.__RESTORE",                          *
+ *  RuntimeLabel.READ    == ".core.__READ"                              *
+ *  (runtime/datarestore.py:12-13; NAMESPACE == .core). gl.PTR_TYPE ==  *
+ *  uinteger (arch/z80/__init__.py:24). A declared label's .type_ is    *
+ *  basic_types[PTR_TYPE] == uinteger (symboltable.py:627), so the      *
+ *  RESTORE-with-label fparam type is uinteger too — same as the        *
+ *  no-label gl.PTR_TYPE branch.                                        *
+ * ==================================================================== */
+
+/* visit_RESTORE (translator.py:479-496). C RESTORE SENTENCE:
+ * child[0] = the label AST_ID (class_==CLASS_label) or NO children.
+ * node.args == sentence children. */
+static AstNode *tr_visit_restore(Visitor *v, AstNode *node) {
+    Translator *tr = v->ctx;
+    CompilerState *cs = tr->cs;
+
+    /* :480-481  if not gl.DATA_IS_USED: return  (RESTORE is inert when
+     * no READ exists — restore0/restore2 emit nothing). */
+    if (!cs->data_is_used)
+        return node;
+
+    AstNode *lblnode = node->child_count > 0 ? node->children[0] : NULL;
+    const char *lbl;
+    const TypeInfo *type_;
+
+    if (!lblnode) {
+        /* :483-489  no label: if not gl.DATAS -> error; return.
+         * else lbl = gl.DATAS[0].label.name; type_ = gl.PTR_TYPE. */
+        if (cs->datas.len == 0) {
+            err_no_data_defined(cs, node->lineno);
+            return node;
+        }
+        lbl = cs->datas.data[0]->label_name;
+        type_ = cs->symbol_table->basic_types[TYPE_uinteger]; /* PTR_TYPE */
+    } else {
+        /* :491-492  lbl = gl.DATA_LABELS[node.args[0].name];
+         *           type_ = node.args[0].type_
+         * A declared label's type_ is basic_types[PTR_TYPE]==uinteger
+         * (symboltable.py:627); the C label AST_ID does not carry the
+         * resolved entry type, so use uinteger directly — byte-identical
+         * to Python and faithful to the source value. */
+        const char *nm = lblnode->u.id.name ? lblnode->u.id.name : "";
+        const char *mapped = hashmap_get(&cs->data_labels, nm);
+        /* Python KeyErrors if the label was never make_label'd; the
+         * corpus never hits that (RESTORE targets are always declared
+         * labels — make_label ran). Fall back to the name itself only
+         * defensively. */
+        lbl = mapped ? mapped : nm;
+        type_ = cs->symbol_table->basic_types[TYPE_uinteger];
+    }
+
+    /* :494  gl.DATA_LABELS_REQUIRED.add(lbl) */
+    hashmap_set(&cs->data_labels_required, lbl, (void *)1);
+
+    /* :495  self.ic_fparam(type_, "#" + lbl) */
+    size_t ll = strlen(lbl);
+    char *hl = arena_alloc(&cs->arena, ll + 2);
+    hl[0] = '#';
+    memcpy(hl + 1, lbl, ll + 1);
+    tr_ic_fparam(tr, type_, hl);
+
+    /* :496  self.runtime_call(RuntimeLabel.RESTORE, 0) */
+    tr_runtime_call(tr, ".core.__RESTORE", 0);
+    return node;
+}
+
+/* visit_READ (translator.py:498-529). C READ SENTENCE: child[0] = the
+ * read target (AST_ID var, or AST_ARRAYACCESS). The parser already
+ * rejected array/non-var targets (parser.c BTOK_READ arm) so a target
+ * that reaches here is a scalar VAR or an ARRAYACCESS. */
+static AstNode *tr_visit_read(Visitor *v, AstNode *node) {
+    Translator *tr = v->ctx;
+    CompilerState *cs = tr->cs;
+
+    /* :499-501  if not gl.DATAS: error; return. (In practice main.c's
+     * data_is_used && datas.len==0 guard short-circuits codegen before
+     * this, but keep the faithful guard.) */
+    if (cs->datas.len == 0) {
+        err_no_data_defined(cs, node->lineno);
+        return node;
+    }
+
+    AstNode *tgt = node->child_count > 0 ? node->children[0] : NULL;
+    const TypeInfo *ubyte = cs->symbol_table->basic_types[TYPE_ubyte];
+
+    /* :503  ic_fparam(TYPE.ubyte,
+     *                  "#" + str(DATA_TYPES[TSUFFIX(args[0].type_)])) */
+    char codebuf[16];
+    snprintf(codebuf, sizeof(codebuf), "#%d",
+             tr_data_type_code(tgt ? tgt->type_ : NULL));
+    tr_ic_fparam(tr, ubyte, arena_strdup(&cs->arena, codebuf));
+
+    /* :504  runtime_call(RuntimeLabel.READ, args[0].type_.size) */
+    int sz = (tgt && tgt->type_) ? type_size(tgt->type_) : 0;
+    tr_runtime_call(tr, ".core.__READ", sz);
+
+    /* :506-529  store the read value. */
+    if (tgt && tgt->tag == AST_ARRAYACCESS) {
+        /* :506-527  array-element store. Python computes arr.offset /
+         * arr.scope then ic_astore/ic_pastore/ic_store/ic_pstore. The C
+         * AST_ARRAYACCESS scope/offset model and the ic_astore/ic_pastore
+         * byte backend are the array-IC sprint's domain — exactly the
+         * boundary tr_visit_letarray draws ("the dedicated array-store IC
+         * is out of scope; the existing array sprints own ARRAYACCESS").
+         * Python's first action when arr.offset is None is `yield arr`
+         * (visit the access so the index codegen runs); reproduce that
+         * generic descent. The READ runtime call above IS emitted (READ
+         * semantics are not stubbed); only the element store-back is
+         * deferred to the array sprint. The lone corpus fixture that
+         * reaches here (read4) is Phase-7-runtime-#include-gated → no
+         * meter movement either way. */
+        visitor_generic(v, tgt);
+    } else if (tgt) {
+        /* :529  emit_var_assign(node.args[0], t=optemps.new_t()) */
+        tr_emit_var_assign(tr, tgt, compiler_new_temp(cs));
+    }
+    return node;
+}
+
+/* ====================================================================
  * String / array-element assignment + string-slice visitors —
  * faithful ports of src/arch/z80/visitor/translator.py:
  *   visit_LETARRAY        :329-364
@@ -1528,6 +1661,170 @@ static AstNode *tr_visit_on_gosub(Visitor *v, AstNode *node) {
     return tr_visit_on_jump(v, node, true);
 }
 
+/* ic_data (translator_inst_visitor.py:94-95):
+ *   self.emit("data", self.TSUFFIX(type_), data)
+ * data is a Python list -> Quad str()-coerces to the single-quoted list
+ * repr; tr_py_list_repr builds the byte-identical repr. The backend
+ * _data (backend.c:2899-2951, Q3 — complete & faithful) consumes
+ * args[0]=tsuffix, args[1]=list-repr. */
+static void tr_ic_data(Translator *tr, const TypeInfo *type_,
+                       char **data, int n) {
+    const char *args[2] = { tr_tsuffix(type_),
+                            tr_py_list_repr(tr, data, n) };
+    tr_emit_quad(tr, "data", 2, args);
+}
+
+/* DATA_TYPES (translator_visitor.py:56):
+ *   {"str":1,"i8":2,"u8":3,"i16":4,"u16":5,"i32":6,"u32":7,"f16":8,"f":9}
+ * Keyed by TSUFFIX(type_). */
+static int tr_data_type_code(const TypeInfo *type_) {
+    const char *s = tr_tsuffix(type_);
+    if (strcmp(s, "str") == 0) return 1;
+    if (strcmp(s, "i8")  == 0) return 2;
+    if (strcmp(s, "u8")  == 0) return 3;
+    if (strcmp(s, "i16") == 0) return 4;
+    if (strcmp(s, "u16") == 0) return 5;
+    if (strcmp(s, "i32") == 0) return 6;
+    if (strcmp(s, "u32") == 0) return 7;
+    if (strcmp(s, "f16") == 0) return 8;
+    if (strcmp(s, "f")   == 0) return 9;
+    /* Python would KeyError — a DATA item of an unmappable type is a
+     * real bug; surface it rather than emit a wrong byte. */
+    fprintf(stderr, "zxbc: DATA_TYPES has no entry for '%s'\n", s);
+    return 0;
+}
+
+/* emit_data_blocks (translator_visitor.py:125-153). MUST run before
+ * emit_strings (the :141 add_string_label registers a CONST-string-DATA
+ * label into STRING_LABELS that the subsequent emit_strings drain emits;
+ * for the corpus FUNCPTR-thunk path the thunk body's visit_STRING does
+ * the registering during FunctionTranslator.start). The byte emitters
+ * (_data/_vard/_label) are S5.6/Q3-shipped & dispatch-wired. */
+void translator_emit_data_blocks(Translator *tr) {
+    CompilerState *cs = tr->cs;
+    /* :127-128  if not gl.DATA_IS_USED or not gl.DATAS: return */
+    if (!cs->data_is_used || cs->datas.len == 0)
+        return;
+
+    const TypeInfo *t_byte = cs->symbol_table->basic_types[TYPE_byte];
+    const TypeInfo *t_ptr  = cs->symbol_table->basic_types[TYPE_uinteger];
+    const TypeInfo *t_uint = cs->symbol_table->basic_types[TYPE_uinteger];
+    const TypeInfo *t_str  = cs->symbol_table->basic_types[TYPE_string];
+    const TypeInfo *t_fix  = cs->symbol_table->basic_types[TYPE_fixed];
+
+    /* :130  for label_, datas in gl.DATAS: */
+    for (int di = 0; di < cs->datas.len; di++) {
+        DataRef *dr = cs->datas.data[di];
+        /* :131  self.ic_label(label_) */
+        tr_ic_label(tr, dr->label_name);
+
+        for (int ii = 0; ii < dr->item_count; ii++) {
+            DataItem *it = &dr->items[ii];
+
+            /* :133-137  isinstance(d, symbols.FUNCDECL): the non-static
+             * thunk. type byte = DATA_TYPES[TSUFFIX(d.type_)] | 0x80
+             * formatted "%02Xh"; then a PTR_TYPE (u16) ptr to d.mangled
+             * (the thunk's mangled, e.g. "___DATA__FUNCPTR__0"). */
+            if (it->is_funcdecl) {
+                AstNode *decl = it->node;
+                AstNode *fent = decl->child_count > 0
+                                    ? decl->children[0] : NULL;
+                char hb[8];
+                snprintf(hb, sizeof(hb), "%02Xh",
+                         (tr_data_type_code(decl->type_) | 0x80) & 0xFF);
+                char *one[1]; one[0] = arena_strdup(&cs->arena, hb);
+                tr_ic_data(tr, t_byte, one, 1);
+
+                const char *mg = (fent && fent->u.id.mangled)
+                                     ? fent->u.id.mangled : "";
+                char *m1[1]; m1[0] = arena_strdup(&cs->arena, mg);
+                tr_ic_data(tr, t_ptr, m1, 1);
+                continue;
+            }
+
+            /* :139  ic_data(TYPE.byte, [DATA_TYPES[TSUFFIX(d.value.type_)]]) */
+            AstNode *val = it->node;
+            char cb[8];
+            snprintf(cb, sizeof(cb), "%d", tr_data_type_code(val->type_));
+            char *tb[1]; tb[0] = arena_strdup(&cs->arena, cb);
+            tr_ic_data(tr, t_byte, tb, 1);
+
+            const TypeInfo *vf = val->type_ && val->type_->final_type
+                                     ? val->type_->final_type : val->type_;
+            BasicType vbt = vf ? vf->basic_type : TYPE_unknown;
+
+            if (vbt == TYPE_string) {
+                /* :140-142  lbl = add_string_label(d.value.value);
+                 *           ic_data(gl.PTR_TYPE, [lbl])
+                 * (CONST-string-in-DATA only — bare literals are never
+                 * static so route via the FUNCPTR thunk; corpus-dead but
+                 * faithful.) */
+                const char *sv = (val->tag == AST_STRING
+                                  && val->u.string.value)
+                                     ? val->u.string.value : "";
+                int sl = (val->tag == AST_STRING)
+                             ? val->u.string.length : (int)strlen(sv);
+                char *lbl = backend_add_string_label(tr->backend, sv, sl);
+                char *l1[1]; l1[0] = lbl;
+                tr_ic_data(tr, t_ptr, l1, 1);
+            } else if (vbt == TYPE_fixed) {
+                /* :143-145  bytes_ = 0xFFFFFFFF & int(value*2**16);
+                 *  ic_data(TYPE.uinteger,
+                 *          ["0x%04X"%(b&0xFFFF), "0x%04X"%(b>>16)]) */
+                double dv = (val->tag == AST_NUMBER)
+                                ? val->u.number.value : 0.0;
+                unsigned long bytes_ =
+                    0xFFFFFFFFUL & (unsigned long)(long)(dv * 65536.0);
+                char lo[10], hi[10];
+                snprintf(lo, sizeof(lo), "0x%04lX", bytes_ & 0xFFFF);
+                snprintf(hi, sizeof(hi), "0x%04lX",
+                         (bytes_ >> 16) & 0xFFFF);
+                char *fw[2];
+                fw[0] = arena_strdup(&cs->arena, lo);
+                fw[1] = arena_strdup(&cs->arena, hi);
+                tr_ic_data(tr, t_uint, fw, 2);
+            } else {
+                /* :146-147  ic_data(d.value.type_,
+                 *                   [self.traverse_const(d.value)]) */
+                char *cv[1];
+                cv[0] = (char *)tr_traverse_const(tr, val);
+                tr_ic_data(tr, val->type_, cv, 1);
+            }
+            (void)t_str; (void)t_fix;
+        }
+    }
+
+    /* :149-151  missing_data_labels = set(DATA_LABELS_REQUIRED)
+     *   .difference([x.label.name for x in gl.DATAS]);
+     *   for data_label in missing_data_labels: ic_label(data_label)
+     * (a label a RESTORE asked for beyond the last DATA line). Python's
+     * `set` iteration order is hash-based; the corpus only ever has
+     * 0/1 such label so the order is not byte-observable, but iterate
+     * the HashMap's slot order (a stable per-process order) for
+     * determinism. */
+    {
+        HashMap *req = &cs->data_labels_required;
+        for (int hi2 = 0; hi2 < req->capacity; hi2++) {
+            HashEntry *e = &req->entries[hi2];
+            if (!e->occupied || !e->key) continue;
+            bool present = false;
+            for (int di = 0; di < cs->datas.len; di++) {
+                if (strcmp(cs->datas.data[di]->label_name, e->key) == 0) {
+                    present = true; break;
+                }
+            }
+            if (!present)
+                tr_ic_label(tr, e->key);
+        }
+    }
+
+    /* :153  self.ic_vard("__DATA__END", ["00"]) */
+    {
+        char *z[1]; z[0] = (char *)"00";
+        tr_ic_vard(tr, "__DATA__END", z, 1);
+    }
+}
+
 /* emit_strings (translator_visitor.py:155-158):
  *   for str_, label_ in string_labels.STRING_LABELS.items():
  *     l = "%04X" % (len(str_) & 0xFFFF)
@@ -1732,6 +2029,11 @@ static void tr_register_handlers(Visitor *v) {
     visitor_on_sentence(v, "CONTINUE_DO", tr_visit_continue_do);
     visitor_on_sentence(v, "CONTINUE_WHILE", tr_visit_continue_while);
     visitor_on_sentence(v, "CONTINUE_FOR", tr_visit_continue_for);
+    /* S5.8d — DATA/READ/RESTORE. "DATA" itself has NO translator handler
+     * (Python has no visit_DATA — DATA is consumed entirely at parse +
+     * emit_data_blocks). READ/RESTORE are active sentence handlers. */
+    visitor_on_sentence(v, "READ", tr_visit_read);
+    visitor_on_sentence(v, "RESTORE", tr_visit_restore);
 }
 
 void translator_visit(Translator *tr, AstNode *ast) {
@@ -2041,6 +2343,20 @@ static void tr_visit_function(Translator *tr, AstNode *fdecl) {
 }
 
 void translator_function_start(Translator *tr) {
+    /* zxbc.py:128-129  if gl.DATA_IS_USED:
+     *                      gl.FUNCTIONS.extend(gl.DATA_FUNCTIONS)
+     * Runs AFTER translator.visit (codegen.c) and immediately BEFORE the
+     * FunctionTranslator drain, so the __DATA__FUNCPTR__N thunk FUNCDECLs
+     * are queued exactly like ordinary pending top-level functions and
+     * emitted by the same drain (the S5.7 FunctionTranslator needs no
+     * change — a fastcall FUNCDECL whose body is
+     * make_block(make_sentence("RETURN", func, value)) lowers to the
+     * thunk via tr_visit_function + tr_visit_return). */
+    if (tr->cs->data_is_used) {
+        for (int i = 0; i < tr->cs->data_functions.len; i++)
+            tr_pending_push(tr, tr->cs->data_functions.data[i]);
+    }
+
     /* FunctionTranslator.start() (function_translator.py:43-47):
      *   while self.functions: f = self.functions.pop(0); self.visit(f)
      * FIFO drain. visit_FUNCTION is a Python generator whose body walk

@@ -1043,6 +1043,27 @@ AstNode *symboltable_access_array(SymbolTable *st, CompilerState *cs,
     return result;
 }
 
+/* current_data_label (src/api/utils.py:110-114):
+ *   f"{global_.DATAS_NAMESPACE}.__DATA__{len(global_.DATAS)}"
+ * DATAS_NAMESPACE == ".DATA" (global_.py:134). */
+char *current_data_label(CompilerState *cs) {
+    char buf[48];
+    snprintf(buf, sizeof(buf), ".DATA.__DATA__%d", (int)cs->datas.len);
+    return arena_strdup(&cs->arena, buf);
+}
+
+/* make_label's DATA_LABELS side-effect (src/zxbc/zxbparser.py:452-458):
+ * "gl.DATA_LABELS[id_] = gl.DATA_PTR_CURRENT — this label points to the
+ * current DATA block index." Python's make_label is called from p_label,
+ * the bare-ID label-ref path, and p_data. The C parser already owns the
+ * declare_label/access bookkeeping at each of those sites, so the
+ * faithful port adds ONLY the DATA_LABELS write inline at each (the
+ * entry is already in hand there — no extra declare). No standalone
+ * make_label helper is introduced (it would re-run access_label and
+ * double-touch the entry); see parser.c BTOK_DATA + the two
+ * label-declaration paths. current_data_label() below is the
+ * gl.DATA_PTR_CURRENT producer they read. */
+
 AstNode *symboltable_access_label(SymbolTable *st, CompilerState *cs,
                                    const char *name, int lineno) {
     AstNode *result = symboltable_lookup(st, name);
@@ -1230,6 +1251,7 @@ void compiler_init(CompilerState *cs) {
     vec_init(cs->functions);
     vec_init(cs->loop_stack);
     vec_init(cs->datas);
+    vec_init(cs->data_functions);
     vec_init(cs->inits);
     vec_init(cs->sym_entries_ordered);   /* N1 */
 
@@ -1241,6 +1263,9 @@ void compiler_init(CompilerState *cs) {
     cs->print_is_used = false;
     cs->last_brk_linenum = 0;
     cs->data_is_used = false;
+    /* gl.DATA_PTR_CURRENT reset (zxbparser.py:149): current_data_label()
+     * with len(gl.DATAS)==0 -> ".DATA.__DATA__0". */
+    cs->data_ptr_current = current_data_label(cs);
     cs->temp_counter = 0;
 }
 
@@ -1255,6 +1280,7 @@ void compiler_destroy(CompilerState *cs) {
     vec_free(cs->functions);
     vec_free(cs->loop_stack);
     vec_free(cs->datas);
+    vec_free(cs->data_functions);
     vec_free(cs->inits);
     vec_free(cs->sym_entries_ordered);   /* N1 */
 

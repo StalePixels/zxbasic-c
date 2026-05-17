@@ -266,21 +266,32 @@ int codegen_emit(CompilerState *cs, AstNode *ast) {
     Translator tr; tr.cs = cs; tr.backend = &b;
     translator_visit(&tr, ast);
 
-    /* 7  FunctionTranslator(...).start()  (zxbc.py:132-133)
+    /* 7  zxbc.py:128-133  if gl.DATA_IS_USED:
+     *          gl.FUNCTIONS.extend(gl.DATA_FUNCTIONS)
+     *      FunctionTranslator(...).start()
      * S5.7a core: FIFO-drain the pending-function queue filled by the
      * deferred Translator.visit_FUNCDECL during step 6, emitting each
      * function's label/ic_enter/body/__leave/ic_leave. Mirrors Python's
      * order exactly (Translator.visit then FunctionTranslator.start).
-     * gl.DATA_IS_USED -> gl.FUNCTIONS.extend(gl.DATA_FUNCTIONS)
-     * (zxbc.py:128-129) is the DATA-funcptr path: out of the S5.7a core
-     * slice (no DATA in scope). No-op when no functions were declared. */
+     * S5.8d: the gl.FUNCTIONS.extend(gl.DATA_FUNCTIONS) merge
+     * (zxbc.py:128-129) is now LIVE — performed at the top of
+     * translator_function_start (the faithful "extend then start"
+     * site), so the __DATA__FUNCPTR__N thunks drain like ordinary
+     * pending functions. No-op when no functions/DATA-funcptrs exist. */
     translator_function_start(&tr);
 
-    /* 8  translator.emit_data_blocks() (zxbc.py:144): S5.8d-deferred —
-     * not ported here (no DATA blocks in S5.8bc scope). */
+    /* 8  translator.emit_data_blocks() (zxbc.py:144). S5.8d: LIVE.
+     * Emits the .DATA.__DATA__N blocks (type byte + value/funcptr ptr),
+     * the missing-RESTORE-label bare labels, and the __DATA__END
+     * sentinel. MUST run BEFORE translator_emit_strings (zxbc.py:144
+     * before :146) — a CONST-string DATA item calls add_string_label
+     * here, which the emit_strings drain then emits. No-op unless
+     * gl.DATA_IS_USED and gl.DATAS is non-empty. */
+    translator_emit_data_blocks(&tr);
 
     /* 8  translator.emit_strings() (zxbc.py:146): drains the STRING_LABELS
-     * dedup store (populated by visit_STRING during steps 6/7) into ic_vard
+     * dedup store (populated by visit_STRING during steps 6/7 and by
+     * emit_data_blocks' CONST-string-DATA add_string_label) into ic_vard
      * quads, in insertion order. Same site Python calls it: after
      * emit_data_blocks, before emit_jump_tables. No-op when no constant
      * string was visited. */

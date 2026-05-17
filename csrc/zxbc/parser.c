@@ -986,6 +986,15 @@ static AstNode *parse_statement(Parser *p) {
             }
             label_node->u.id.declared = true;
         }
+        /* S5.8d — make_label's DATA_LABELS write (zxbparser.py:457):
+         * EVERY declared label records data_labels[id]=data_ptr_current
+         * ("This label points to the current DATA block index"); how
+         * RESTORE label resolves (visit_RESTORE:491). Strictly additive
+         * to the existing p_label path; no AST/parse-surface effect. */
+        if (label_node)
+            hashmap_set(&p->cs->data_labels, label_text,
+                        p->cs->data_ptr_current ? p->cs->data_ptr_current
+                                                : "");
 
         /* If followed by ':', consume it */
         match(p, BTOK_CO);
@@ -1457,20 +1466,141 @@ static AstNode *parse_statement(Parser *p) {
         return make_sentence_node(p, loop_kw, ln);
     }
 
-    /* DATA */
+    /* DATA — faithful p_data (src/zxbc/zxbparser.py:1732-1772).
+     *
+     * Python's p_data NEVER sets p[0] on the success or error paths
+     * (PLY defaults unassigned p[0] to None), so a DATA statement
+     * contributes NO node to the program AST — its entire effect is the
+     * gl.DATAS / gl.DATA_FUNCTIONS / gl.DATA_LABELS / gl.DATA_PTR_CURRENT
+     * side-effects. The C port returns NULL so parser_parse's
+     * `if (stmt && stmt->tag != AST_NOP)` drops it identically (Python
+     * ast-dump for a DATA program carries no DATA node — verified). The
+     * bare "DATA" sentence is still BUILT (its children are the parsed
+     * value exprs) so the static/funcptr split below reads d.value the
+     * same way Python reads ARGUMENT.value; the sentence itself is
+     * discarded, exactly like Python's p[2].children consumption. */
     if (match(p, BTOK_DATA)) {
         int ln = p->previous.lineno;
-        /* DATA not allowed inside functions/subs (matching Python) */
-        if (p->cs->function_level.len > 0) {
-            zxbc_error(p->cs, ln, "DATA not allowed within Functions nor Subs");
-        }
+
+        /* :1734  label_ = make_label(gl.DATA_PTR_CURRENT, lineno).
+         * Declares the per-DATA label (id == the current data-ptr
+         * string) AND records data_labels[id]=data_ptr_current. */
+        char *label_name =
+            p->cs->data_ptr_current ? p->cs->data_ptr_current
+                                    : current_data_label(p->cs);
+        AstNode *label_entry =
+            symboltable_access_label(p->cs->symbol_table, p->cs,
+                                     label_name, ln);
+        if (label_entry)
+            hashmap_set(&p->cs->data_labels, label_name,
+                        p->cs->data_ptr_current ? p->cs->data_ptr_current
+                                                : "");
+
         AstNode *s = make_sentence_node(p, "DATA", ln);
         do {
             AstNode *expr = parse_expression(p, PREC_NONE + 1);
             if (expr) ast_add_child(p->cs, s, expr);
         } while (match(p, BTOK_COMMA));
-        vec_push(p->cs->datas, s);
-        return s;
+
+        /* :1738-1740  if p[2] is None: p[0]=None; return  (no items). */
+        if (s->child_count == 0)
+            return NULL;
+
+        /* :1742-1745  if gl.FUNCTION_LEVEL: error; p[0]=None; return.
+         * (The error itself matches Python p_data:1743; the C parser
+         * already emitted it pre-S5.8d — keep that behaviour but follow
+         * Python's early return: no DATAS append inside a function.) */
+        if (p->cs->function_level.len > 0) {
+            zxbc_error(p->cs, ln,
+                       "DATA not allowed within Functions nor Subs");
+            return NULL;
+        }
+
+        /* :1747-1768  per-child static/FUNCPTR split. */
+        DataItem *items = arena_alloc(&p->cs->arena,
+            (size_t)s->child_count * sizeof(DataItem));
+        int nitems = 0;
+        for (int ci = 0; ci < s->child_count; ci++) {
+            AstNode *value = s->children[ci];
+
+            /* :1749-1751  is_static(value) -> keep as a data item. */
+            if (check_is_static(value)) {
+                items[nitems].is_funcdecl = false;
+                items[nitems].node = value;
+                nitems++;
+                continue;
+            }
+
+            /* :1753  new_lbl = f"__DATA__FUNCPTR__{len(DATA_FUNCTIONS)}" */
+            char fnbuf[40];
+            snprintf(fnbuf, sizeof(fnbuf), "__DATA__FUNCPTR__%d",
+                     (int)p->cs->data_functions.len);
+
+            /* :1754-1756  make_func_declaration(new_lbl, lineno,
+             *   type_=value.type_, class_=CLASS.function).
+             * declare_func on a fresh unique name -> a new FUNCTION
+             * entry; symboltable_declare is the faithful generic creator
+             * (mangled = "_"+name == "___DATA__FUNCPTR__N", scope global
+             * since DATA is top-level only). */
+            AstNode *func =
+                symboltable_declare(p->cs->symbol_table, p->cs,
+                                    fnbuf, ln, CLASS_function);
+            if (!func)
+                continue;
+            func->u.id.declared = true;          /* FUNCDECL.make_node */
+            func->type_ = value->type_;          /* entry.type_ = value.type_ */
+
+            /* :1759  func.ref.convention = CONVENTION.fastcall */
+            func->u.id.convention = CONV_fastcall;
+            /* :1760-1762  empty local scope -> locals_size 0, no locals. */
+            func->u.id.local_size = 0;
+            func->u.id.param_size = 0;
+            func->u.id.local_entries = NULL;
+            func->u.id.local_entries_count = 0;
+
+            /* :1765-1766  sent = make_sentence("RETURN", func, value);
+             *             func.ref.body = make_block(sent)
+             * tr_visit_return's len==2 path reads child[0]=func ref
+             * (.mangled -> "<mangled>__leave") and child[1]=value. */
+            AstNode *ret = make_sentence_node(p, "RETURN", ln);
+            ast_add_child(p->cs, ret, func);
+            ast_add_child(p->cs, ret, value);
+            AstNode *body = make_block_node(p, ln);
+            ast_add_child(p->cs, body, ret);
+
+            /* The FUNCDECL carrier the C FunctionTranslator drains
+             * (child[0]=ID, child[1]=PARAMLIST, child[2]=body), exactly
+             * the shape parse_sub_or_func_decl produces. */
+            AstNode *decl = ast_new(p->cs, AST_FUNCDECL, ln);
+            AstNode *params = ast_new(p->cs, AST_PARAMLIST, ln);
+            ast_add_child(p->cs, decl, func);
+            ast_add_child(p->cs, decl, params);
+            ast_add_child(p->cs, decl, body);
+            decl->type_ = value->type_;
+            func->u.id.body = body;
+
+            /* :1764  gl.DATA_FUNCTIONS.append(func) — the carrier the
+             * codegen merge feeds to FunctionTranslator. */
+            vec_push(p->cs->data_functions, decl);
+
+            /* :1767  datas_.append(entry) — the FUNCDECL is the item. */
+            items[nitems].is_funcdecl = true;
+            items[nitems].node = decl;
+            nitems++;
+        }
+
+        /* :1770  gl.DATAS.append(DataRef(label_, datas_)). */
+        DataRef *dr = arena_alloc(&p->cs->arena, sizeof(DataRef));
+        dr->label_name = label_name;
+        dr->label_entry = label_entry;
+        dr->items = items;
+        dr->item_count = nitems;
+        vec_push(p->cs->datas, dr);
+
+        /* :1771-1772  gl.DATA_PTR_CURRENT = current_data_label(). */
+        p->cs->data_ptr_current = current_data_label(p->cs);
+
+        return NULL;
     }
 
     /* READ */
@@ -1739,6 +1869,12 @@ static AstNode *parse_statement(Parser *p) {
                 lid->u.id.name = arena_strdup(&p->cs->arena, name);
                 lid->u.id.class_ = CLASS_label;
                 ast_add_child(p->cs, ls, lid);
+                /* S5.8d — make_label's DATA_LABELS write
+                 * (zxbparser.py:457, the :1077 make_label caller).
+                 * Strictly additive; no parse-surface effect. */
+                hashmap_set(&p->cs->data_labels, name,
+                            p->cs->data_ptr_current
+                                ? p->cs->data_ptr_current : "");
                 return ls;
             }
         }

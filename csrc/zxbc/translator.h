@@ -100,11 +100,20 @@ void translator_visit(Translator *tr, AstNode *ast);
 /* zxbc.py:150  translator.ic_inline(";; --- end of user code ---"). */
 void translator_ic_inline(Translator *tr, const char *asm_code);
 
+/* emit_data_blocks (translator_visitor.py:125-153; zxbc.py:144): emits
+ * the .DATA.__DATA__N label + per-item type byte + value/funcptr ptr +
+ * the missing-RESTORE-label bare labels + the __DATA__END sentinel.
+ * Faithful; reuses the S5.6/Q3 _data/_vard/_label byte backend. MUST
+ * run BEFORE translator_emit_strings (the :141 add_string_label
+ * registers a CONST-string-DATA label that emit_strings then drains).
+ * No-op when not gl.DATA_IS_USED or no gl.DATAS. */
+void translator_emit_data_blocks(Translator *tr);
+
 /* emit_strings (translator_visitor.py:155-158; zxbc.py:146): drains the
  * STRING_LABELS dedup store into ic_vard quads (insertion order). Runs
  * after translator_visit + FunctionTranslator.start (visit_STRING during
  * those is what populates the store), at the same site Python calls it:
- * after emit_data_blocks (S5.8d-deferred), before emit_jump_tables.
+ * after emit_data_blocks, before emit_jump_tables.
  * No-op when no constant string was visited. */
 void translator_emit_strings(Translator *tr);
 

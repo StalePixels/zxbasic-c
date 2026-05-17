@@ -278,6 +278,32 @@ struct AstNode {
 };
 
 /* ----------------------------------------------------------------
+ * S5.8d — DataRef (src/api/dataref.py:14-24).
+ *
+ * Python's gl.DATAS is a list[DataRef(label, datas)] — NOT a list of
+ * raw DATA sentence nodes. Each DataRef pairs the per-DATA-line label
+ * SYMBOL (the make_label entry, id == gl.DATA_PTR_CURRENT at that
+ * point) with the ordered list of that line's items. Each item is
+ * EITHER a static value expr (kept verbatim — emit_data_blocks reads
+ * d.value.type_ etc.) OR a synthesised __DATA__FUNCPTR__N FUNCDECL
+ * node (the non-static thunk). `is_funcdecl` discriminates; the
+ * faithful analogue of emit_data_blocks:133 `isinstance(d,
+ * symbols.FUNCDECL)`. `label_name` is DataRef.label.name (the
+ * .DATA.__DATA__N string) used both by ic_label and by the
+ * emit_data_blocks:149 `[x.label.name for x in gl.DATAS]` set. */
+typedef struct DataItem {
+    bool is_funcdecl;     /* non-static -> synthesised FUNCPTR FUNCDECL */
+    AstNode *node;        /* static: the value expr;  funcptr: the FUNCDECL */
+} DataItem;
+
+typedef struct DataRef {
+    char *label_name;          /* DataRef.label.name (".DATA.__DATA__N") */
+    AstNode *label_entry;      /* the make_label symbol-table entry */
+    DataItem *items;           /* arena-allocated, ordered */
+    int item_count;
+} DataRef;
+
+/* ----------------------------------------------------------------
  * AST node operations
  * ---------------------------------------------------------------- */
 
@@ -468,10 +494,27 @@ struct CompilerState {
     /* Labels */
     HashMap labels;          /* user-defined labels */
 
-    /* DATA statement tracking */
-    VEC(AstNode *) datas;
+    /* DATA statement tracking — the Python gl.DATA* model
+     * (src/api/global_.py:183-188). S5.8d makes these LIVE:
+     *  - datas              = gl.DATAS (list[DataRef], one per DATA line)
+     *  - data_labels        = gl.DATA_LABELS (declared-label -> the data
+     *                         ptr current when that label was declared;
+     *                         a str->str map; make_label:457)
+     *  - data_labels_required = gl.DATA_LABELS_REQUIRED (the set of
+     *                         labels a RESTORE asked for; visit_RESTORE
+     *                         :494; emit_data_blocks:149)
+     *  - data_functions     = gl.DATA_FUNCTIONS (the synthesised
+     *                         __DATA__FUNCPTR__N FUNCDECL nodes,
+     *                         p_data:1764; merged into the pending-fn
+     *                         queue by codegen before FunctionTranslator)
+     *  - data_ptr_current   = gl.DATA_PTR_CURRENT (the current
+     *                         current_data_label() string; reset value
+     *                         is ".DATA.__DATA__0", advanced per DATA) */
+    VEC(DataRef *) datas;
     HashMap data_labels;
     HashMap data_labels_required;
+    VEC(AstNode *) data_functions;
+    char *data_ptr_current;
     bool data_is_used;
 
     /* Init routines */
@@ -490,6 +533,16 @@ void compiler_destroy(CompilerState *cs);
 
 /* Generate a new temporary variable name */
 char *compiler_new_temp(CompilerState *cs);
+
+/* S5.8d — current_data_label() (src/api/utils.py:110-114):
+ *   f"{global_.DATAS_NAMESPACE}.__DATA__{len(global_.DATAS)}"
+ * DATAS_NAMESPACE == ".DATA" (global_.py:134). Arena-owned result;
+ * the index is cs->datas.len AT THE TIME OF THE CALL. */
+char *current_data_label(CompilerState *cs);
+
+/* (make_label's DATA_LABELS write is applied inline at its three
+ * parser sites — see compiler.c near symboltable_access_label and the
+ * parser.c BTOK_DATA / label-declaration paths. No standalone helper.) */
 
 /* Post-parse validation (from p_start in zxbparser.py, check.py) */
 bool check_pending_labels(CompilerState *cs, AstNode *ast);
