@@ -343,6 +343,20 @@ static int s_log2(long x) { int n = 0; while (x > 1) { x >>= 1; n++; } return n;
 #define RL_ERROR       ZXBC_NAMESPACE ".__ERROR"
 #define RL_CHECK_BREAK ZXBC_NAMESPACE ".CHECK_BREAK"
 
+/* S5.7c — local-array alloc / free RuntimeLabels (runtime/core.py:17-20,
+ * 26,74; NAMESPACE == .core). Consumed by _larrd (alloc) and the
+ * FunctionTranslator stdcall epilogue (MEM_FREE / ARRAYSTR_FREE_MEM). */
+#define RL_ALLOC_LOCAL_ARRAY \
+    ZXBC_NAMESPACE ".__ALLOC_LOCAL_ARRAY"
+#define RL_ALLOC_LOCAL_ARRAY_WITH_BOUNDS \
+    ZXBC_NAMESPACE ".__ALLOC_LOCAL_ARRAY_WITH_BOUNDS"
+#define RL_ALLOC_INITIALIZED_LOCAL_ARRAY \
+    ZXBC_NAMESPACE ".__ALLOC_INITIALIZED_LOCAL_ARRAY"
+#define RL_ALLOC_INITIALIZED_LOCAL_ARRAY_WITH_BOUNDS \
+    ZXBC_NAMESPACE ".__ALLOC_INITIALIZED_LOCAL_ARRAY_WITH_BOUNDS"
+#define RL_MEM_FREE          ZXBC_NAMESPACE ".__MEM_FREE"
+#define RL_ARRAYSTR_FREE_MEM ZXBC_NAMESPACE ".__ARRAYSTR_FREE_MEM"
+
 /* runtime_call (common.py:156-161): REQUIRES.add(LABEL_REQUIRED_MODULES
  * [label]) if present; returns "call {label}". The label->module map is
  * runtime/core.py:160-225 (only the S5.3-reachable labels). */
@@ -426,6 +440,15 @@ static const char *s_required_module(const char *label) {
     if (strcmp(label, RL_LTI16)      == 0) return "cmp/lti16.asm";
     if (strcmp(label, RL_LEI16)      == 0) return "cmp/lei16.asm";
     if (strcmp(label, RL_EQ16)       == 0) return "cmp/eq16.asm";
+    /* S5.7c — local-array alloc/free modules (runtime/core.py:146-149,
+     * 155,203 LABEL_REQUIRED_MODULES; live-verified). */
+    if (strcmp(label, RL_ALLOC_LOCAL_ARRAY) == 0 ||
+        strcmp(label, RL_ALLOC_LOCAL_ARRAY_WITH_BOUNDS) == 0 ||
+        strcmp(label, RL_ALLOC_INITIALIZED_LOCAL_ARRAY) == 0 ||
+        strcmp(label, RL_ALLOC_INITIALIZED_LOCAL_ARRAY_WITH_BOUNDS) == 0)
+        return "array/arrayalloc.asm";
+    if (strcmp(label, RL_ARRAYSTR_FREE_MEM) == 0) return "array/arraystrfree.asm";
+    if (strcmp(label, RL_MEM_FREE)   == 0) return "mem/free.asm";
     return NULL;
 }
 static char *s_runtime_call(Backend *b, const char *label) {
@@ -2975,6 +2998,151 @@ static int s_yy_size(const char *t) {
     return 0;
 }
 
+/* get_bytes_size (common.py:296-... == len(get_bytes(elements))). Per
+ * element: "##x" -> 2 bytes; "#x" -> 1 byte; a hex token -> 1 byte if
+ * len<=2 else 2 bytes (common.py:get_bytes: appends low byte always, a
+ * second byte iff len(x) > 2). Faithful byte-count, no expansion. */
+static int s_get_bytes_size(char **items, int n) {
+    int total = 0;
+    for (int i = 0; i < n; i++) {
+        const char *x = items[i];
+        if (x[0] == '#' && x[1] == '#')      total += 2;
+        else if (x[0] == '#')                total += 1;
+        else                                 total += (strlen(x) > 2) ? 2 : 1;
+    }
+    return total;
+}
+
+/* AT_END.extend(_vard(Quad(VARD, label, listrepr))) — runs emit_vard on
+ * a synthetic VARD quad and appends every produced line to common.AT_END
+ * (b->at_end), exactly the Python deferral (generic.py:223/245/272 +
+ * main.py:684-690 emit_epilogue flush; the C flush is
+ * backend_emit_epilogue:3595). */
+static void s_at_end_vard(Backend *b, const char *label,
+                          const char *list_repr) {
+    const char *vargs[2] = { label, list_repr };
+    Quad *vq = quad_new(b->arena, "vard", 2, vargs);
+    StrVec vd = emit_vard(b, vq);
+    for (int i = 0; i < vd.len; i++) vec_push(b->at_end, vd.data[i]);
+    vec_free(vd);
+}
+
+/* ---- _lvarx (generic.py:211-233) ------------------------------------- *
+ * Defines a local variable (CONSTEXPR default). ins[1]=offset,
+ * ins[2]=TSUFFIX, ins[3]=list-repr of value bytes. The backing varx
+ * table is deferred to AT_END under a fresh tmp_label; the body code
+ * ldir-copies len(l)*YY_TYPES[suffix] bytes from that label to
+ * (ix - offset). IDX_REG == "ix" (common.py:121). */
+static StrVec emit_lvarx(Backend *b, Quad *q) {
+    StrVec out = sv_new();
+    char *items[256];
+    int n = eval_str_list(b, q_ins(q, 3), items, 256);  /* l = eval(ins[3]) */
+    char *label = s_tmp_label(b);
+    long offset = s_int_val(q_ins(q, 1));
+    const char *suffix = q_ins(q, 2);
+
+    /* AT_END.extend(_varx(ins-with-ins[1]:=label)) */
+    const char *xargs[3] = { label, suffix, q_ins(q, 4) };
+    Quad *xq = quad_new(b->arena, "varx", 3, xargs);
+    StrVec xd = emit_varx(b, xq);
+    for (int i = 0; i < xd.len; i++) vec_push(b->at_end, xd.data[i]);
+    vec_free(xd);
+
+    sv_push(b, &out, "push ix");
+    sv_push(b, &out, "pop hl");
+    sv_pushf(b, &out, "ld bc, %ld", -offset);
+    sv_push(b, &out, "add hl, bc");
+    sv_push(b, &out, "ex de, hl");
+    sv_pushf(b, &out, "ld hl, %s", label);
+    sv_pushf(b, &out, "ld bc, %d", n * s_yy_size(suffix));
+    sv_push(b, &out, "ldir");
+    return out;
+}
+
+/* ---- _lvard (generic.py:237-255) ------------------------------------- *
+ * Defines a local variable (literal default). ins[1]=offset, ins[2]=
+ * list-repr of value bytes. Backing vard table deferred to AT_END;
+ * body ldir-copies get_bytes_size(eval(ins[2])) bytes to (ix - offset). */
+static StrVec emit_lvard(Backend *b, Quad *q) {
+    StrVec out = sv_new();
+    char *label = s_tmp_label(b);
+    long offset = s_int_val(q_ins(q, 1));
+    char *items[256];
+    int n = eval_str_list(b, q_ins(q, 2), items, 256);  /* eval(ins[2]) */
+
+    s_at_end_vard(b, label, q_ins(q, 2));
+
+    sv_push(b, &out, "push ix");
+    sv_push(b, &out, "pop hl");
+    sv_pushf(b, &out, "ld bc, %ld", -offset);
+    sv_push(b, &out, "add hl, bc");
+    sv_push(b, &out, "ex de, hl");
+    sv_pushf(b, &out, "ld hl, %s", label);
+    sv_pushf(b, &out, "ld bc, %d", s_get_bytes_size(items, n));
+    sv_push(b, &out, "ldir");
+    return out;
+}
+
+/* ---- _larrd (generic.py:259-314) ------------------------------------- *
+ * Defines a local array. ins[1]=offset, ins[2]=idx-table list-repr,
+ * ins[3]=elements byte-size, ins[4]=init-image list-repr ("[]" if none),
+ * ins[5]=[lbound,ubound] label list-repr (len 0 or 2). Idx table deferred
+ * to AT_END; pushes UBOUND/LBOUND ptrs (if any), the init-image label (if
+ * initializing), then HL=-offset / DE=idx-label / BC=elements_size and
+ * tail-calls the matching __ALLOC[_INITIALIZED]_LOCAL_ARRAY[_WITH_BOUNDS]
+ * runtime. The Python InvalidIC on a bad bounds length is a hard contract
+ * the visitor upholds; the C port keeps the same 0/2 acceptance. */
+static StrVec emit_larrd(Backend *b, Quad *q) {
+    StrVec out = sv_new();
+    char *label = s_tmp_label(b);
+    long offset = s_int_val(q_ins(q, 1));
+    const char *elements_size = q_ins(q, 3);
+
+    s_at_end_vard(b, label, q_ins(q, 2));   /* idx table */
+
+    char *bounds[8];
+    int bn = eval_str_list(b, q_ins(q, 5), bounds, 8);
+    if (bn != 0 && bn != 2) {
+        fprintf(stderr,
+                "zxbc: _larrd bounds list length must be 0 or 2, not %s\n",
+                q_ins(q, 5));
+        return out;
+    }
+    bool have_bounds = false;
+    for (int i = 0; i < bn; i++)
+        if (strcmp(bounds[i], "0") != 0) { have_bounds = true; break; }
+
+    if (have_bounds) {
+        sv_pushf(b, &out, "ld hl, %s", bounds[1]);   /* UBOUND ptr */
+        sv_push(b, &out, "push hl");
+        sv_pushf(b, &out, "ld hl, %s", bounds[0]);   /* LBOUND ptr */
+        sv_push(b, &out, "push hl");
+    }
+
+    bool must_init = strcmp(q_ins(q, 4), "[]") != 0;
+    if (must_init) {
+        char *label2 = s_tmp_label(b);
+        s_at_end_vard(b, label2, q_ins(q, 4));        /* init image */
+        sv_pushf(b, &out, "ld hl, %s", label2);
+        sv_push(b, &out, "push hl");
+    }
+
+    sv_pushf(b, &out, "ld hl, %ld", -offset);
+    sv_pushf(b, &out, "ld de, %s", label);
+    sv_pushf(b, &out, "ld bc, %s", elements_size);
+
+    if (must_init) {
+        sv_push(b, &out, s_runtime_call(b,
+            have_bounds ? RL_ALLOC_INITIALIZED_LOCAL_ARRAY_WITH_BOUNDS
+                        : RL_ALLOC_INITIALIZED_LOCAL_ARRAY));
+    } else {
+        sv_push(b, &out, s_runtime_call(b,
+            have_bounds ? RL_ALLOC_LOCAL_ARRAY_WITH_BOUNDS
+                        : RL_ALLOC_LOCAL_ARRAY));
+    }
+    return out;
+}
+
 /* is_int_type (common.py:238-240): stype[0] in ('u','i'). */
 static bool s_is_int_type(const char *t) { return t[0] == 'u' || t[0] == 'i'; }
 
@@ -3190,6 +3358,17 @@ static StrVec quad_emit(Backend *b, Quad *q) {
     if (strcmp(I, "var")      == 0) return emit_var(b, q);
     if (strcmp(I, "vard")     == 0) return emit_vard(b, q);
     if (strcmp(I, "varx")     == 0) return emit_varx(b, q);
+    /* S5.7c — local-init _QUAD_TABLE rows (main.py:575-583
+     * LVARX/LVARD/LARRD -> _lvarx/_lvard/_larrd). Dispatch-reachable now;
+     * exercised once the inside-function offset model (compute_offsets /
+     * per-local offset+size+bounds / locals_size) lands and the
+     * FunctionTranslator :58-116 walk gets its first real ic_larrd/
+     * ic_lvard/ic_lvarx caller. Same "backend ABI complete; visitor
+     * wrapper lands with its first real caller" discipline S5.7b used
+     * for _paddr/_pload* (translator.c:420-430). */
+    if (strcmp(I, "lvarx")    == 0) return emit_lvarx(b, q);
+    if (strcmp(I, "lvard")    == 0) return emit_lvard(b, q);
+    if (strcmp(I, "larrd")    == 0) return emit_larrd(b, q);
     if (strcmp(I, "data")     == 0) return emit_data(b, q);
     if (strcmp(I, "deflabel") == 0) return emit_deflabel(b, q);
     if (strcmp(I, "label")    == 0) return emit_label(b, q);
