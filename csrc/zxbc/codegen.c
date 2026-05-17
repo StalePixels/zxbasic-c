@@ -276,8 +276,15 @@ int codegen_emit(CompilerState *cs, AstNode *ast) {
      * slice (no DATA in scope). No-op when no functions were declared. */
     translator_function_start(&tr);
 
-    /* 8  emit_data_blocks / emit_strings (zxbc.py:144-146): no DATA/
-     * strings -> no-op. Real S5.8. */
+    /* 8  translator.emit_data_blocks() (zxbc.py:144): S5.8d-deferred —
+     * not ported here (no DATA blocks in S5.8bc scope). */
+
+    /* 8  translator.emit_strings() (zxbc.py:146): drains the STRING_LABELS
+     * dedup store (populated by visit_STRING during steps 6/7) into ic_vard
+     * quads, in insertion order. Same site Python calls it: after
+     * emit_data_blocks, before emit_jump_tables. No-op when no constant
+     * string was visited. */
+    translator_emit_strings(&tr);
 
     /* 8  translator.emit_jump_tables() (zxbc.py:148): drains the ON
      * GOTO/GOSUB JUMP_TABLES (S5.5). No-op when none appeared. */

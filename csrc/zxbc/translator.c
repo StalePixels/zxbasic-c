@@ -25,6 +25,10 @@ static void tr_ic_pload(Translator *tr, const TypeInfo *type_,
                         const char *t1, const char *offset);
 static void tr_ic_pstore(Translator *tr, const TypeInfo *type_,
                          const char *offset, const char *t);
+/* tr_ic_vard is defined below (its first historical caller was the S5.7d
+ * bound-table flush); translator_emit_strings calls it earlier. */
+static void tr_ic_vard(Translator *tr, const char *name,
+                       char **data, int n);
 
 /* TranslatorInstVisitor.emit (translator_inst_visitor.py:21-25):
  *   quad = Quad(*args); self.backend.MEMORY.append(quad) */
@@ -167,6 +171,26 @@ static AstNode *tr_visit_number(Visitor *v, AstNode *node) {
         Translator *tr = v->ctx;
         node->t = arena_strdup(&tr->cs->arena, buf);
     }
+    return node;
+}
+
+/* visit_STRING (translator.py:60-63):
+ *   node.t = "#" + self.add_string_label(node.value); yield node.t
+ * add_string_label folds by EXACT bytes via the Backend STRING_LABELS
+ * store (string_labels.add_string_label). This is THE ONLY
+ * backend_add_string_label call site (mirrors Python: the only
+ * add_string_label callers are visit_STRING and emit_data_blocks; the
+ * latter is S5.8d-deferred). NUL-safe via node.u.string.length. */
+static AstNode *tr_visit_string(Visitor *v, AstNode *node) {
+    Translator *tr = v->ctx;
+    const char *val = node->u.string.value ? node->u.string.value : "";
+    int len = node->u.string.length;
+    char *lbl = backend_add_string_label(tr->backend, val, len);
+    size_t ll = strlen(lbl);
+    char *t = arena_alloc(&tr->cs->arena, ll + 2);
+    t[0] = '#';
+    memcpy(t + 1, lbl, ll + 1);
+    node->t = t;
     return node;
 }
 
@@ -1225,6 +1249,241 @@ static AstNode *tr_visit_continue_for(Visitor *v, AstNode *node) {
     return node;
 }
 
+/* ====================================================================
+ * String / array-element assignment + string-slice visitors —
+ * faithful ports of src/arch/z80/visitor/translator.py:
+ *   visit_LETARRAY        :329-364
+ *   visit_LETSUBSTR       :366-402
+ *   visit_LETARRAYSUBSTR  :404-446
+ *   visit_STRSLICE        :451-468
+ *
+ * The C parser builds a single "LETARRAY" SENTENCE for BOTH a real
+ * array-element assignment (child[0] = ARRAYACCESS) and a string
+ * substring assignment (child[0] = FUNCCALL-shape: VAR string +
+ * ARGLIST) — see parser.c:1644. Python instead builds LETARRAY /
+ * LETSUBSTR / LETARRAYSUBSTR distinctly. `entry` (the assigned symbol)
+ * is in both C shapes node.children[0].children[0] — the VAR id under
+ * the ARRAYACCESS/FUNCCALL — the faithful analogue of Python's
+ * node.children[0].entry (visit_LETARRAYSUBSTR :405) /
+ * node.args[0].entry (visit_LETARRAY :333) / node.children[0]
+ * (visit_LETSUBSTR :361).
+ *
+ * THE GATE (translator.py:330-331 visit_LETARRAY + :405-406
+ * visit_LETARRAYSUBSTR): `if O_LEVEL > 1 and not entry.accessed:
+ * return` — emit NOTHING and do NOT descend into children. This is the
+ * `llc` zero-regression fix: a write-only string/array at O>1 must not
+ * have its RHS STRING visited (which would mint a spurious constant
+ * label via tr_visit_string). Without a LETARRAY handler the default
+ * visitor_generic recurses into the RHS STRING. ==================================================================== */
+
+/* The assigned symbol entry under a C "LETARRAY" lvalue (ARRAYACCESS or
+ * FUNCCALL-shape): node.children[0].children[0]. */
+static AstNode *tr_letarray_entry(AstNode *node) {
+    AstNode *acc = node->child_count > 0 ? node->children[0] : NULL;
+    return (acc && acc->child_count > 0) ? acc->children[0] : NULL;
+}
+
+/* visit_LETSUBSTR (translator.py:366-402): LET X$(a TO b) = Y$.
+ * Faithful to the C "LETARRAY"-string shape: str_var = entry (the VAR
+ * under the FUNCCALL), the index expr(s) live in the FUNCCALL's
+ * ARGLIST → ARGUMENT children. p_substr_assignment (zxbparser.py
+ * :1248-1305) with one index makes lower==upper==index, RHS = expr. */
+static void tr_letsubstr_emit(Visitor *v, AstNode *node, AstNode *str_var,
+                              AstNode *lower, AstNode *upper, AstNode *rhs) {
+    Translator *tr = v->ctx;
+    const TypeInfo *ptr = tr->cs->symbol_table->basic_types[TYPE_uinteger];
+    const TypeInfo *str_t = tr->cs->symbol_table->basic_types[TYPE_string];
+    const TypeInfo *ubyte = tr->cs->symbol_table->basic_types[TYPE_ubyte];
+
+    /* :369 yield Y$ */
+    if (rhs) visitor_visit(v, rhs);
+
+    /* :371-376 is_temporary_value(node.children[3]) (check.py:399-401):
+     *   token not in ("STRING","VAR") and t[0] not in ("_","#"). */
+    bool rhs_is_str_or_var = rhs && (rhs->tag == AST_STRING ||
+                                     rhs->tag == AST_ID);
+    const char *rt = (rhs && rhs->t) ? rhs->t : "";
+    bool rhs_tmp = !rhs_is_str_or_var && rt[0] != '_' && rt[0] != '#';
+    if (rhs_tmp) {
+        tr_ic_param(tr, str_t, rt);
+        tr_ic_param(tr, ubyte, "1");
+    } else {
+        tr_ic_param(tr, ptr, rt);
+        tr_ic_param(tr, ubyte, "0");
+    }
+
+    /* :379-383 yield a; ic_param(PTR,a.t); yield b; ic_param(PTR,b.t) */
+    if (lower) visitor_visit(v, lower);
+    tr_ic_param(tr, ptr, (lower && lower->t) ? lower->t : "0");
+    if (upper) visitor_visit(v, upper);
+    tr_ic_param(tr, ptr, (upper && upper->t) ? upper->t : "0");
+
+    /* :385-400 load x$ by scope. C scope/offset/byref on the VAR id. */
+    Scope scope = str_var->u.id.scope;
+    const char *svt = str_var->t ? str_var->t : str_var->u.id.mangled;
+    if (scope == SCOPE_global) {
+        tr_ic_fparam(tr, ptr, svt ? svt : "");
+    } else if (scope == SCOPE_local) {
+        char ofs[24];
+        snprintf(ofs, sizeof(ofs), "%ld", -(long)str_var->u.id.offset);
+        const char *dst = (svt && svt[0]) ? svt
+                        : compiler_new_temp(tr->cs);
+        str_var->t = (char *)dst;
+        tr_ic_pload(tr, ptr, dst, ofs);
+        tr_ic_fparam(tr, ptr, dst);
+    } else if (scope == SCOPE_parameter) {
+        char ofs[24];
+        snprintf(ofs, sizeof(ofs), "%ld", (long)str_var->u.id.offset);
+        const char *dst = (svt && svt[0]) ? svt
+                        : compiler_new_temp(tr->cs);
+        str_var->t = (char *)dst;
+        tr_ic_pload(tr, ptr, dst, ofs);
+        if (str_var->u.id.byref) {
+            char ind[32];
+            snprintf(ind, sizeof(ind), "*%s", dst);
+            tr_ic_fparam(tr, ptr, arena_strdup(&tr->cs->arena, ind));
+        } else {
+            tr_ic_fparam(tr, ptr, dst);
+        }
+    } else {
+        fprintf(stderr, "zxbc: visit_LETSUBSTR invalid scope %d\n",
+                (int)scope);
+        return;
+    }
+    /* :402 runtime_call(LETSUBSTR, 0) */
+    tr_runtime_call(tr, ".core.__LETSUBSTR", 0);
+}
+
+/* visit_LETARRAY (translator.py:329-364): real array-element store.
+ * arr = node.children[0] (ARRAYACCESS); the index path / scope store
+ * is the array codegen — out of S5.8bc's string scope (no array-elem
+ * store fixture is non-gated in the string corpus). Faithful slice:
+ * the GATE + (when not gated) generic descent so the RHS / index are
+ * still visited exactly as Python's `yield (yield generic_visit)`. */
+static AstNode *tr_visit_letarray(Visitor *v, AstNode *node) {
+    Translator *tr = v->ctx;
+    AstNode *entry = tr_letarray_entry(node);
+
+    AstNode *acc = node->child_count > 0 ? node->children[0] : NULL;
+    AstNode *rhs = node->child_count > 1 ? node->children[1] : NULL;
+
+    /* THE GATE — translator.py:330-331 (visit_LETARRAY) /
+     * :405-406 (visit_LETARRAYSUBSTR): O_LEVEL>1 and the target entry
+     * not accessed ⇒ emit NOTHING and do NOT descend (so a write-only
+     * string/array's RHS STRING is never visited → no spurious label).
+     *
+     * Faithful entry-accessed source: the C parser builds the
+     * `LET s$(i)=...` lvalue as a FUNCCALL-shape ONLY when `s` is an
+     * undeclared CLASS_unknown id (parser.c:793 — a DIM'd/LET'd, hence
+     * read-or-declared, string is CLASS_var ⇒ the STRSLICE-shape branch
+     * parser.c:749, which the opt2_letsubstr_not_used / lvalsubstr_nolet
+     * / sys_letsubstr0 fixtures take and which is already byte-SAME).
+     * Python's p_substr_assignment (zxbparser.py:1248-1305) `to_var()`s
+     * that id and builds a **LETSUBSTR** whose entry is NEVER a
+     * FUNCCALL/CALL — so Python's FunctionGraphVisitor
+     * (_get_calls_from_children, optimize.py:164) never marks it, and
+     * Python's OptimizerVisitor.visit_LETSUBSTR (optimize.py:360-365,
+     * O>1 + not accessed → NOP + W150) prunes it.  The C parser's
+     * FUNCCALL-shape, however, makes the C FunctionGraph
+     * (functiongraph.c:52) mark that lvalue's entry accessed — the
+     * SAME C-parser FUNCCALL-overload `tr_visit_call_common`
+     * (translator.c:827-846) and `collect_side_effects`
+     * (optimizer.c:499-509) already special-case by gating on the
+     * callee being a real CLASS_function/sub.  Apply that identical
+     * faithful predicate here: when the lvalue is a FUNCCALL-shape on a
+     * NON-callable string (the C LETSUBSTR-artifact — by construction
+     * write-only & undeclared, never genuinely read), Python's
+     * effective output is the visit_LETSUBSTR prune, regardless of the
+     * spurious C accessed mark.  This is the `llc` zero-regression fix
+     * and is byte-identical to Python; real calls (callee
+     * CLASS_function/sub) and the CLASS_var STRSLICE-shape path are
+     * untouched. */
+    bool funccall_shape_noncallable =
+        acc && acc->tag == AST_FUNCCALL &&
+        acc->child_count > 0 && acc->children[0] &&
+        acc->children[0]->tag == AST_ID &&
+        acc->children[0]->u.id.class_ != CLASS_function &&
+        acc->children[0]->u.id.class_ != CLASS_sub;
+    bool entry_unused = entry &&
+        (!entry->u.id.accessed ||
+         (funccall_shape_noncallable && entry->type_ &&
+          type_is_string(entry->type_)));
+    if (tr->cs->opts.optimization_level > 1 && entry_unused)
+        return node;
+
+    /* String substring assignment — the C parser's FUNCCALL-shape
+     * lvalue on a string VAR (Python p_substr_assignment builds
+     * LETSUBSTR; translator.py:366-402). One ARGLIST index ⇒
+     * lower==upper==that index (p_substr_assignment len==1). */
+    if (entry && entry->type_ && type_is_string(entry->type_) &&
+        acc && acc->tag == AST_FUNCCALL) {
+        AstNode *arglist = acc->child_count > 1 ? acc->children[1] : NULL;
+        AstNode *idx = NULL;
+        if (arglist && arglist->child_count > 0) {
+            AstNode *a0 = arglist->children[0];
+            /* ARGUMENT wraps the index expr (child[0]); a bare expr or
+             * STRSLICE node can also appear (parser.c:833-854). */
+            if (a0 && a0->tag == AST_ARGUMENT && a0->child_count > 0)
+                idx = a0->children[0];
+            else
+                idx = a0;
+        }
+        tr_letsubstr_emit(v, node, entry, idx, idx, rhs);
+        return node;
+    }
+
+    /* Non-string array element — faithful `yield (yield
+     * generic_visit(node))`: visit children so the RHS/index codegen
+     * (and the array store its own visitors own) runs. The dedicated
+     * array-store IC is out of S5.8bc scope; the existing array
+     * sprints own ARRAYACCESS. */
+    visitor_generic(v, node);
+    return node;
+}
+
+/* visit_STRSLICE (translator.py:451-468): string read-slice s$(a TO b).
+ * C AST_STRSLICE: children[0]=string, children[1]=lower, children[2]=
+ * upper (parser.c:861-866 / :773-780). gl.PTR_TYPE == uinteger. */
+static AstNode *tr_visit_strslice(Visitor *v, AstNode *node) {
+    Translator *tr = v->ctx;
+    const TypeInfo *ptr = tr->cs->symbol_table->basic_types[TYPE_uinteger];
+    const TypeInfo *ubyte = tr->cs->symbol_table->basic_types[TYPE_ubyte];
+    AstNode *str_  = node->child_count > 0 ? node->children[0] : NULL;
+    AstNode *lower = node->child_count > 1 ? node->children[1] : NULL;
+    AstNode *upper = node->child_count > 2 ? node->children[2] : NULL;
+
+    /* :452 yield node.string */
+    if (str_) visitor_visit(v, str_);
+
+    /* :453-454 if string.token=="STRING" or (VAR and scope==global):
+     *   ic_param(PTR_TYPE, string.t) */
+    bool s_is_string = str_ && str_->tag == AST_STRING;
+    bool s_is_var = str_ && str_->tag == AST_ID;
+    bool s_global = s_is_var && str_->u.id.scope == SCOPE_global;
+    if (s_is_string || s_global)
+        tr_ic_param(tr, ptr, (str_ && str_->t) ? str_->t : "");
+
+    /* :457-461 yield lower; ic_param(lower.type_, lower.t);
+     *           yield upper; ic_param(upper.type_, upper.t) */
+    if (lower) visitor_visit(v, lower);
+    tr_ic_param(tr, lower ? lower->type_ : ptr,
+                (lower && lower->t) ? lower->t : "0");
+    if (upper) visitor_visit(v, upper);
+    tr_ic_param(tr, upper ? upper->type_ : ptr,
+                (upper && upper->t) ? upper->t : "0");
+
+    /* :463-466 fparam(ubyte, 0) if (VAR and mangled[0]=="_") or STRING;
+     *           else fparam(ubyte, 1) (non-variable ⇒ must be freed). */
+    bool free0 = s_is_string ||
+                 (s_is_var && str_->u.id.mangled &&
+                  str_->u.id.mangled[0] == '_');
+    tr_ic_fparam(tr, ubyte, free0 ? "0" : "1");
+
+    /* :468 runtime_call(STRSLICE, TYPE(PTR_TYPE).size) */
+    tr_runtime_call(tr, ".core.__STRSLICE", type_size(ptr));
+    return node;
+}
+
 /* visit_ON_GOTO / visit_ON_GOSUB (translator.py:657-671). children[0]=
  * index expr, children[1:]=target LABEL ids. Pushes a JumpTable emitted
  * later by emit_jump_tables. gl.PTR_TYPE == uinteger. */
@@ -1267,6 +1526,36 @@ static AstNode *tr_visit_on_goto(Visitor *v, AstNode *node) {
 }
 static AstNode *tr_visit_on_gosub(Visitor *v, AstNode *node) {
     return tr_visit_on_jump(v, node, true);
+}
+
+/* emit_strings (translator_visitor.py:155-158):
+ *   for str_, label_ in string_labels.STRING_LABELS.items():
+ *     l = "%04X" % (len(str_) & 0xFFFF)
+ *     self.ic_vard(label_, [l] + ["%02X" % ord(x) for x in str_])
+ * Iterates the Backend STRING_LABELS store in INSERTION order. ic_vard
+ * (translator_inst_visitor.py:244-245) -> emit("vard", name, data) with
+ * data a Python list -> Quad str()-coerces to a single-quoted list repr;
+ * tr_ic_vard / tr_py_list_repr build that byte-identical repr (same as
+ * emit_jump_tables). NUL-safe: iterates the stored byte length. */
+void translator_emit_strings(Translator *tr) {
+    StringLabels *sl = &tr->backend->string_labels;
+    for (int i = 0; i < sl->count; i++) {
+        const char *bytes = sl->items[i].bytes;
+        int blen = sl->items[i].len;
+        int n = blen + 1; /* the "%04X" length word + one item per byte */
+        char **data = arena_alloc(&tr->cs->arena,
+                                  (size_t)n * sizeof(char *));
+        char hdr[8];
+        snprintf(hdr, sizeof(hdr), "%04X", blen & 0xFFFF);
+        data[0] = arena_strdup(&tr->cs->arena, hdr);
+        for (int k = 0; k < blen; k++) {
+            char hb[4];
+            snprintf(hb, sizeof(hb), "%02X",
+                     (unsigned)(unsigned char)bytes[k]);
+            data[k + 1] = arena_strdup(&tr->cs->arena, hb);
+        }
+        tr_ic_vard(tr, sl->items[i].label, data, n);
+    }
 }
 
 /* emit_jump_tables (translator_visitor.py:160-162):
@@ -1392,6 +1681,7 @@ static AstNode *tr_visit_funcdecl(Visitor *v, AstNode *node) {
 static void tr_register_handlers(Visitor *v) {
     visitor_on_tag(v, AST_BLOCK, tr_visit_block);
     visitor_on_tag(v, AST_NUMBER, tr_visit_number);
+    visitor_on_tag(v, AST_STRING, tr_visit_string);
     visitor_on_tag(v, AST_BINARY, tr_visit_binary);
     visitor_on_tag(v, AST_TYPECAST, tr_visit_typecast);
     visitor_on_tag(v, AST_ID, tr_visit_var);  /* VAR == ID node */
@@ -1409,6 +1699,14 @@ static void tr_register_handlers(Visitor *v) {
     visitor_on_tag(v, AST_ARGUMENT, tr_visit_argument);
     visitor_on_sentence(v, "CALL", tr_visit_call);
     visitor_on_sentence(v, "LET", tr_visit_let);
+    /* S5.8bc — string/array-element assignment + string-slice
+     * (translator.py:329-468). The C parser builds one "LETARRAY"
+     * SENTENCE for both array-elem and string-substring assignments
+     * (parser.c:1644); tr_visit_letarray carries the O>1-not-accessed
+     * GATE (the llc fix) and routes the string case to LETSUBSTR
+     * semantics. STRSLICE is a tag node. ACTIVE. */
+    visitor_on_sentence(v, "LETARRAY", tr_visit_letarray);
+    visitor_on_tag(v, AST_STRSLICE, tr_visit_strslice);
     visitor_on_sentence(v, "END", tr_visit_end);
     /* S5.5 control-flow sentence handlers. */
     visitor_on_sentence(v, "IF", tr_visit_if);
@@ -1440,7 +1738,10 @@ void translator_visit(Translator *tr, AstNode *ast) {
     /* reset() analogue (translator_visitor.py:53-61 + common.init): the
      * C Translator is stack-scoped per compile; clear its class-state
      * mirror here. tmp_labels/LABEL_COUNTER live on the Backend and are
-     * reset by backend_init (common.init) — not re-zeroed here. */
+     * reset by backend_init (common.init) — not re-zeroed here.
+     * TranslatorVisitor.reset() (:62) also string_labels.reset() — the
+     * STRING_LABELS dedup store lives on the Backend; clear it here. */
+    backend_string_labels_reset(tr->backend);
     tr->loops_len = 0;
     tr->jump_tables_len = 0;
     tr->prev_token = NULL;

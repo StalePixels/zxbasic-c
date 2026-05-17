@@ -398,7 +398,17 @@ static AstNode *parse_builtin_func(Parser *p, const char *fname, BTokenType kw) 
             n->type_ = st->basic_types[TYPE_ubyte];
             break;
         case BTOK_USR:
+            /* p_expr_usr (zxbparser.py:3272-3282): if the argument is a
+             * string, the builtin is USR_STR (keep the STRING child, no
+             * typecast); otherwise USR. Both yield TYPE.uinteger. The
+             * else-branch's make_typecast(uinteger, arg) is pre-existing
+             * absent in the C port (out of scope; left as-is). */
             n->type_ = st->basic_types[TYPE_uinteger];
+            if (arg && arg->type_ &&
+                type_is_string(arg->type_)) {
+                n->u.builtin.fname =
+                    arena_strdup(&p->cs->arena, "USR_STR");
+            }
             break;
         case BTOK_STR:
             n->type_ = st->basic_types[TYPE_string];

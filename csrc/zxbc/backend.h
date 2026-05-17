@@ -33,6 +33,27 @@
 typedef VEC(char *) StrVec; /* an ordered list of asm lines */
 
 /*
+ * STRING_LABELS dedup store — port of src/api/string_labels.py
+ * (STRING_LABELS = defaultdict(tmp_labels.tmp_label)). An insertion-ordered
+ * map keyed by the EXACT string bytes (NUL-safe: keyed by stored length, not
+ * strlen). A miss mints a label via the SHARED tmp-label counter
+ * (backend_tmp_label) — the same monotonic LABEL_COUNTER as loop/jump
+ * labels — so a constant string folds to one label and several identical
+ * constants share an address. emit_strings (translator_visitor.py:155-158)
+ * drains it in insertion order. */
+typedef struct StringLabelEntry {
+    char *bytes;   /* arena-owned copy of the string's exact bytes */
+    int   len;     /* byte length (NUL-safe key half) */
+    char *label;   /* the minted ".LABEL.__LABEL<n>" */
+} StringLabelEntry;
+
+typedef struct StringLabels {
+    StringLabelEntry *items;
+    int               count;
+    int               cap;
+} StringLabels;
+
+/*
  * Backend container. Mirrors the live-reset state of common.py + the
  * Backend.MEMORY list. requires_/inits/at_end are empty for the S5.2
  * calibration (no runtime library pulled in); they exist so the M4 emit
@@ -63,6 +84,11 @@ typedef struct Backend {
     int     label_counter;    /* tmp_labels.LABEL_COUNTER */
     HashMap tmp_labels;       /* tmp_labels.TMP_LABELS (set of str) */
 
+    /* src/api/string_labels.py — STRING_LABELS defaultdict, reset by
+     * TranslatorVisitor.reset() -> string_labels.reset()
+     * (translator_visitor.py:62). Insertion-ordered, exact-bytes keyed. */
+    StringLabels string_labels;
+
     /* OPTIONS the emitter reads (Python reads the OPTIONS global; the C
      * port threads them onto the Backend — the driver sets these from
      * cs->opts before emit). Defaults match options.c / backend.init(). */
@@ -87,6 +113,16 @@ char *backend_new_asmid(Backend *b);
  * ".LABEL.__LABEL<N>" (single monotonic counter, no zero-pad), recorded in
  * TMP_LABELS. Arena-owned. Used by the S5.5 control-flow visitors. */
 char *backend_tmp_label(Backend *b);
+
+/* string_labels.add_string_label (src/api/string_labels.py:24-31): fold the
+ * given bytes (NUL-safe via len) to a unique label; identical bytes return
+ * the same label. A miss mints via backend_tmp_label (the SHARED counter).
+ * Arena-owned return. THE ONLY caller is translator.c tr_visit_string. */
+char *backend_add_string_label(Backend *b, const char *bytes, int len);
+
+/* string_labels.reset (src/api/string_labels.py:19-21): STRING_LABELS.clear().
+ * Wired where the translator reset analogue runs. */
+void backend_string_labels_reset(Backend *b);
 
 /* Free the heap-backed containers (Quads/strings are arena-owned). */
 void backend_free(Backend *b);

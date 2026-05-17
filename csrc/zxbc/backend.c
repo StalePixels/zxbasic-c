@@ -357,6 +357,22 @@ static int s_log2(long x) { int n = 0; while (x > 1) { x >>= 1; n++; } return n;
 #define RL_MEM_FREE          ZXBC_NAMESPACE ".__MEM_FREE"
 #define RL_ARRAYSTR_FREE_MEM ZXBC_NAMESPACE ".__ARRAYSTR_FREE_MEM"
 
+/* S5.8bc — string RuntimeLabels (runtime/core.py:16,62-63,68,74,116-127;
+ * NAMESPACE == .core). Spelling EXACT per core.py. */
+#define RL_ADDSTR    ZXBC_NAMESPACE ".__ADDSTR"
+#define RL_LOADSTR   ZXBC_NAMESPACE ".__LOADSTR"
+#define RL_STORE_STR  ZXBC_NAMESPACE ".__STORE_STR"
+#define RL_STORE_STR2 ZXBC_NAMESPACE ".__STORE_STR2"
+#define RL_STREQ     ZXBC_NAMESPACE ".__STREQ"
+#define RL_STRNE     ZXBC_NAMESPACE ".__STRNE"
+#define RL_STRLT     ZXBC_NAMESPACE ".__STRLT"
+#define RL_STRGT     ZXBC_NAMESPACE ".__STRGT"
+#define RL_STRLE     ZXBC_NAMESPACE ".__STRLE"
+#define RL_STRGE     ZXBC_NAMESPACE ".__STRGE"
+#define RL_STRLEN    ZXBC_NAMESPACE ".__STRLEN"
+#define RL_LETSUBSTR ZXBC_NAMESPACE ".__LETSUBSTR"
+#define RL_STRSLICE  ZXBC_NAMESPACE ".__STRSLICE"
+
 /* runtime_call (common.py:156-161): REQUIRES.add(LABEL_REQUIRED_MODULES
  * [label]) if present; returns "call {label}". The label->module map is
  * runtime/core.py:160-225 (only the S5.3-reachable labels). */
@@ -449,6 +465,21 @@ static const char *s_required_module(const char *label) {
         return "array/arrayalloc.asm";
     if (strcmp(label, RL_ARRAYSTR_FREE_MEM) == 0) return "array/arraystrfree.asm";
     if (strcmp(label, RL_MEM_FREE)   == 0) return "mem/free.asm";
+    /* S5.8bc — string modules (runtime/core.py:145,179,195,197-198,
+     * 245-256 REQUIRED_MODULES; live-verified). */
+    if (strcmp(label, RL_ADDSTR)     == 0) return "strcat.asm";
+    if (strcmp(label, RL_LOADSTR)    == 0) return "loadstr.asm";
+    if (strcmp(label, RL_STORE_STR)  == 0) return "storestr.asm";
+    if (strcmp(label, RL_STORE_STR2) == 0) return "storestr2.asm";
+    if (strcmp(label, RL_STREQ)      == 0) return "string.asm";
+    if (strcmp(label, RL_STRNE)      == 0) return "string.asm";
+    if (strcmp(label, RL_STRLT)      == 0) return "string.asm";
+    if (strcmp(label, RL_STRGT)      == 0) return "string.asm";
+    if (strcmp(label, RL_STRLE)      == 0) return "string.asm";
+    if (strcmp(label, RL_STRGE)      == 0) return "string.asm";
+    if (strcmp(label, RL_STRLEN)     == 0) return "strlen.asm";
+    if (strcmp(label, RL_LETSUBSTR)  == 0) return "letsubstr.asm";
+    if (strcmp(label, RL_STRSLICE)   == 0) return "strslice.asm";
     return NULL;
 }
 static char *s_runtime_call(Backend *b, const char *label) {
@@ -3331,11 +3362,261 @@ static StrVec emit_cast(Backend *b, Quad *q) {
     return out;
 }
 
+/* ====================================================================
+ * String class — verbatim port of src/arch/z80/backend/_str.py.
+ *
+ *   String.get_oper       _str.py:16-100
+ *   String.free_sequence  _str.py:102-121
+ *   String.addstr         _str.py:123-139
+ *   String.ltstr/gtstr/lestr/gestr/eqstr/nestr  _str.py:141-199
+ *   String.lenstr         _str.py:201-211
+ *   String.loadstr        _str.py:213-222
+ *   String.storestr       _str.py:224-253
+ *   String.jzerostr       _str.py:255-281
+ *   String.retstr         _str.py:311-321
+ *   String.paramstr       _str.py:323-337
+ *   String.fparamstr      _str.py:339-348
+ *
+ * 1st operand -> HL, 2nd -> DE. tmp1/tmp2 flag a popped-from-stack
+ * (temporary) operand that must later be MEM_FREEd. runtime_call() ->
+ * s_runtime_call (call {label} + REQUIRES add), exactly as Python's
+ * common.runtime_call does. ==================================================================== */
+
+/* String.get_oper (_str.py:16-100). op2 == NULL => single-operand form
+ * (tmp2 stays false). reversed swaps op1/op2 extraction order. no_exaf
+ * suppresses the A'-flag (ld a,N / xor a) tail. */
+static StrVec str_get_oper(Backend *b, const char *op1, const char *op2,
+                           bool reversed, bool no_exaf,
+                           bool *tmp1_out, bool *tmp2_out) {
+    StrVec output = sv_new();
+    const char *o1 = op1, *o2 = op2;
+    if (o2 != NULL && reversed) { const char *t = o1; o1 = o2; o2 = t; }
+
+    bool tmp2 = false;
+    if (o2 != NULL) {
+        const char *val = o2;
+        bool indirect = (val[0] == '*');
+        if (indirect) val++;
+
+        if (val[0] == '_')        sv_pushf(b, &output, "ld de, (%s)", val);
+        else if (val[0] == '#')   sv_pushf(b, &output, "ld de, %s", val + 1);
+        else if (val[0] == '$')   sv_push(b, &output, "pop de");
+        else { sv_push(b, &output, "pop de"); tmp2 = true; }
+
+        if (indirect)
+            sv_push(b, &output, s_runtime_call(b, RL_LOAD_DE_DE));
+    }
+
+    StrVec tmp = sv_new();
+    bool have_tmp = false;
+    if (reversed) { tmp = output; output = sv_new(); have_tmp = true; }
+
+    const char *val = o1;
+    bool tmp1 = false;
+    bool indirect = (val[0] == '*');
+    if (indirect) val++;
+
+    if (val[0] == '_')        sv_pushf(b, &output, "ld hl, (%s)", val);
+    else if (val[0] == '#')   sv_pushf(b, &output, "ld hl, %s", val + 1);
+    else if (val[0] == '$')   sv_push(b, &output, "pop hl");
+    else { sv_push(b, &output, "pop hl"); tmp1 = true; }
+
+    if (indirect) {
+        sv_push(b, &output, "ld c, (hl)");
+        sv_push(b, &output, "inc hl");
+        sv_push(b, &output, "ld h, (hl)");
+        sv_push(b, &output, "ld l, c");
+    }
+
+    if (reversed && have_tmp) {
+        for (int i = 0; i < tmp.len; i++) vec_push(output, tmp.data[i]);
+        vec_free(tmp);
+    }
+
+    if (!no_exaf) {
+        if (tmp1 && tmp2)      sv_push(b, &output, "ld a, 3");
+        else if (tmp1)         sv_push(b, &output, "ld a, 1");
+        else if (tmp2)         sv_push(b, &output, "ld a, 2");
+        else                   sv_push(b, &output, "xor a");
+    }
+
+    if (tmp1_out) *tmp1_out = tmp1;
+    if (tmp2_out) *tmp2_out = tmp2;
+    return output;
+}
+
+/* String.free_sequence (_str.py:102-121). FREEMEM sequence for 1/2 ops. */
+static void str_free_sequence(Backend *b, StrVec *out, bool tmp1, bool tmp2) {
+    if (!tmp1 && !tmp2) return;
+    if (tmp1 && tmp2) {
+        sv_push(b, out, "pop de");
+        sv_push(b, out, "ex (sp), hl");
+        sv_push(b, out, "push de");
+        sv_push(b, out, s_runtime_call(b, RL_MEM_FREE));
+        sv_push(b, out, "pop hl");
+        sv_push(b, out, s_runtime_call(b, RL_MEM_FREE));
+    } else {
+        sv_push(b, out, "ex (sp), hl");
+        sv_push(b, out, s_runtime_call(b, RL_MEM_FREE));
+    }
+    sv_push(b, out, "pop hl");
+}
+
+/* String.addstr (_str.py:123-139). */
+static StrVec emit_addstr(Backend *b, Quad *q) {
+    bool t1, t2;
+    StrVec out = str_get_oper(b, q->args[1], q->args[2], false, true,
+                              &t1, &t2);
+    if (t1) sv_push(b, &out, "push hl");
+    if (t2) sv_push(b, &out, "push de");
+    sv_push(b, &out, s_runtime_call(b, RL_ADDSTR));
+    str_free_sequence(b, &out, t1, t2);
+    sv_push(b, &out, "push hl");
+    return out;
+}
+
+/* String.{lt,gt,le,ge,eq,ne}str (_str.py:141-199): get_oper(ins[2],ins[3]);
+ * runtime_call(STRx); push af. */
+static StrVec str_cmp(Backend *b, Quad *q, const char *rl) {
+    bool t1, t2;
+    StrVec out = str_get_oper(b, q->args[1], q->args[2], false, false,
+                              &t1, &t2);
+    sv_push(b, &out, s_runtime_call(b, rl));
+    sv_push(b, &out, "push af");
+    return out;
+}
+static StrVec emit_ltstr(Backend *b, Quad *q) { return str_cmp(b, q, RL_STRLT); }
+static StrVec emit_gtstr(Backend *b, Quad *q) { return str_cmp(b, q, RL_STRGT); }
+static StrVec emit_lestr(Backend *b, Quad *q) { return str_cmp(b, q, RL_STRLE); }
+static StrVec emit_gestr(Backend *b, Quad *q) { return str_cmp(b, q, RL_STRGE); }
+static StrVec emit_eqstr(Backend *b, Quad *q) { return str_cmp(b, q, RL_STREQ); }
+static StrVec emit_nestr(Backend *b, Quad *q) { return str_cmp(b, q, RL_STRNE); }
+
+/* String.lenstr (_str.py:201-211). */
+static StrVec emit_lenstr(Backend *b, Quad *q) {
+    bool t1;
+    StrVec out = str_get_oper(b, q->args[1], NULL, false, true, &t1, NULL);
+    if (t1) sv_push(b, &out, "push hl");
+    sv_push(b, &out, s_runtime_call(b, RL_STRLEN));
+    str_free_sequence(b, &out, t1, false);
+    sv_push(b, &out, "push hl");
+    return out;
+}
+
+/* String.loadstr (_str.py:213-222). */
+static StrVec emit_loadstr(Backend *b, Quad *q) {
+    bool temporal;
+    StrVec out = str_get_oper(b, q->args[1], NULL, false, true,
+                              &temporal, NULL);
+    if (!temporal) sv_push(b, &out, s_runtime_call(b, RL_LOADSTR));
+    sv_push(b, &out, "push hl");
+    return out;
+}
+
+/* String.storestr (_str.py:224-253). ins[1]=dest, ins[2]=src. Must
+ * prepend '#' to a non-indirect dest (need its & address). Immediate
+ * non-indirect dest is an InvalidIC (loud, no silent emit). */
+static StrVec emit_storestr(Backend *b, Quad *q) {
+    const char *op1 = q->args[0];
+    bool indirect = (op1[0] == '*');
+    if (indirect) op1++;
+    bool immediate = (op1[0] == '#');
+    if (immediate && !indirect) {
+        fprintf(stderr,
+            "zxbc: storestr does not allow immediate destination\n");
+        return sv_new();
+    }
+    char *dst;
+    if (!indirect) {
+        size_t l = strlen(op1);
+        dst = arena_alloc(b->arena, l + 2);
+        dst[0] = '#';
+        memcpy(dst + 1, op1, l + 1);
+    } else {
+        dst = arena_strdup(b->arena, op1);
+    }
+    bool t1, t2;
+    StrVec out = str_get_oper(b, dst, q->args[1], false, true, &t1, &t2);
+    if (!t2) sv_push(b, &out, s_runtime_call(b, RL_STORE_STR));
+    else     sv_push(b, &out, s_runtime_call(b, RL_STORE_STR2));
+    return out;
+}
+
+/* String.jzerostr (_str.py:255-281). */
+static StrVec emit_jzerostr(Backend *b, Quad *q) {
+    StrVec out = sv_new();
+    bool disposable = false;
+    const char *o1 = q->args[0];
+    if (o1[0] == '_') {
+        sv_pushf(b, &out, "ld hl, (%c)", o1[0]); /* _str.py:265 verbatim */
+    } else {
+        sv_push(b, &out, "pop hl");
+        sv_push(b, &out, "push hl");
+        disposable = true;
+    }
+    sv_push(b, &out, s_runtime_call(b, RL_STRLEN));
+    if (disposable) {
+        sv_push(b, &out, "ex (sp), hl");
+        sv_push(b, &out, s_runtime_call(b, RL_MEM_FREE));
+        sv_push(b, &out, "pop hl");
+    }
+    sv_push(b, &out, "ld a, h");
+    sv_push(b, &out, "or l");
+    sv_pushf(b, &out, "jp z, %s", q->args[1]);
+    return out;
+}
+
+/* String.retstr (_str.py:311-321). */
+static StrVec emit_retstr(Backend *b, Quad *q) {
+    bool tmp;
+    StrVec out = str_get_oper(b, q->args[0], NULL, false, true, &tmp, NULL);
+    if (!tmp) sv_push(b, &out, s_runtime_call(b, RL_LOADSTR));
+    sv_push(b, &out, "#pragma opt require hl");
+    sv_pushf(b, &out, "jp %s", q->args[1]);
+    return out;
+}
+
+/* String.paramstr (_str.py:323-337). get_oper's tmp is discarded; the
+ * keep/dup test is recomputed from ins[1][0] (Python :331). */
+static StrVec emit_paramstr(Backend *b, Quad *q) {
+    StrVec out = str_get_oper(b, q->args[0], NULL, false, false,
+                              NULL, NULL);
+    if (out.len > 0) out.len--;            /* output.pop() — drop reg flag */
+    const char *a0 = q->args[0];
+    bool dup = (a0[0] == '#' || a0[0] == '_');
+    if (dup) sv_push(b, &out, s_runtime_call(b, RL_LOADSTR));
+    sv_push(b, &out, "push hl");
+    return out;
+}
+
+/* String.fparamstr (_str.py:339-348): just the get_oper sequence. */
+static StrVec emit_fparamstr(Backend *b, Quad *q) {
+    return str_get_oper(b, q->args[0], NULL, false, false, NULL, NULL);
+}
+
 /* ---- _QUAD_TABLE dispatch (main.py:151-611) -------------------------- */
 static StrVec quad_emit(Backend *b, Quad *q) {
     const char *I = q->instr;
     if (strcmp(I, IC_END) == 0)    return emit_end(b, q);
     if (strcmp(I, IC_INLINE) == 0) return emit_inline(b, q);
+
+    /* S5.8bc — string _QUAD_TABLE rows (main.py:162,217-262,309,318,
+     * 345,355,387,427,465; icinstruction.py opcode strings). The String
+     * class is the verbatim _str.py port above. */
+    if (strcmp(I, "storestr")  == 0) return emit_storestr(b, q);
+    if (strcmp(I, "loadstr")   == 0) return emit_loadstr(b, q);
+    if (strcmp(I, "paramstr")  == 0) return emit_paramstr(b, q);
+    if (strcmp(I, "fparamstr") == 0) return emit_fparamstr(b, q);
+    if (strcmp(I, "retstr")    == 0) return emit_retstr(b, q);
+    if (strcmp(I, "addstr")    == 0) return emit_addstr(b, q);
+    if (strcmp(I, "eqstr")     == 0) return emit_eqstr(b, q);
+    if (strcmp(I, "nestr")     == 0) return emit_nestr(b, q);
+    if (strcmp(I, "ltstr")     == 0) return emit_ltstr(b, q);
+    if (strcmp(I, "gtstr")     == 0) return emit_gtstr(b, q);
+    if (strcmp(I, "lestr")     == 0) return emit_lestr(b, q);
+    if (strcmp(I, "gestr")     == 0) return emit_gestr(b, q);
+    if (strcmp(I, "lenstr")    == 0) return emit_lenstr(b, q);
+    if (strcmp(I, "jzerostr")  == 0) return emit_jzerostr(b, q);
 
     /* S5.3 — _QUAD_TABLE entries (main.py:151-611). store/load/add/sub/
      * mul/div dispatch by suffix to the Bits8/Bits16 emitter (the Python

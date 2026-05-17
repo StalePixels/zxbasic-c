@@ -36,6 +36,46 @@ void backend_common_reset(Backend *b) {
     vec_clear(b->at_end);
 }
 
+/* string_labels.reset() (src/api/string_labels.py:19-21): STRING_LABELS.clear().
+ * The store is arena-backed; clearing the count is the empty-dict analogue
+ * (entries' bytes/label outlive in the arena, like the other M2 resets). */
+void backend_string_labels_reset(Backend *b) {
+    b->string_labels.count = 0;
+}
+
+/* string_labels.add_string_label() (src/api/string_labels.py:24-31):
+ *   return STRING_LABELS[string]
+ * a defaultdict whose factory is tmp_labels.tmp_label. Exact-bytes fold
+ * (NUL-safe via len); a miss mints via backend_tmp_label (the SHARED
+ * monotonic counter) and appends in insertion order. */
+char *backend_add_string_label(Backend *b, const char *bytes, int len) {
+    StringLabels *sl = &b->string_labels;
+    for (int i = 0; i < sl->count; i++) {
+        if (sl->items[i].len == len &&
+            memcmp(sl->items[i].bytes, bytes, (size_t)len) == 0)
+            return sl->items[i].label;
+    }
+    if (sl->count == sl->cap) {
+        int nc = sl->cap ? sl->cap * 2 : 8;
+        StringLabelEntry *ni = arena_alloc(
+            b->arena, (size_t)nc * sizeof(StringLabelEntry));
+        if (sl->count > 0)
+            memcpy(ni, sl->items,
+                   (size_t)sl->count * sizeof(StringLabelEntry));
+        sl->items = ni;
+        sl->cap = nc;
+    }
+    char *kb = arena_alloc(b->arena, (size_t)len + 1);
+    memcpy(kb, bytes, (size_t)len);
+    kb[len] = '\0';
+    char *lbl = backend_tmp_label(b); /* the shared tmp_labels.tmp_label */
+    sl->items[sl->count].bytes = kb;
+    sl->items[sl->count].len = len;
+    sl->items[sl->count].label = lbl;
+    sl->count++;
+    return lbl;
+}
+
 void backend_init(Backend *b, Arena *arena) {
     b->arena = arena;
     vec_init(b->memory);
@@ -45,6 +85,12 @@ void backend_init(Backend *b, Arena *arena) {
     hashmap_init(&b->inits);
     hashmap_init(&b->tmp_labels);
     b->label_counter = 0;
+
+    /* string_labels.STRING_LABELS — empty store; cleared per-compile by
+     * backend_string_labels_reset() at the TranslatorVisitor.reset() site. */
+    b->string_labels.items = NULL;
+    b->string_labels.count = 0;
+    b->string_labels.cap = 0;
 
     backend_common_reset(b); /* common.init() */
     vec_clear(b->memory);    /* Backend.init(): self.MEMORY.clear() */
