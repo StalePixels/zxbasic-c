@@ -18,6 +18,14 @@
 #include <string.h>
 #include <stdlib.h>
 
+/* S5.7d — the param/local IX-relative IC wrappers are defined below their
+ * first callers (tr_visit_var :220ish, tr_emit_var_assign :246ish);
+ * forward-declare so those callers see prototypes. */
+static void tr_ic_pload(Translator *tr, const TypeInfo *type_,
+                        const char *t1, const char *offset);
+static void tr_ic_pstore(Translator *tr, const TypeInfo *type_,
+                         const char *offset, const char *t);
+
 /* TranslatorInstVisitor.emit (translator_inst_visitor.py:21-25):
  *   quad = Quad(*args); self.backend.MEMORY.append(quad) */
 static void tr_emit(Translator *tr, const char *instr, int nargs,
@@ -42,6 +50,30 @@ void translator_ic_inline(Translator *tr, const char *asm_code) {
 void tr_emit_quad(Translator *tr, const char *instr, int nargs,
                   const char *const *args) {
     tr_emit(tr, instr, nargs, args);
+}
+
+/* Python repr of a list[str]: "['a', 'b']" — Quad str()-coerces a list
+ * arg to exactly this (interface/quad.py:27). Single quotes, ", " sep;
+ * the S5.x element strings never contain quotes/backslashes (hex bytes,
+ * labels, "#lit"). Shared by var_translator.c and the S5.7d local-init
+ * IC wrappers so both produce byte-identical reprs. */
+char *tr_py_list_repr(Translator *tr, char **items, int n) {
+    size_t total = 3; /* "[" + "]" + NUL */
+    for (int i = 0; i < n; i++)
+        total += strlen(items[i]) + 2 /* quotes */ + (i ? 2 : 0) /* ", " */;
+    char *buf = arena_alloc(&tr->cs->arena, total);
+    size_t w = 0;
+    buf[w++] = '[';
+    for (int i = 0; i < n; i++) {
+        if (i) { buf[w++] = ','; buf[w++] = ' '; }
+        buf[w++] = '\'';
+        size_t l = strlen(items[i]);
+        memcpy(buf + w, items[i], l); w += l;
+        buf[w++] = '\'';
+    }
+    buf[w++] = ']';
+    buf[w] = '\0';
+    return buf;
 }
 
 /* ---- TranslatorInstVisitor.TSUFFIX (translator_inst_visitor.py:27-51) --
@@ -183,12 +215,21 @@ static AstNode *tr_visit_var(Visitor *v, AstNode *node) {
         return node;  /* global rvalue: no IC */
     }
 
-    /* SCOPE.parameter / SCOPE.local => ic_pload (translator.py:124-128).
-     * Not in the S5.3 slice. */
-    fprintf(stderr,
-            "zxbc: visit_VAR non-global scope (%d) not in S5.3 scope\n",
-            (int)node->u.id.scope);
-    (void)tr;
+    /* S5.7d — SCOPE.parameter / SCOPE.local => ic_pload (translator.py
+     * :122-128). p = "*" if byref else "". parameter => +offset, local
+     * => -offset. node.t is the destination temp; offset is the signed
+     * IX-relative stack slot the offset model assigned. */
+    {
+        const char *pfx = node->u.id.byref ? "*" : "";
+        long off = node->u.id.offset;
+        if (node->u.id.scope == SCOPE_local) off = -off;
+        char ofs[24];
+        snprintf(ofs, sizeof(ofs), "%s%ld", pfx, off);
+        const char *dst = (node->t && node->t[0]) ? node->t
+                        : compiler_new_temp(tr->cs);
+        node->t = (char *)dst;
+        tr_ic_pload(tr, node->type_, dst, ofs);
+    }
     return node;
 }
 
@@ -202,10 +243,16 @@ static void tr_emit_var_assign(Translator *tr, AstNode *var, const char *t) {
         tr_ic_store(tr, var->type_, var->u.id.mangled, t);
         return;
     }
-    /* parameter/local pstore — S5.5+. Loud (not silent) outside S5.3. */
-    fprintf(stderr,
-            "zxbc: emit_var_assign non-global scope (%d) not in S5.3 scope\n",
-            (int)var->u.id.scope);
+    /* S5.7d — parameter/local pstore (translator.py:989-992). p = "*" if
+     * byref else "". parameter => +offset, local => -offset. */
+    {
+        const char *pfx = var->u.id.byref ? "*" : "";
+        long off = var->u.id.offset;
+        if (var->u.id.scope == SCOPE_local) off = -off;
+        char ofs[24];
+        snprintf(ofs, sizeof(ofs), "%s%ld", pfx, off);
+        tr_ic_pstore(tr, var->type_, ofs, t);
+    }
 }
 
 /* visit_LET (translator.py:83-88). children[0]=VAR lvalue, [1]=expr.
@@ -417,17 +464,77 @@ static void tr_ic_load(Translator *tr, const TypeInfo *type_,
     const char *args[2] = { t1, t2 };
     tr_emit_quad(tr, base, 2, args);
 }
-/* ic_paddr / ic_pload (translator_inst_visitor.py:202-215) are the
- * inside-function parameter/local address+load surface. Their Python
- * call sites (visit_ARGUMENT's byref-parameter/byref-local arms
- * translator.py:238-245, and the dynamic-`$`-string byval heap-dup
- * :216-222) all key off node.value.offset — the inside-function stack
- * model S5.7b explicitly DEFERS (loud stderr residue, never wrong code).
- * The C ic_paddr/ic_pload wrappers therefore land with their first real
- * caller (S5.7c local arrays / the offset model), not here, to avoid
- * dead code. The corresponding backend `_paddr`/`_pload*` emitters ARE
- * shipped now (dispatch-reachable, exercised once the offset model
- * lands) so the ABI is complete from the backend side.
+/* S5.7d — ic_paddr / ic_pload / ic_pstore (translator_inst_visitor.py
+ * :201-202, :214-215, :218-219). The inside-function parameter/local
+ * IX-relative address+load+store surface. Now landed with their first
+ * real callers: the offset model + visit_VAR/emit_var_assign param/local
+ * branches (the corpus's body-read/write fixtures). Backend _paddr /
+ * _pload* / _pstore* are S5.7c-shipped & dispatch-reachable. `offset` is
+ * the already-signed string ("*"-prefixed for byref): param => +offset,
+ * local => -offset (translator.py:124-128). */
+static void tr_ic_pload(Translator *tr, const TypeInfo *type_,
+                        const char *t1, const char *offset) {
+    const char *suf = tr_tsuffix(type_);
+    char base[16];
+    snprintf(base, sizeof(base), "pload%s", suf);
+    const char *args[2] = { t1, offset };
+    tr_emit_quad(tr, base, 2, args);
+}
+static void tr_ic_pstore(Translator *tr, const TypeInfo *type_,
+                         const char *offset, const char *t) {
+    const char *suf = tr_tsuffix(type_);
+    char base[16];
+    snprintf(base, sizeof(base), "pstore%s", suf);
+    const char *args[2] = { offset, t };
+    tr_emit_quad(tr, base, 2, args);
+}
+/* ic_paddr (translator_inst_visitor.py:201-202): emit("paddr", t1, t2).
+ * S5.7d wires its first real caller — visit_ARGUMENT's byref
+ * parameter/local arms (translator.py:240-245), a clean offset-model
+ * sibling consumer. Python passes (offset:int, t); the offset is
+ * str()-coerced by Quad. backend _paddr is S5.7c-shipped. */
+static void tr_ic_paddr(Translator *tr, long offset, const char *t) {
+    char ofs[24];
+    snprintf(ofs, sizeof(ofs), "%ld", offset);
+    const char *args[2] = { ofs, t };
+    tr_emit_quad(tr, "paddr", 2, args);
+}
+
+/* ic_larrd / ic_lvard / ic_lvarx (translator_inst_visitor.py:148-149,
+ * :166-170). The FunctionTranslator :58-116 local-init walk's emitters.
+ * Backend _larrd/_lvard/_lvarx are S5.7c-shipped & dispatch-reachable.
+ * The list-shaped args are str()-coerced by Quad to a Python list repr —
+ * reuse var_translator.c's py_list_repr via the public emitter, building
+ * the repr identically. */
+static void tr_ic_lvard(Translator *tr, int offset, char **data, int n) {
+    char off[16];
+    snprintf(off, sizeof(off), "%d", offset);
+    const char *args[2] = { off, tr_py_list_repr(tr, data, n) };
+    tr_emit_quad(tr, "lvard", 2, args);
+}
+static void tr_ic_lvarx(Translator *tr, const TypeInfo *type_, int offset,
+                        char **data, int n) {
+    char off[16];
+    snprintf(off, sizeof(off), "%d", offset);
+    const char *args[3] = { off, tr_tsuffix(type_),
+                            tr_py_list_repr(tr, data, n) };
+    tr_emit_quad(tr, "lvarx", 3, args);
+}
+/* ic_larrd(offset, arg1, size, arg2, bound_ptrs) — arg1=idx-table list,
+ * arg2=init-image list, bound_ptrs=[lbound,ubound] str list. */
+static void tr_ic_larrd(Translator *tr, int offset, char **idx, int idxn,
+                        long size, char **init, int initn,
+                        char **bptrs, int bptrn) {
+    char off[16], sz[16];
+    snprintf(off, sizeof(off), "%d", offset);
+    snprintf(sz, sizeof(sz), "%ld", size);
+    const char *args[5] = { off, tr_py_list_repr(tr, idx, idxn), sz,
+                            tr_py_list_repr(tr, init, initn),
+                            tr_py_list_repr(tr, bptrs, bptrn) };
+    tr_emit_quad(tr, "larrd", 5, args);
+}
+
+/* runtime_call (translator_visitor.py:119-123): ic_call(label,num); the
  *
  * runtime_call (translator_visitor.py:119-123): ic_call(label,num); the
  * label->REQUIRES module is wired by the backend's s_runtime_call when the
@@ -636,13 +743,48 @@ static AstNode *tr_visit_argument(Visitor *v, AstNode *node) {
         return node;
     }
 
-    /* parameter/local byref, or byref array (`:250-263` ADDRESS UNARY) —
-     * all need the deferred inside-function offset / ADDRESS lowering.
-     * Loud residue; do NOT emit wrong code. */
+    /* S5.7d — byref parameter / local arm (translator.py:238-245). The
+     * offset model now feeds value.offset. Non-array only (ARRAYLOAD /
+     * ARRAYACCESS @array ADDRESS is the S5.8 residue, still loud below).
+     * Python: t = node.t if node.t[0] != "_" else optemps.new_t().
+     * parameter & not byref => offset adj = 1 for (u)byte else 0,
+     *   ic_paddr(value.offset + adj, t); parameter & byref =>
+     *   ic_pload(PTR_TYPE, t, str(value.offset)); local =>
+     *   ic_paddr(-value.offset, t). Then ic_param(uinteger, t). */
+    if (value && value->tag == AST_ID &&
+        (value->u.id.scope == SCOPE_parameter ||
+         value->u.id.scope == SCOPE_local)) {
+        const char *nt = node->t;
+        const char *t = (nt && nt[0] && nt[0] != '_')
+                       ? nt : compiler_new_temp(tr->cs);
+        if (value->u.id.scope == SCOPE_parameter) {
+            if (!value->u.id.byref) {
+                long adj = 0;
+                const TypeInfo *vt = value->type_;
+                if (vt) {
+                    const TypeInfo *f = vt->final_type ? vt->final_type : vt;
+                    if (f->basic_type == TYPE_byte ||
+                        f->basic_type == TYPE_ubyte)
+                        adj = 1;
+                }
+                tr_ic_paddr(tr, (long)value->u.id.offset + adj, t);
+            } else {
+                char ofs[24];
+                snprintf(ofs, sizeof(ofs), "%d", value->u.id.offset);
+                tr_ic_pload(tr, uint_t, t, ofs);
+            }
+        } else { /* SCOPE_local */
+            tr_ic_paddr(tr, -(long)value->u.id.offset, t);
+        }
+        tr_ic_param(tr, uint_t, t);
+        return node;
+    }
+
+    /* byref array (`:250-263` ADDRESS UNARY) — needs the @array ADDRESS
+     * lowering (S5.8). Loud residue; do NOT emit wrong code. */
     fprintf(stderr,
-        "zxbc: visit_ARGUMENT byref non-global (scope %d) — inside-"
-        "function offset / @array ADDRESS is S5.7c/S5.8 residue\n",
-        (value && value->tag == AST_ID) ? (int)value->u.id.scope : -1);
+        "zxbc: visit_ARGUMENT byref array — @array ADDRESS is S5.8 "
+        "residue\n");
     if (value) visitor_visit(v, value);
     return node;
 }
@@ -1330,8 +1472,53 @@ void translator_visit(Translator *tr, AstNode *ast) {
  *           local strings/arrays.
  *   :166-169 fastcall -> ic_leave("__fastcall__"); else
  *            ic_leave(params.size)
- *   :171-172 bound_tables flush -> OUT OF SCOPE (S5.7c local arrays).
+ *   :171-172 bound_tables flush -> ic_vard(label, data) (S5.7d).
  */
+
+/* SymbolBOUND geometry: a BOUND child is [lower, upper] (bound.py:33-37);
+ * the S5.7d numeric corpus uses NUMBER / CONSTEXPR(NUMBER) literals.
+ * Mirrors var_translator.c's vt_bound_val (kept local to avoid a
+ * cross-TU dependency churn). */
+static long tr_bound_val(AstNode *n) {
+    if (!n) return 0;
+    if (n->tag == AST_NUMBER) return (long)n->u.number.value;
+    if (n->tag == AST_CONSTEXPR && n->child_count > 0)
+        return tr_bound_val(n->children[0]);
+    return 0;
+}
+
+/* Translator.traverse_const, NUMBER/CONST leaf (translator_visitor.py
+ * :177-184) — the scalar-default CONSTEXPR case; corpus leaves are
+ * NUMBER/CONST, same shape as var_translator.c's vt_traverse_const. */
+static const char *tr_traverse_const(Translator *tr, AstNode *node) {
+    if (!node) return "";
+    if (node->tag == AST_CONSTEXPR && node->child_count > 0)
+        return tr_traverse_const(tr, node->children[0]);
+    if (node->tag == AST_NUMBER) {
+        if (node->t == NULL) {
+            double value = node->u.number.value;
+            char b[64];
+            if (value == (double)(int64_t)value)
+                snprintf(b, sizeof(b), "%lld", (long long)(int64_t)value);
+            else
+                snprintf(b, sizeof(b), "%g", value);
+            node->t = arena_strdup(&tr->cs->arena, b);
+        }
+        return node->t ? node->t : "";
+    }
+    if (node->tag == AST_ID) /* CONST entry */
+        return node->t ? node->t : "";
+    return node->t ? node->t : "";
+}
+
+/* ic_vard (translator_inst_visitor.py:244-245): emit("vard", name, data).
+ * The :171-172 bound-table flush. data is a Python list -> list repr. */
+static void tr_ic_vard(Translator *tr, const char *name,
+                       char **data, int n) {
+    const char *args[2] = { name, tr_py_list_repr(tr, data, n) };
+    tr_emit_quad(tr, "vard", 2, args);
+}
+
 static void tr_visit_function(Translator *tr, AstNode *fdecl) {
     AstNode *entry = fdecl->child_count > 0 ? fdecl->children[0] : NULL;
     AstNode *body  = fdecl->child_count > 2 ? fdecl->children[2] : NULL;
@@ -1360,8 +1547,148 @@ static void tr_visit_function(Translator *tr, AstNode *fdecl) {
         tr_ic_enter(tr, ls);
     }
 
-    /* :58-116 local-var/param init walk — OUT OF SCOPE for the core
-     * no-param no-local path (empty in Python too). S5.7b/c. */
+    /* :58-116 local-var/param/local-array init walk (function_translator
+     * .py:58-116). Iterate the body scope's insertion-ordered entries
+     * (Python node.local_symbol_table.values()). Skip const + parameter
+     * (caller pushed params). Local array => ic_larrd(offset, idx-table,
+     * size, init-image, bound_ptrs) with the :90-94 always-`00` high-byte
+     * quirk reproduced VERBATIM. Scalar local with a non-zero default =>
+     * ic_lvarx (CONSTEXPR) / ic_lvard (literal). bound_tables (the
+     * LBOUND/UBOUND tables) are flushed after the body via ic_vard. */
+    char *bound_tables[16][2]; /* {label, list-repr} */
+    char *bt_data[16][64];
+    int bt_n[16];
+    int bound_tables_n = 0;
+    for (int li = 0; li < entry->u.id.local_entries_count; li++) {
+        AstNode *lv = entry->u.id.local_entries[li];
+        if (!lv) continue;
+        SymbolClass c = lv->u.id.class_;
+        /* :65-66 skip const OR parameter */
+        if (c == CLASS_const || lv->u.id.scope == SCOPE_parameter)
+            continue;
+
+        if (c == CLASS_array && lv->u.id.scope == SCOPE_local) {
+            /* :68-100 local-array init. */
+            const char *mg = lv->u.id.mangled ? lv->u.id.mangled : "";
+            size_t mgl = strlen(mg);
+            char *lbl_lb = arena_alloc(&tr->cs->arena, mgl + 12);
+            snprintf(lbl_lb, mgl + 12, "%s.__LBOUND__", mg);
+            char *lbl_ub = arena_alloc(&tr->cs->arena, mgl + 12);
+            snprintf(lbl_ub, mgl + 12, "%s.__UBOUND__", mg);
+
+            bool lbound_needed = !lv->u.id.is_zero_based &&
+                (lv->u.id.is_dynamically_accessed || lv->u.id.lbound_used);
+            char *bptrs[2];
+            bptrs[0] = lbound_needed ? lbl_lb : (char *)"0";
+            bptrs[1] = lv->u.id.ubound_used ? lbl_ub : (char *)"0";
+
+            AstNode *bl = lv->u.id.arr_boundlist;
+            int ndims = bl ? bl->child_count : 0;
+
+            if (lbound_needed && bound_tables_n < 16) {
+                int k = 0;
+                for (int i = 0; i < ndims && k < 64; i++) {
+                    AstNode *bd = bl->children[i];
+                    long lo = tr_bound_val(bd && bd->child_count > 0
+                                               ? bd->children[0] : NULL);
+                    char b[8];
+                    snprintf(b, sizeof(b), "%04X", (unsigned)(lo & 0xFFFF));
+                    bt_data[bound_tables_n][k++] = arena_strdup(&tr->cs->arena, b);
+                }
+                bound_tables[bound_tables_n][0] = lbl_lb;
+                bt_n[bound_tables_n] = k;
+                bound_tables_n++;
+            }
+            if (lv->u.id.ubound_used && bound_tables_n < 16) {
+                int k = 0;
+                for (int i = 0; i < ndims && k < 64; i++) {
+                    AstNode *bd = bl->children[i];
+                    long hi = tr_bound_val(bd && bd->child_count > 1
+                                               ? bd->children[1] : NULL);
+                    char b[8];
+                    snprintf(b, sizeof(b), "%04X", (unsigned)(hi & 0xFFFF));
+                    bt_data[bound_tables_n][k++] = arena_strdup(&tr->cs->arena, b);
+                }
+                bound_tables[bound_tables_n][0] = lbl_ub;
+                bt_n[bound_tables_n] = k;
+                bound_tables_n++;
+            }
+
+            /* :90-94 idx table: l = [len(bounds)-1] + [b.count for
+             * bounds[1:]]; then per x: q.append("%02X"%(x&0xFF));
+             * q.append("%02X"%((x&0xFF)>>8))  — the high byte is a value
+             * already masked to 8 bits then >>8, i.e. ALWAYS 0x00. This
+             * is an upstream Boriel quirk; reproduce it, do NOT "fix". */
+            char *q[130];
+            int qn = 0;
+            long lvec[64];
+            int lvn = 0;
+            lvec[lvn++] = (long)ndims - 1;
+            for (int i = 1; i < ndims && lvn < 64; i++) {
+                AstNode *bd = bl->children[i];
+                long lo = tr_bound_val(bd && bd->child_count > 0
+                                           ? bd->children[0] : NULL);
+                long hi = tr_bound_val(bd && bd->child_count > 1
+                                           ? bd->children[1] : NULL);
+                lvec[lvn++] = (hi - lo + 1);     /* bound.count */
+            }
+            for (int i = 0; i < lvn && qn < 128; i++) {
+                long x = lvec[i];
+                char b[8];
+                snprintf(b, sizeof(b), "%02X", (unsigned)(x & 0xFF));
+                q[qn++] = arena_strdup(&tr->cs->arena, b);
+                snprintf(b, sizeof(b), "%02X",
+                         (unsigned)(((unsigned)(x & 0xFF)) >> 8)); /* ==00 */
+                q[qn++] = arena_strdup(&tr->cs->arena, b);
+            }
+            { /* q.append("%02X" % type_.size) */
+                char b[8];
+                snprintf(b, sizeof(b), "%02X",
+                         (unsigned)(type_size(lv->type_) & 0xFF));
+                q[qn++] = arena_strdup(&tr->cs->arena, b);
+            }
+
+            /* r = array_default_value(type_, default_value) if any. */
+            char *r[1024];
+            int rn = 0;
+            if (lv->u.id.arr_init != NULL)
+                rn = tr_array_default_value(tr, lv->type_,
+                                            lv->u.id.arr_init, r, 0, 1024);
+
+            /* local_var.size = count * elem (arrayref.py:39-42). */
+            long count = 1;
+            for (int i = 0; i < ndims; i++) {
+                AstNode *bd = bl->children[i];
+                long lo = tr_bound_val(bd && bd->child_count > 0
+                                           ? bd->children[0] : NULL);
+                long hi = tr_bound_val(bd && bd->child_count > 1
+                                           ? bd->children[1] : NULL);
+                count *= (hi - lo + 1);
+            }
+            long asize = count * type_size(lv->type_);
+
+            tr_ic_larrd(tr, lv->u.id.offset, q, qn, asize,
+                        r, rn, bptrs, 2);
+        } else {
+            /* :102-115 scalar-local: only if token != FUNCTION and
+             * default_value not None and != 0. The C ID carries the
+             * initializer as default_value_expr (a make_typecast of a
+             * static expr). CONSTEXPR => ic_lvarx, literal => ic_lvard. */
+            AstNode *dv = lv->u.id.default_value_expr;
+            if (c != CLASS_function && c != CLASS_sub && dv != NULL &&
+                !(dv->tag == AST_NUMBER && dv->u.number.value == 0.0)) {
+                if (dv->tag == AST_CONSTEXPR) {
+                    char *one[1];
+                    one[0] = (char *)tr_traverse_const(tr, dv);
+                    tr_ic_lvarx(tr, lv->type_, lv->u.id.offset, one, 1);
+                } else {
+                    char *data[8];
+                    int dn = tr_default_value(tr, lv->type_, dv, data, 8);
+                    tr_ic_lvard(tr, lv->u.id.offset, data, dn);
+                }
+            }
+        }
+    }
 
     /* :117-118 body emission — walk each body sentence through the
      * shared handler table (visit_LET/visit_RETURN/visit_CALL/... fire
@@ -1396,7 +1723,11 @@ static void tr_visit_function(Translator *tr, AstNode *fdecl) {
         tr_ic_leave(tr, ps);
     }
 
-    /* :171-172 bound_tables flush — OUT OF SCOPE (S5.7c). */
+    /* :171-172 bound_tables flush: for bt in bound_tables:
+     * ic_vard(bt.label, bt.data). Emitted AFTER ic_leave, exactly as
+     * Python's generator yields them last. */
+    for (int i = 0; i < bound_tables_n; i++)
+        tr_ic_vard(tr, bound_tables[i][0], bt_data[i], bt_n[i]);
 }
 
 void translator_function_start(Translator *tr) {

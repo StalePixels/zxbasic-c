@@ -33,26 +33,11 @@
 #include <string.h>
 #include <stdlib.h>
 
-/* Python repr of a list[str]: "['a', 'b']" (single quotes, ", " sep, the
- * S5.3 element strings never contain quotes/backslashes — hex bytes,
- * "#lit", "##expr", "(expr) & 0xFFFF"). Arena-owned result. */
+/* Python repr of a list[str]: "['a', 'b']" — now the shared
+ * tr_py_list_repr (translator.c) so the S5.7d local-init IC wrappers and
+ * this S5.6 data-image path produce byte-identical reprs. */
 static char *py_list_repr(Translator *tr, char **items, int n) {
-    size_t total = 3; /* "[" + "]" + NUL */
-    for (int i = 0; i < n; i++)
-        total += strlen(items[i]) + 2 /* quotes */ + (i ? 2 : 0) /* ", " */;
-    char *buf = arena_alloc(&tr->cs->arena, total);
-    size_t w = 0;
-    buf[w++] = '[';
-    for (int i = 0; i < n; i++) {
-        if (i) { buf[w++] = ','; buf[w++] = ' '; }
-        buf[w++] = '\'';
-        size_t l = strlen(items[i]);
-        memcpy(buf + w, items[i], l); w += l;
-        buf[w++] = '\'';
-    }
-    buf[w++] = ']';
-    buf[w] = '\0';
-    return buf;
+    return tr_py_list_repr(tr, items, n);
 }
 
 /* ic_var (translator_inst_visitor.py:241-242): emit("var", name, size_) */
@@ -369,13 +354,13 @@ static void vt_ic_data(Translator *tr, const TypeInfo *type_,
  * The Python `values` nesting is the ARRAYINIT tree: an ARRAYINIT node is
  * the list (recurse its children as rows); any other node is a scalar
  * leaf (-> default_value). Appends arena-owned 2-hex strings to *out. */
-static int vt_array_default_value(Translator *tr, const TypeInfo *type_,
+int tr_array_default_value(Translator *tr, const TypeInfo *type_,
                                   AstNode *values, char **out,
                                   int out_off, int out_cap) {
     if (values && values->tag == AST_ARRAYINIT) {
         int off = out_off;
         for (int i = 0; i < values->child_count; i++)
-            off = vt_array_default_value(tr, type_, values->children[i],
+            off = tr_array_default_value(tr, type_, values->children[i],
                                          out, off, out_cap);
         return off;
     }
@@ -522,7 +507,7 @@ static void vt_visit_arraydecl(Translator *tr, AstNode *node) {
         const char *addr = vt_traverse_const_expr(tr, addr_expr);
         vt_ic_deflabel(tr, data_label, addr);
     } else if (init_node != NULL) {
-        arr_n = vt_array_default_value(tr, node->type_, init_node,
+        arr_n = tr_array_default_value(tr, node->type_, init_node,
                                        arr_data, 0, 1024);
     } else {
         for (long i = 0; i < size && arr_n < 1024; i++)

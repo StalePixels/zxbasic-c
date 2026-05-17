@@ -186,6 +186,38 @@ struct AstNode {
             AstNode *body;       /* function body (for FUNCDECL) */
             int local_size;      /* bytes for local vars */
             int param_size;      /* bytes for parameters */
+
+            /* S5.7d — inside-function stack-frame offset model.
+             *
+             * `offset` is the SymbolRef.offset (symbolref.py:28 / varref.py
+             * :22 / arrayref.py:27) — the +/- IX-relative stack slot of a
+             * parameter or local. For a PARAMETER it is the cumulative
+             * PARAMLIST offset (parser_assign_param_offsets, copied onto
+             * the body-scope symbol at scope entry). For a LOCAL var/array
+             * it is written by symboltable_compute_offsets at scope-exit
+             * (port of symboltable.py:235-266). `offset_set` distinguishes
+             * a real 0 offset from "never assigned". */
+            int offset;
+            bool offset_set;
+            /* The local-array geometry the FunctionTranslator :58-116 walk
+             * and arrayref.py size/memsize need. Populated for a CLASS_array
+             * local at its DIM site (parser) so the translator can run the
+             * :68-100 array-init branch after the parse-time scope pop.
+             * NULL boundlist == not an array / no bounds. */
+            AstNode *arr_boundlist;   /* AST_BOUNDLIST (the DIM bounds) */
+            AstNode *arr_init;        /* AST_ARRAYINIT / expr init (or NULL) */
+            bool is_zero_based;       /* arrayref.py:89-91 (all lower==0) */
+            bool lbound_used;         /* arrayref.py:23 (LBOUND ref'd) */
+            bool ubound_used;         /* arrayref.py:24 (UBOUND ref'd) */
+            bool is_dynamically_accessed; /* arrayref.py:29 */
+
+            /* FUNCDECL-only: the function body's local Scope insertion-
+             * ordered entry list, captured BEFORE the parse-time scope pop
+             * (Python func.ref.local_symbol_table, zxbparser.py:2910). The
+             * FunctionTranslator :58-116 walk and compute_offsets iterate
+             * this. NULL until parse_sub_or_func_decl populates it. */
+            struct AstNode **local_entries;
+            int local_entries_count;
         } id;
 
         /* AST_BUILTIN */
@@ -284,6 +316,16 @@ typedef struct Scope_ {
     HashMap symbols;         /* name -> AstNode* (ID nodes) */
     struct Scope_ *parent;
     int level;               /* 0 = global */
+    /* S5.7d — per-scope insertion-ordered entry list, mirroring Python's
+     * Scope.symbols OrderedDict (scope.py:43-44). The HashMap above is
+     * unordered; compute_offsets needs the OrderedDict iteration order
+     * BEFORE its stable entry_size sort (symboltable.py:250). Every
+     * symboltable_declare* pushes here at the same single insert point it
+     * pushes cs->sym_entries_ordered (symboltable.py:116). Arena-backed
+     * growable; never freed (arena owns it). */
+    struct AstNode **ordered;
+    int ordered_count;
+    int ordered_cap;
 } Scope_;
 
 struct SymbolTable {
@@ -304,6 +346,11 @@ SymbolTable *symboltable_new(CompilerState *cs);
 /* Scope management */
 void symboltable_enter_scope(SymbolTable *st, CompilerState *cs);
 void symboltable_exit_scope(SymbolTable *st);
+/* S5.7d — compute_offsets (symboltable.py:235-266): assigns per-local
+ * +/- IX offsets over the scope's insertion-ordered entries (stable
+ * entry_size sort) and returns the total local frame size (locals_size,
+ * the ic_enter operand). Called at function scope-exit before the pop. */
+int symboltable_compute_offsets(SymbolTable *st, Scope_ *scope);
 
 /* Symbol operations */
 AstNode *symboltable_declare(SymbolTable *st, CompilerState *cs,

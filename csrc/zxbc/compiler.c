@@ -44,11 +44,101 @@ void symboltable_enter_scope(SymbolTable *st, CompilerState *cs) {
     st->current_scope = scope;
 }
 
+/* S5.7d — append an ID to the current scope's insertion-ordered list
+ * (mirrors Python self.current_scope[id] = entry into the OrderedDict,
+ * scope.py:43-44). Arena-doubling growth; old buffers stay in the arena
+ * (freed wholesale at compile end) — the project's arena discipline. */
+static void scope_push_ordered(SymbolTable *st, Scope_ *scope, AstNode *node) {
+    if (scope->ordered_count >= scope->ordered_cap) {
+        int ncap = scope->ordered_cap ? scope->ordered_cap * 2 : 8;
+        AstNode **nb = arena_alloc(st->arena, (size_t)ncap * sizeof(AstNode *));
+        if (scope->ordered_count > 0)
+            memcpy(nb, scope->ordered,
+                   (size_t)scope->ordered_count * sizeof(AstNode *));
+        scope->ordered = nb;
+        scope->ordered_cap = ncap;
+    }
+    scope->ordered[scope->ordered_count++] = node;
+}
+
 void symboltable_exit_scope(SymbolTable *st) {
     if (st->current_scope->parent) {
         /* Note: we don't free the scope — arena handles that */
         st->current_scope = st->current_scope->parent;
     }
+}
+
+/* S5.7d — SymbolTable.compute_offsets (symboltable.py:235-266), verbatim.
+ *
+ * entry_size: global|addr-set|const -> 0; non-array -> var size; array ->
+ * memsize. The list is the scope's INSERTION order, then a STABLE sort
+ * ascending by entry_size (Python sorted(..., key=entry_size) over the
+ * OrderedDict — equal keys keep insertion order). Running `offset`:
+ * scalar-local => offset += sz; ref.offset = offset; array-local =>
+ * ref.offset = sz + offset; offset = ref.offset. function/label/type and
+ * params are skipped (params' offset is the PARAMLIST cumulative, set at
+ * scope entry). Returns total frame bytes (== locals_size, the ic_enter
+ * operand). PTR_TYPE size 2, PARAM_ALIGN 2 on zx48k (parser.c:2451-2452).
+ *
+ * varref.py:44-57 size: scalar local => raw type_.size (no even-round);
+ *   parameter byref => PTR(2), byval => ts + ts%PARAM_ALIGN.
+ * arrayref.py:39-59: array size = count*elem (param => PTR), memsize =
+ *   ptr_size*(3 + ubound_used). compute_offsets uses memsize for the slot.
+ */
+static int s_entry_size(SymbolTable *st, AstNode *e) {
+    if (e->u.id.scope == SCOPE_global || e->u.id.addr_expr != NULL ||
+        e->u.id.addr_set || e->u.id.class_ == CLASS_const)
+        return 0;
+    if (e->u.id.class_ != CLASS_array) {
+        if (e->type_ == NULL) return 0;             /* varref.py:46-47 */
+        if (e->u.id.scope == SCOPE_parameter) {
+            if (e->u.id.byref) return 2;            /* PTR_TYPE size */
+            int ts = type_size(e->type_);
+            return ts + (ts % 2);                   /* even (Float/Byte) */
+        }
+        return type_size(e->type_);                 /* scalar local: raw */
+    }
+    /* array: memsize = PTR(2) * (3 + ubound_used) (arrayref.py:230-233) */
+    (void)st;
+    return 2 * (3 + (e->u.id.ubound_used ? 1 : 0));
+}
+
+int symboltable_compute_offsets(SymbolTable *st, Scope_ *scope) {
+    int n = scope->ordered_count;
+    /* Stable sort ascending by entry_size (insertion order tie-break).
+     * Insertion sort keeps it stable and n is tiny (locals per function). */
+    AstNode **a = arena_alloc(st->arena, (size_t)(n ? n : 1) * sizeof(AstNode *));
+    for (int i = 0; i < n; i++) a[i] = scope->ordered[i];
+    for (int i = 1; i < n; i++) {
+        AstNode *key = a[i];
+        int ksz = s_entry_size(st, key);
+        int j = i - 1;
+        while (j >= 0 && s_entry_size(st, a[j]) > ksz) {
+            a[j + 1] = a[j];
+            j--;
+        }
+        a[j + 1] = key;
+    }
+
+    int offset = 0;
+    for (int i = 0; i < n; i++) {
+        AstNode *e = a[i];
+        SymbolClass c = e->u.id.class_;
+        if (c == CLASS_function || c == CLASS_sub || c == CLASS_label ||
+            c == CLASS_type)
+            continue;
+        if (c == CLASS_var && e->u.id.scope == SCOPE_local) {
+            offset += s_entry_size(st, e);
+            e->u.id.offset = offset;
+            e->u.id.offset_set = true;
+        }
+        if (c == CLASS_array && e->u.id.scope == SCOPE_local) {
+            e->u.id.offset = s_entry_size(st, e) + offset;
+            e->u.id.offset_set = true;
+            offset = e->u.id.offset;
+        }
+    }
+    return offset;
 }
 
 AstNode *symboltable_declare(SymbolTable *st, CompilerState *cs,
@@ -85,6 +175,7 @@ AstNode *symboltable_declare(SymbolTable *st, CompilerState *cs,
      * entry once, in first-textual-appearance order, regardless of class
      * or O-level — data_ast is filtered from this later (codegen.c). */
     vec_push(cs->sym_entries_ordered, node);
+    scope_push_ordered(st, st->current_scope, node);  /* S5.7d per-scope */
     return node;
 }
 
@@ -194,6 +285,7 @@ AstNode *symboltable_declare_variable(SymbolTable *st, CompilerState *cs,
 
     hashmap_set(&st->current_scope->symbols, base_name, node);
     vec_push(cs->sym_entries_ordered, node);  /* N1 (symboltable.py:116) */
+    scope_push_ordered(st, st->current_scope, node);  /* S5.7d per-scope */
     return node;
 }
 
@@ -240,6 +332,7 @@ AstNode *symboltable_declare_param(SymbolTable *st, CompilerState *cs,
 
     hashmap_set(&st->current_scope->symbols, name, node);
     vec_push(cs->sym_entries_ordered, node);  /* N1 (symboltable.py:116) */
+    scope_push_ordered(st, st->current_scope, node);  /* S5.7d per-scope */
     return node;
 }
 
@@ -276,6 +369,7 @@ AstNode *symboltable_declare_array(SymbolTable *st, CompilerState *cs,
 
     hashmap_set(&st->current_scope->symbols, name, node);
     vec_push(cs->sym_entries_ordered, node);  /* N1 (symboltable.py:116) */
+    scope_push_ordered(st, st->current_scope, node);  /* S5.7d per-scope */
     return node;
 }
 

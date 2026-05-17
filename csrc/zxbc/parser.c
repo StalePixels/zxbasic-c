@@ -2196,6 +2196,34 @@ static AstNode *parse_dim_statement(Parser *p) {
         if (arr_at_expr) ast_add_child(p->cs, decl, arr_at_expr);
         if (init) ast_add_child(p->cs, decl, init);
         decl->type_ = type;
+        /* S5.7d — a LOCAL array (inside a SUB/FUNCTION) is allocated on
+         * the stack frame; the FunctionTranslator :58-116 walk needs its
+         * geometry (bounds + init image + is_zero_based). The global
+         * VarTranslator path keeps reading these off the ARRAYDECL node
+         * (unchanged); stamp them on the ID only for the local case so
+         * compute_offsets' memsize (arrayref.py:230-233) and the
+         * :68-100 ic_larrd branch can run after the parse-time scope pop.
+         * is_dynamically_accessed / lbound_used / ubound_used stay false
+         * for the zero-based numeric corpus, exactly as the global path
+         * (var_translator.c:459-463). */
+        if (id_node->u.id.scope == SCOPE_local) {
+            id_node->u.id.arr_boundlist = bounds;
+            id_node->u.id.arr_init = init;
+            bool zb = true;
+            for (int bi = 0; bi < bounds->child_count; bi++) {
+                AstNode *bd = bounds->children[bi];
+                AstNode *lo = (bd && bd->child_count > 0) ? bd->children[0]
+                                                          : NULL;
+                long lv = 0;
+                if (lo && lo->tag == AST_NUMBER) lv = (long)lo->u.number.value;
+                else if (lo && lo->tag == AST_CONSTEXPR &&
+                         lo->child_count > 0 &&
+                         lo->children[0]->tag == AST_NUMBER)
+                    lv = (long)lo->children[0]->u.number.value;
+                if (lv != 0) { zb = false; break; }
+            }
+            id_node->u.id.is_zero_based = zb;
+        }
         return decl;
     }
 
@@ -2733,6 +2761,24 @@ static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function, bool is_decl
         if (sym) {
             sym->type_ = ptype;
             sym->u.id.declared = true;
+            /* S5.7d — Python's declare_param sets entry.scope =
+             * SCOPE.parameter (symboltable.py:652). The C generic
+             * symboltable_declare stamps SCOPE_local (level>0); correct it
+             * so compute_offsets skips it (offset comes from the PARAMLIST,
+             * not the local frame) and the :58-116 walk's param-skip and
+             * visit_VAR's +offset (vs local -offset) fire faithfully. */
+            sym->u.id.scope = SCOPE_parameter;
+            /* In Python the param symbol IS the PARAMLIST child, so
+             * PARAMLIST.append_child's `param.ref.offset = self.size`
+             * (paramlist.py:53-58) lands on the very symbol visit_VAR
+             * reads. The C port builds separate ARGUMENT + body-scope-ID
+             * nodes, so copy the cumulative offset (already computed by
+             * parser_assign_param_offsets into u.argument.offset) onto the
+             * body symbol. byref propagates too: entry_size uses it
+             * (varref.py:52-53 -> PTR) and visit_VAR's `*` indirection. */
+            sym->u.id.offset = param->u.argument.offset;
+            sym->u.id.offset_set = true;
+            sym->u.id.byref = param->u.argument.byref;
         }
     }
 
@@ -2771,6 +2817,29 @@ static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function, bool is_decl
     /* Pop function level */
     if (p->cs->function_level.len > 0)
         vec_pop(p->cs->function_level);
+
+    /* S5.7d — capture the body scope's insertion-ordered entries onto the
+     * function ID (Python func.ref.local_symbol_table = current_scope,
+     * zxbparser.py:2910, taken BEFORE leave_scope pops the table) and run
+     * compute_offsets (symboltable.py:283) to assign per-local +/- IX
+     * offsets and the total locals_size (the ic_enter operand). The
+     * forward-DECLARE path returns early above and never reaches here, so
+     * (like Python's leave_scope(show_warnings=False) discarding the
+     * return at zxbparser.py:2929) a declare computes no sizes. */
+    {
+        Scope_ *body_scope = p->cs->symbol_table->current_scope;
+        int oc = body_scope->ordered_count;
+        if (oc > 0) {
+            AstNode **le = arena_alloc(&p->cs->arena,
+                                       (size_t)oc * sizeof(AstNode *));
+            memcpy(le, body_scope->ordered,
+                   (size_t)oc * sizeof(AstNode *));
+            id_node->u.id.local_entries = le;
+            id_node->u.id.local_entries_count = oc;
+        }
+        id_node->u.id.local_size =
+            symboltable_compute_offsets(p->cs->symbol_table, body_scope);
+    }
 
     /* Exit scope */
     symboltable_exit_scope(p->cs->symbol_table);

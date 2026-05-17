@@ -125,6 +125,11 @@ void translator_function_start(Translator *tr);
 void tr_emit_quad(Translator *tr, const char *instr, int nargs,
                   const char *const *args);
 
+/* Python list[str] repr ("['a', 'b']") — what Quad str()-coerces a list
+ * arg to (interface/quad.py:27). Shared by var_translator.c and the
+ * S5.7d local-init IC wrappers. Arena-owned result. */
+char *tr_py_list_repr(Translator *tr, char **items, int n);
+
 /* TranslatorInstVisitor.TSUFFIX (translator_inst_visitor.py:27-51):
  * a TYPE/TYPEREF/BASICTYPE -> the DataType string ("u8","i8","u16",...).
  * Returns an arena-stable static string literal. */
@@ -137,6 +142,14 @@ const char *tr_tsuffix(const TypeInfo *type_);
  * CONSTEXPR/float/fixed branches ported verbatim. */
 int tr_default_value(Translator *tr, const TypeInfo *type_,
                      AstNode *expr, char **out, int out_cap);
+
+/* Translator.array_default_value (translator.py:1081-1092): recursively
+ * flattens an ARRAYINIT tree to the list of 2-hex byte strings. Shared by
+ * the S5.6 global data-image path and the S5.7d local-array :58-116
+ * ic_larrd init image. Returns the new write offset. */
+int tr_array_default_value(Translator *tr, const TypeInfo *type_,
+                           AstNode *values, char **out,
+                           int out_off, int out_cap);
 
 /* VarTranslator over data_ast (var_translator.py whole file). Visits the
  * BLOCK of VARDECL(entry) appending the data-space Quads (var/vard/varx/
