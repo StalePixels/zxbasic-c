@@ -759,7 +759,18 @@ static AstNode *parse_call_or_array(Parser *p, const char *name, int lineno, boo
     /* Function call */
     AstNode *n = ast_new(p->cs, AST_FUNCCALL, lineno);
     if (entry) {
-        entry->u.id.accessed = true;
+        /* S5.7a: do NOT mark the function entry accessed here. Python's
+         * make_call/make_func_call/SymbolCALL.make_node (zxbparser.py:365-420,
+         * symbols/call.py:90-112) never call mark_entry_as_accessed for a
+         * FUNCCALL; the function `accessed` flag is set transitively and
+         * scope-aware ONLY by FunctionGraphVisitor (calls at global scope,
+         * optimize.py:161-191 — already ported, functiongraph.c:45-122).
+         * Pre-marking here at parse time (scope-blind) wrongly kept a
+         * function called only from inside itself/another function
+         * `accessed`, defeating the O>1 dead-function DCE
+         * (optimize.py:308-318 / optimizer.c:461-473) — the R4
+         * `funccall0` mismatch. Global calls are still correctly marked
+         * by FunctionGraph, so this is faithful and non-regressive. */
         n->type_ = entry->type_;
     } else {
         /* access_call returned NULL (error already reported) — create placeholder */

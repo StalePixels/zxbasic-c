@@ -58,6 +58,22 @@ typedef struct Translator {
     int             jump_tables_len;
     const char     *prev_token;  /* PREV_TOKEN (visit_CHKBREAK guard) */
     const char     *curr_token;  /* CURR_TOKEN */
+
+    /* S5.7a — pending-function queue, the gl.FUNCTIONS analogue
+     * (global_.py:109). Translator.visit_FUNCDECL (translator.py:196-198)
+     * enqueues top-level FUNCDECLs during the main walk (deferred, no
+     * inline emission); FunctionTranslator.start()
+     * (function_translator.py:43-47) FIFO-drains; nested FUNCDECLs found
+     * mid-drain are appended via FunctionTranslator.visit_FUNCDECL
+     * (:174-176). A flat work-list, not recursion. The C queue holds the
+     * AST_FUNCDECL nodes (child[0]=entry ID, child[1]=PARAMLIST,
+     * child[2]=body) — Python aliases gl.FUNCTIONS with the entries whose
+     * .ref carries body/params; the C FUNCDECL node is the equivalent
+     * carrier. */
+    AstNode       **pending_funcs;
+    int             pending_len;
+    int             pending_cap;
+    int             pending_head;   /* FIFO read cursor (pop(0)) */
 } Translator;
 
 /* zxbc.py:125-126  translator.visit(zxbparser.ast) — appends Quads to
@@ -72,6 +88,17 @@ void translator_ic_inline(Translator *tr, const char *asm_code);
  * translator_visit, before ic_inline(end-of-user-code). No-op when no
  * ON GOTO/GOSUB appeared. */
 void translator_emit_jump_tables(Translator *tr);
+
+/* S5.7a — FunctionTranslator(...).start() (function_translator.py:43-47;
+ * zxbc.py:132-133). FIFO-drains the pending-function queue filled by
+ * translator_visit's deferred visit_FUNCDECL, emitting each function's
+ * prologue (label + ic_enter) / body / epilogue (__leave label +
+ * ic_leave). Nested FUNCDECLs encountered while walking a body are
+ * appended to the same queue mid-drain. Must run AFTER translator_visit
+ * (mirrors zxbc.py: Translator.visit then FunctionTranslator.start).
+ * Core slice: no params/ABI, no local arrays, no stdcall teardown
+ * (S5.7b/c). No-op when no functions were declared. */
+void translator_function_start(Translator *tr);
 
 /* ---- S5.3 shared TranslatorInstVisitor surface (var_translator.c) ---- */
 

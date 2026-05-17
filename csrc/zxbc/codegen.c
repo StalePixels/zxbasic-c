@@ -267,8 +267,14 @@ int codegen_emit(CompilerState *cs, AstNode *ast) {
     translator_visit(&tr, ast);
 
     /* 7  FunctionTranslator(...).start()  (zxbc.py:132-133)
-     * No functions in the calibration program -> genuine no-op (the
-     * Python loop iterates gl.FUNCTIONS, empty here). Real in S5.5+. */
+     * S5.7a core: FIFO-drain the pending-function queue filled by the
+     * deferred Translator.visit_FUNCDECL during step 6, emitting each
+     * function's label/ic_enter/body/__leave/ic_leave. Mirrors Python's
+     * order exactly (Translator.visit then FunctionTranslator.start).
+     * gl.DATA_IS_USED -> gl.FUNCTIONS.extend(gl.DATA_FUNCTIONS)
+     * (zxbc.py:128-129) is the DATA-funcptr path: out of the S5.7a core
+     * slice (no DATA in scope). No-op when no functions were declared. */
+    translator_function_start(&tr);
 
     /* 8  emit_data_blocks / emit_strings (zxbc.py:144-146): no DATA/
      * strings -> no-op. Real S5.8. */

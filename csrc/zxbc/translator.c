@@ -386,6 +386,13 @@ static void tr_ic_leave(Translator *tr, const char *convention) {
     const char *args[1] = { convention };
     tr_emit_quad(tr, "leave", 1, args);
 }
+/* ic_enter (translator_inst_visitor.py:106-107): emit("enter", arg).
+ * arg is the string "__fastcall__" or the integer locals_size coerced
+ * to a string (Quad.__init__ str()s every arg). */
+static void tr_ic_enter(Translator *tr, const char *arg) {
+    const char *args[1] = { arg };
+    tr_emit_quad(tr, "enter", 1, args);
+}
 /* ic_param (translator_inst_visitor.py:208-209): emit(f"param{TSUFFIX}",t) */
 static void tr_ic_param(Translator *tr, const TypeInfo *type_, const char *t) {
     const char *suf = tr_tsuffix(type_);
@@ -963,6 +970,86 @@ void translator_emit_jump_tables(Translator *tr) {
     }
 }
 
+/* ==================================================================== *
+ *  S5.7a — FunctionTranslator core (function_translator.py)            *
+ *                                                                      *
+ *  Python's FunctionTranslator subclasses Translator: every non-       *
+ *  FUNCDECL sentence/expr handler is shared identically; only          *
+ *  visit_FUNCDECL differs (main Translator defers/enqueues             *
+ *  top-level; FunctionTranslator enqueues nested) and FunctionTrans-   *
+ *  lator adds visit_FUNCTION (the prologue/body/epilogue). The C port  *
+ *  mirrors that by registering the same handler table for both, with   *
+ *  the FUNCDECL tag pointing at the appropriate enqueue handler.       *
+ * ==================================================================== */
+
+/* The pending-function queue push (gl.FUNCTIONS.append, both
+ * translator.py:198 and function_translator.py:176). Arena-free growable
+ * pointer list scoped to the Translator. */
+static void tr_pending_push(Translator *tr, AstNode *fdecl) {
+    if (tr->pending_len >= tr->pending_cap) {
+        int nc = tr->pending_cap ? tr->pending_cap * 2 : 16;
+        AstNode **np = realloc(tr->pending_funcs, (size_t)nc * sizeof(*np));
+        if (!np) return;
+        tr->pending_funcs = np;
+        tr->pending_cap = nc;
+    }
+    tr->pending_funcs[tr->pending_len++] = fdecl;
+}
+
+/* Translator.visit_FUNCDECL (translator.py:196-198) AND
+ * FunctionTranslator.visit_FUNCDECL (function_translator.py:174-176):
+ * both just append to the (aliased) gl.FUNCTIONS list and emit nothing
+ * inline — the function body is NOT walked here (this is exactly why a
+ * top-level FUNCDECL produces no inline code, and why an O>1-pruned
+ * (NOP'd) function never enters the queue: the optimizer replaced the
+ * AST_FUNCDECL with AST_NOP upstream so this handler never fires for
+ * it). Identical body for the main-walk and the drain-walk — Python's
+ * two methods are byte-equivalent (append node.entry). */
+static AstNode *tr_visit_funcdecl(Visitor *v, AstNode *node) {
+    Translator *tr = v->ctx;
+    tr_pending_push(tr, node);
+    return node;
+}
+
+/* Shared handler registration (Translator + FunctionTranslator).
+ * FUNCDECL always maps to tr_visit_funcdecl (deferral/enqueue) for both
+ * roles — Python's Translator.visit_FUNCDECL and
+ * FunctionTranslator.visit_FUNCDECL are body-identical. */
+static void tr_register_handlers(Visitor *v) {
+    visitor_on_tag(v, AST_BLOCK, tr_visit_block);
+    visitor_on_tag(v, AST_NUMBER, tr_visit_number);
+    visitor_on_tag(v, AST_BINARY, tr_visit_binary);
+    visitor_on_tag(v, AST_TYPECAST, tr_visit_typecast);
+    visitor_on_tag(v, AST_ID, tr_visit_var);  /* VAR == ID node */
+    visitor_on_tag(v, AST_FUNCDECL, tr_visit_funcdecl);
+    visitor_on_sentence(v, "LET", tr_visit_let);
+    visitor_on_sentence(v, "END", tr_visit_end);
+    /* S5.5 control-flow sentence handlers. */
+    visitor_on_sentence(v, "IF", tr_visit_if);
+    visitor_on_sentence(v, "FOR", tr_visit_for);
+    visitor_on_sentence(v, "WHILE", tr_visit_while);
+    visitor_on_sentence(v, "DO_LOOP", tr_visit_do);
+    visitor_on_sentence(v, "DO_WHILE", tr_visit_do);
+    visitor_on_sentence(v, "DO_UNTIL", tr_visit_do);
+    visitor_on_sentence(v, "LOOP_WHILE", tr_visit_do);
+    visitor_on_sentence(v, "LOOP_UNTIL", tr_visit_do);
+    visitor_on_sentence(v, "GOTO", tr_visit_goto);
+    visitor_on_sentence(v, "GOSUB", tr_visit_gosub);
+    visitor_on_sentence(v, "RETURN", tr_visit_return);
+    visitor_on_sentence(v, "LABEL", tr_visit_label);
+    visitor_on_sentence(v, "ON_GOTO", tr_visit_on_goto);
+    visitor_on_sentence(v, "ON_GOSUB", tr_visit_on_gosub);
+    visitor_on_sentence(v, "STOP", tr_visit_stop);
+    visitor_on_sentence(v, "ERROR", tr_visit_error);
+    visitor_on_sentence(v, "CHKBREAK", tr_visit_chkbreak);
+    visitor_on_sentence(v, "EXIT_DO", tr_visit_exit_do);
+    visitor_on_sentence(v, "EXIT_WHILE", tr_visit_exit_while);
+    visitor_on_sentence(v, "EXIT_FOR", tr_visit_exit_for);
+    visitor_on_sentence(v, "CONTINUE_DO", tr_visit_continue_do);
+    visitor_on_sentence(v, "CONTINUE_WHILE", tr_visit_continue_while);
+    visitor_on_sentence(v, "CONTINUE_FOR", tr_visit_continue_for);
+}
+
 void translator_visit(Translator *tr, AstNode *ast) {
     /* reset() analogue (translator_visitor.py:53-61 + common.init): the
      * C Translator is stack-scoped per compile; clear its class-state
@@ -972,40 +1059,114 @@ void translator_visit(Translator *tr, AstNode *ast) {
     tr->jump_tables_len = 0;
     tr->prev_token = NULL;
     tr->curr_token = NULL;
+    tr->pending_funcs = NULL;
+    tr->pending_len = 0;
+    tr->pending_cap = 0;
+    tr->pending_head = 0;
 
     Visitor v;
     visitor_init(&v, tr->cs);
     v.ctx = tr;
-    visitor_on_tag(&v, AST_BLOCK, tr_visit_block);
-    visitor_on_tag(&v, AST_NUMBER, tr_visit_number);
-    visitor_on_tag(&v, AST_BINARY, tr_visit_binary);
-    visitor_on_tag(&v, AST_TYPECAST, tr_visit_typecast);
-    visitor_on_tag(&v, AST_ID, tr_visit_var);  /* VAR == ID node */
-    visitor_on_sentence(&v, "LET", tr_visit_let);
-    visitor_on_sentence(&v, "END", tr_visit_end);
-    /* S5.5 control-flow sentence handlers. */
-    visitor_on_sentence(&v, "IF", tr_visit_if);
-    visitor_on_sentence(&v, "FOR", tr_visit_for);
-    visitor_on_sentence(&v, "WHILE", tr_visit_while);
-    visitor_on_sentence(&v, "DO_LOOP", tr_visit_do);
-    visitor_on_sentence(&v, "DO_WHILE", tr_visit_do);
-    visitor_on_sentence(&v, "DO_UNTIL", tr_visit_do);
-    visitor_on_sentence(&v, "LOOP_WHILE", tr_visit_do);
-    visitor_on_sentence(&v, "LOOP_UNTIL", tr_visit_do);
-    visitor_on_sentence(&v, "GOTO", tr_visit_goto);
-    visitor_on_sentence(&v, "GOSUB", tr_visit_gosub);
-    visitor_on_sentence(&v, "RETURN", tr_visit_return);
-    visitor_on_sentence(&v, "LABEL", tr_visit_label);
-    visitor_on_sentence(&v, "ON_GOTO", tr_visit_on_goto);
-    visitor_on_sentence(&v, "ON_GOSUB", tr_visit_on_gosub);
-    visitor_on_sentence(&v, "STOP", tr_visit_stop);
-    visitor_on_sentence(&v, "ERROR", tr_visit_error);
-    visitor_on_sentence(&v, "CHKBREAK", tr_visit_chkbreak);
-    visitor_on_sentence(&v, "EXIT_DO", tr_visit_exit_do);
-    visitor_on_sentence(&v, "EXIT_WHILE", tr_visit_exit_while);
-    visitor_on_sentence(&v, "EXIT_FOR", tr_visit_exit_for);
-    visitor_on_sentence(&v, "CONTINUE_DO", tr_visit_continue_do);
-    visitor_on_sentence(&v, "CONTINUE_WHILE", tr_visit_continue_while);
-    visitor_on_sentence(&v, "CONTINUE_FOR", tr_visit_continue_for);
+    tr_register_handlers(&v);
     visitor_visit(&v, ast);
+}
+
+/* visit_FUNCTION (function_translator.py:49-172) — CORE slice only.
+ *
+ * Python receives the FUNCTION *entry* (gl.FUNCTIONS holds entries whose
+ * .ref carries body/params); the C queue holds the AST_FUNCDECL node
+ * (child[0]=entry ID, child[1]=PARAMLIST, child[2]=body) which is the
+ * equivalent carrier. node.mangled == entry.mangled ("_<name>").
+ *
+ * Faithful core sequencing (no-param / no-local-array / non-stdcall):
+ *   :52   ic_label(node.mangled)
+ *   :53-56 fastcall -> ic_enter("__fastcall__"); else ic_enter(locals_size)
+ *   :58-116 local-var/param/local-array init walk  -> OUT OF SCOPE
+ *           (S5.7b params, S5.7c local arrays). For the core no-param
+ *           no-local function this walk is empty in Python too.
+ *   :117-118 for i in node.ref.body: yield i   (body emission)
+ *   :120  ic_label("%s__leave" % node.mangled)
+ *   :122-164 stdcall-only local string/array teardown -> OUT OF SCOPE
+ *           (S5.7b/c); core funcs are fastcall (optimize.py:314-315
+ *           forces zero-param/zero-local to fastcall at O>1) or have no
+ *           local strings/arrays.
+ *   :166-169 fastcall -> ic_leave("__fastcall__"); else
+ *            ic_leave(params.size)
+ *   :171-172 bound_tables flush -> OUT OF SCOPE (S5.7c local arrays).
+ */
+static void tr_visit_function(Translator *tr, AstNode *fdecl) {
+    AstNode *entry = fdecl->child_count > 0 ? fdecl->children[0] : NULL;
+    AstNode *body  = fdecl->child_count > 2 ? fdecl->children[2] : NULL;
+    if (!entry) return;
+
+    const char *mangled = entry->u.id.mangled ? entry->u.id.mangled : "";
+    bool fastcall = (entry->u.id.convention == CONV_fastcall);
+
+    /* :52 ic_label(node.mangled) */
+    tr_ic_label(tr, mangled);
+
+    /* :53-56 ic_enter */
+    if (fastcall) {
+        tr_ic_enter(tr, "__fastcall__");
+    } else {
+        char ls[16];
+        snprintf(ls, sizeof(ls), "%d", entry->u.id.local_size);
+        tr_ic_enter(tr, ls);
+    }
+
+    /* :58-116 local-var/param init walk — OUT OF SCOPE for the core
+     * no-param no-local path (empty in Python too). S5.7b/c. */
+
+    /* :117-118 body emission — walk each body sentence through the
+     * shared handler table (visit_LET/visit_RETURN/visit_CALL/... fire
+     * exactly as inherited from Translator). A nested FUNCDECL in the
+     * body hits tr_visit_funcdecl -> appended to the same pending queue
+     * mid-drain (function_translator.py:174-176 semantics). */
+    if (body) {
+        Visitor v;
+        visitor_init(&v, tr->cs);
+        v.ctx = tr;
+        tr_register_handlers(&v);
+        visitor_visit(&v, body);
+    }
+
+    /* :120 ic_label("%s__leave") */
+    {
+        size_t ml = strlen(mangled);
+        char *lv = arena_alloc(&tr->cs->arena, ml + 8);
+        memcpy(lv, mangled, ml);
+        memcpy(lv + ml, "__leave", 8);
+        tr_ic_label(tr, lv);
+    }
+
+    /* :122-164 stdcall teardown — OUT OF SCOPE (S5.7b/c). */
+
+    /* :166-169 ic_leave */
+    if (fastcall) {
+        tr_ic_leave(tr, "__fastcall__");
+    } else {
+        char ps[16];
+        snprintf(ps, sizeof(ps), "%d", entry->u.id.param_size);
+        tr_ic_leave(tr, ps);
+    }
+
+    /* :171-172 bound_tables flush — OUT OF SCOPE (S5.7c). */
+}
+
+void translator_function_start(Translator *tr) {
+    /* FunctionTranslator.start() (function_translator.py:43-47):
+     *   while self.functions: f = self.functions.pop(0); self.visit(f)
+     * FIFO drain. visit_FUNCTION is a Python generator whose body walk
+     * appends nested FUNCDECLs to the same list mid-iteration, so the
+     * loop continues until the transitive closure is exhausted. The C
+     * port uses a head cursor over the growable list so nested pushes
+     * (which may realloc) are observed by the still-running loop. */
+    while (tr->pending_head < tr->pending_len) {
+        AstNode *fdecl = tr->pending_funcs[tr->pending_head++];
+        if (fdecl)
+            tr_visit_function(tr, fdecl);
+    }
+    free(tr->pending_funcs);
+    tr->pending_funcs = NULL;
+    tr->pending_len = tr->pending_cap = tr->pending_head = 0;
 }

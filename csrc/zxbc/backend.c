@@ -2535,6 +2535,48 @@ static StrVec emit_deflabel(Backend *b, Quad *q) {
     return out;
 }
 
+/* ---- _enter (generic.py:433-469) ------------------------------------- *
+ * Quad("enter", N|"__fastcall__"). The FUNCTION/SUB prologue. fastcall ->
+ * no frame ([]). Otherwise build the IX frame (push ix; ld ix,0;
+ * add ix,sp) then reserve `size_bytes` zeroed local space: <7 via
+ * ld hl,0 + push hl repeated (+inc sp if odd); >=7 via ld hl,-N /
+ * add hl,sp / ld sp,hl + an ldir zero-fill. IDX_REG == "ix"
+ * (common.py:121). S5.7a port; faithful byte-for-byte to _enter. */
+static StrVec emit_enter(Backend *b, Quad *q) {
+    StrVec out = sv_new();
+    const char *a = q_ins(q, 1);
+    if (strcmp(a, "__fastcall__") == 0)
+        return out;
+
+    sv_push(b, &out, "push ix");
+    sv_push(b, &out, "ld ix, 0");
+    sv_push(b, &out, "add ix, sp");
+
+    long size_bytes = s_int_val(a);
+    if (size_bytes != 0) {
+        if (size_bytes < 7) {
+            sv_push(b, &out, "ld hl, 0");
+            for (long i = 0; i < (size_bytes >> 1); i++)
+                sv_push(b, &out, "push hl");
+            if (size_bytes % 2) {
+                sv_push(b, &out, "push hl");
+                sv_push(b, &out, "inc sp");
+            }
+        } else {
+            sv_pushf(b, &out, "ld hl, -%ld", size_bytes);
+            sv_push(b, &out, "add hl, sp");
+            sv_push(b, &out, "ld sp, hl");
+            sv_push(b, &out, "ld (hl), 0");
+            sv_pushf(b, &out, "ld bc, %ld", size_bytes - 1);
+            sv_push(b, &out, "ld d, h");
+            sv_push(b, &out, "ld e, l");
+            sv_push(b, &out, "inc de");
+            sv_push(b, &out, "ldir");
+        }
+    }
+    return out;
+}
+
 /* ---- _leave (generic.py:472-535) ------------------------------------- *
  * Quad("leave", N|"__fastcall__"). "__fastcall__" -> ["ret"]. Otherwise
  * pop N param bytes off the stack then ret. IDX_REG == "ix"
@@ -3012,6 +3054,7 @@ static StrVec quad_emit(Backend *b, Quad *q) {
     if (strcmp(I, "jump")     == 0) return emit_jump(b, q);
     if (strcmp(I, "call")     == 0) return emit_call(b, q);
     if (strcmp(I, "ret")      == 0) return emit_ret(b, q);
+    if (strcmp(I, "enter")    == 0) return emit_enter(b, q);
     if (strcmp(I, "leave")    == 0) return emit_leave(b, q);
     if (strcmp(I, "jzeroi8")  == 0 || strcmp(I, "jzerou8")  == 0) return emit_jzero8(b, q);
     if (strcmp(I, "jzeroi16") == 0 || strcmp(I, "jzerou16") == 0) return emit_jzero16(b, q);
