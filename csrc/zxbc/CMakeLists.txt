@@ -35,6 +35,14 @@ add_library(zxbc_parser_lib STATIC
     peephole/parser.c
     peephole/engine.c
     peephole/opts_embedded.c
+    optimizer/omap.c
+    optimizer/opthelpers.c
+    optimizer/optmemcell.c
+    optimizer/cpustate.c
+    optimizer/labelsdict.c
+    optimizer/basicblock.c
+    optimizer/flowgraph.c
+    optimizer/optmain.c
     backend.c
     codegen.c
 )

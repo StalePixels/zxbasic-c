@@ -152,6 +152,19 @@ const char *peephole_pattern_fname(int idx) {
     return g_patterns.data[idx].fname;
 }
 
+/* ---- pattern internals for the O3 BasicBlock.optimize loop --------- */
+int peephole_pattern_flag(int idx) { return g_patterns.data[idx].flag; }
+const BlockPattern  *peephole_pattern_patt(int idx)  { return g_patterns.data[idx].patt; }
+const BlockTemplate *peephole_pattern_templ(int idx) { return g_patterns.data[idx].templ; }
+Ev *peephole_pattern_cond(int idx) { return g_patterns.data[idx].cond; }
+int peephole_pattern_ndefines(int idx) { return g_patterns.data[idx].defines->len; }
+const char *peephole_pattern_define_var(int idx, int di) {
+    return g_patterns.data[idx].defines->data[di].var;
+}
+Ev *peephole_pattern_define_expr(int idx, int di) {
+    return g_patterns.data[idx].defines->data[di].expr;
+}
+
 /* StrVec splice: replace [index, index+cnt) with `repl` (TplStrVec). */
 static void strvec_splice(StrVec *v, int index, int cnt,
                           const TplStrVec *repl) {

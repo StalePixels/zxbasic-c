@@ -28,6 +28,12 @@ const char *fn_name(FN f) {
     return FN_NAMES[f];
 }
 
+/* BasicBlock.optimize monkey-patch slot (see evaluator.h). Module
+ * static, matching Python's evaluator.UNARY module global; NULL == the
+ * O<=2 default behaviour (the inertness guarantee). */
+static const EvCpuHook *g_cpu_hook = NULL;
+void ev_set_cpu_hook(const EvCpuHook *hook) { g_cpu_hook = hook; }
+
 bool fn_lookup(const char *s, FN *out) {
     for (int i = 0; i < (int)FN__INVALID; i++) {
         if (strcmp(s, FN_NAMES[i]) == 0) { *out = (FN)i; return true; }
@@ -419,9 +425,26 @@ static EvVal *apply_unary(Arena *a, FN op, const EvVal *xv,
     case FN_HIVAL: return vstr(a, z80h_HI16_val(a, x[0] ? x : NULL));
     case FN_LOVAL: return vstr(a, z80h_LO16_val(a, x[0] ? x : NULL));
     case FN_GVAL:
-    case FN_FLAGVAL: /* lambda x: helpers.new_tmp_val() */
+        /* O<=2 default: lambda x: helpers.new_tmp_val(). At O3 the
+         * basicblock monkey-patch routes to self.cpu.get(x). */
+        if (g_cpu_hook && g_cpu_hook->gval) {
+            const char *gv = g_cpu_hook->gval(g_cpu_hook->ctx, x);
+            /* cpu.get may return None -> normalize() yields "" */
+            return gv ? vstr(a, gv) : vstr(a, "");
+        }
         return vstr(a, z80h_new_tmp_val(a));
-    case FN_IS_REQUIRED: /* lambda x: True */
+    case FN_FLAGVAL:
+        /* O<=2 default: lambda x: helpers.new_tmp_val(). At O3 the
+         * monkey-patch is the {"c":..,"z":..}.get(x.lower(),
+         * new_tmp_val()) closure over the block CPU flags. */
+        if (g_cpu_hook && g_cpu_hook->flagval)
+            return vstr(a, g_cpu_hook->flagval(g_cpu_hook->ctx, x));
+        return vstr(a, z80h_new_tmp_val(a));
+    case FN_IS_REQUIRED:
+        /* O<=2 default: lambda x: True. At O3: self.is_used([x],
+         * i + len(p.patt)). */
+        if (g_cpu_hook && g_cpu_hook->is_required)
+            return vbool(a, g_cpu_hook->is_required(g_cpu_hook->ctx, x));
         return vbool(a, true);
     case FN_CTEST: { /* memcell.MemCell(x, 1).condition_flag */
         MemCell *m = memcell_new(a, x, 1);

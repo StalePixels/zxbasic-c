@@ -96,4 +96,30 @@ char *evval_str(Arena *a, const EvVal *v);
 /* helpers.init() forwarder (GVAL/FLAGVAL use new_tmp_val's counter). */
 void ev_helpers_init(void);
 
+/* ---- CPU-state hook (basicblock.optimize monkey-patch) -------------
+ * Python's BasicBlock.optimize (basicblock.py:448-454) reassigns
+ * evaluator.UNARY[FN.GVAL] / [FN.FLAGVAL] / [FN.IS_REQUIRED] to closures
+ * over the block's CPUState for the duration of the per-block pattern
+ * loop, then restores the originals (basicblock.py:495). This hook is
+ * the faithful C analogue: when set, apply_unary routes exactly those
+ * three FN ops through the callbacks instead of the O<=2 defaults
+ * (helpers.new_tmp_val / new_tmp_val / True). Cleared (NULL) outside
+ * the block loop -> identical to the unhooked engine path used at
+ * O<=2 (the inertness guarantee: O<=2 never sets a hook).
+ *
+ * Callbacks return arena-owned strings (or, for is_required, a bool).
+ * The hook is a single module-static slot (Python's UNARY is a module
+ * global; the optimizer is single-threaded, exactly like Python). */
+typedef struct EvCpuHook {
+    void *ctx;
+    /* lambda x: self.cpu.get(x)  — returns NULL == Python None. */
+    const char *(*gval)(void *ctx, const char *x);
+    /* lambda x: {"c":..,"z":..}.get(x.lower(), new_tmp_val()) */
+    char *(*flagval)(void *ctx, const char *x);
+    /* lambda x: self.is_used([x], i + len(p.patt)) */
+    bool (*is_required)(void *ctx, const char *x);
+} EvCpuHook;
+
+void ev_set_cpu_hook(const EvCpuHook *hook); /* NULL clears it */
+
 #endif /* ZXBC_PEEPHOLE_EVALUATOR_H */

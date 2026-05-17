@@ -51,6 +51,26 @@ const char *peephole_pattern_fname(int idx);
  *                     index) — mutates `asm` in place; True iff changed. */
 bool peephole_apply_match(StrVec *asm_, int level_cap, int index);
 
+/* ---- pattern accessors for the O3 BasicBlock.optimize loop ----------
+ * basicblock.py:434-496 runs its OWN match loop (NOT engine.apply_match)
+ * because it must (a) use the CPU-state-monkey-patched evaluator and
+ * (b) recompute the per-index match for the SAME pattern list filtered
+ * by `OPTIONS.optimization_level >= p.level >= 3` (main.py:251). These
+ * accessors expose the loaded OptPattern internals so the optimizer's
+ * basicblock.c can replay that loop faithfully against the existing,
+ * already-proven pattern/template/evaluator port. */
+#include "pattern.h"
+#include "template.h"
+#include "evaluator.h"
+
+int                  peephole_pattern_flag(int idx);   /* O_FLAG */
+const BlockPattern  *peephole_pattern_patt(int idx);
+const BlockTemplate *peephole_pattern_templ(int idx);
+Ev                  *peephole_pattern_cond(int idx);
+int                  peephole_pattern_ndefines(int idx);
+const char          *peephole_pattern_define_var(int idx, int di);
+Ev                  *peephole_pattern_define_expr(int idx, int di);
+
 /* Internal smoke (no tests/ dependency): proves 028_o2 on the _end
  * sequence (`exx / pop hl / exx / pop iy / pop ix`) fires exactly twice
  * giving `exx / pop hl / pop iy / pop ix / exx`, and that

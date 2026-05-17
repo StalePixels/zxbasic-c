@@ -12,6 +12,7 @@
 #include "translator.h"
 #include "errmsg.h"
 #include "peephole/engine.h"
+#include "optimizer/optimizer.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -139,6 +140,20 @@ static char *optimizer_optimize_le2(Arena *a, StrVec mem) {
     char *res = join_sep(a, keep, "\n");
     vec_free(cm); vec_free(keep);
     return res;
+}
+
+/* OptLe2Fn adapter: optimizer_optimize() calls this for the verbatim
+ * O<=2 early-return (main.py:199-200). Z80StrList and StrVec are both
+ * `VEC(char*)` (same {data,len,cap} layout); this views the Z80StrList
+ * as a StrVec and runs the UNCHANGED, byte-proven O<=2 routine above —
+ * the inertness guarantee (the -O2 codegen meter output is identical to
+ * HEAD because this exact code still produces it). */
+static char *codegen_le2_adapter(Arena *a, Z80StrList mem) {
+    StrVec sv;
+    sv.data = mem.data;
+    sv.len  = mem.len;
+    sv.cap  = mem.cap;
+    return optimizer_optimize_le2(a, sv);
 }
 
 /* output() (zxbc.py:45-68): #-lines pass through; non-':' lines get a
@@ -307,8 +322,27 @@ int codegen_emit(CompilerState *cs, AstNode *ast) {
     /* 9  asm_output = backend.emit(optimize = O > 0)  (zxbc.py:171) */
     StrVec asm_inner = backend_emit(&b, cs->opts.optimization_level > 0);
 
-    /* 10 asm_output = Optimizer().optimize(asm_output) + "\n" (zxbc.py:172) */
-    char *joined = optimizer_optimize_le2(a, asm_inner);
+    /* 10 asm_output = Optimizer().optimize(asm_output) + "\n" (zxbc.py:172)
+     *
+     * S5.9b: optimizer_optimize() is the faithful Optimizer.optimize()
+     * (optimizer/optmain.c) INCLUDING the verbatim main.py:199
+     * early-return — for OPTIONS.optimization_level <= 2 it delegates to
+     * codegen_le2_adapter (which calls the unchanged, byte-proven
+     * optimizer_optimize_le2 below), so the O<=2 asm output is
+     * byte-identical to HEAD; the O3 basic-block / CPU-state / flow-graph
+     * machinery runs only when opt_level > 2 (Z80StrList and StrVec are
+     * both `VEC(char*)` — identical layout; the adapter views one as the
+     * other without a copy). */
+    Z80StrList asm_zl;
+    asm_zl.data = asm_inner.data;
+    asm_zl.len  = asm_inner.len;
+    asm_zl.cap  = asm_inner.cap;
+    Optimizer opt;
+    optimizer_init(&opt, a);
+    opt.debug_level = cs->opts.debug_level;  /* OPTIONS.debug_level mirror */
+    char *joined = optimizer_optimize(&opt, a, asm_zl,
+                                      cs->opts.optimization_level,
+                                      codegen_le2_adapter);
     vec_free(asm_inner);
     size_t jl = strlen(joined);
     char *asm_str = arena_alloc(a, jl + 2);
