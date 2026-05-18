@@ -64,4 +64,29 @@ int outfmt_tap_write_loader(const char *filename,
                             const unsigned char *program_bytes,
                             int program_len);
 
+/*
+ * Shared TAP/TZX emit core — faithful (TZX|TAP).emit() (tzx.py:123-143,
+ * no aux blocks). The Python design is `class TAP(TZX)`: TZX is the base
+ * and TAP overrides EXACTLY two things (empty output; standard_block
+ * without the 0x10 block-id / 1000ms pause). This single core carries
+ * the whole shared machinery; `is_tzx` selects that two-point variance:
+ *
+ *   is_tzx == 0  -> TAP: empty output, standard_block = LH+payload+cksum.
+ *                   Byte-identical to the pre-S6.4 outfmt_tap_* path.
+ *   is_tzx == 1  -> TZX: 10-byte "ZXTape!" 1A 01 15 preamble, and
+ *                   standard_block prefixed with 0x10 + LH(1000).
+ *
+ * Used by outfmt_tap_write_loader (is_tzx=0) and the outfmt_tzx_* entry
+ * points in outfmt_tzx.c (is_tzx=1). Other parameters are exactly as
+ * outfmt_tap_write_loader. Returns 0 on success, -1 on failure.
+ */
+int outfmt_tape_emit(int is_tzx,
+                     const char *filename,
+                     const char *program_name,
+                     int entry_point,
+                     const unsigned char *loader_bytes,
+                     int loader_len,
+                     const unsigned char *program_bytes,
+                     int program_len);
+
 #endif /* OUTFMT_TAP_H */

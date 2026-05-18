@@ -4,6 +4,7 @@
  */
 #include "zxbasm.h"
 #include "outfmt_tap.h"
+#include "outfmt_tzx.h"
 #include "basic.h"
 #include <stdlib.h>
 #include <string.h>
@@ -205,12 +206,19 @@ int asm_generate_binary(AsmState *as, const char *filename, const char *format)
         return -1;
     }
 
-    /* TAP format: faithful port of src/outfmt/tap.py (loader-less core,
-     * S6.3a). Unlike the raw "bin" path, Python's TAP.emit() still
-     * produces header + (possibly empty) data blocks when there is no
-     * code, so route empty data through the emitter too — only the
-     * mem_dump-error path above (shared with "bin") aborts early. */
-    if (format && strcmp(format, "tap") == 0) {
+    /* TAP / TZX format: faithful port of src/outfmt/tap.py /
+     * src/outfmt/tzx.py. In the Python `class TAP(TZX)`: TZX is the base
+     * and TAP overrides exactly two things, so the .tap and .tzx paths
+     * share ALL of the loader build + emit logic below — only the final
+     * writer differs (outfmt_tap_* vs outfmt_tzx_*). The .tap path
+     * (is_tzx == 0) is byte-for-byte the same code as S6.3.
+     *
+     * Unlike the raw "bin" path, Python's (TAP|TZX).emit() still produces
+     * header + (possibly empty) data blocks when there is no code, so
+     * route empty data through the emitter too — only the mem_dump-error
+     * path above (shared with "bin") aborts early. */
+    if (format && (strcmp(format, "tap") == 0 || strcmp(format, "tzx") == 0)) {
+        const int is_tzx = (strcmp(format, "tzx") == 0);
         /* entry_point: Python sets AUTORUN_ADDR = org when no autorun
          * was set (asmparse.generate_binary); otherwise the END addr. */
         int entry_point = as->has_autorun ? (int)as->autorun_addr : org;
@@ -288,15 +296,22 @@ int asm_generate_binary(AsmState *as, const char *filename, const char *format)
             int loader_len = 0;
             const unsigned char *loader_bytes = basic_bytes(bld, &loader_len);
 
-            int rc = outfmt_tap_write_loader(filename, progname, entry_point,
-                                             loader_bytes, loader_len,
-                                             prog, prog_len);
+            int rc = is_tzx
+                ? outfmt_tzx_write_loader(filename, progname, entry_point,
+                                          loader_bytes, loader_len,
+                                          prog, prog_len)
+                : outfmt_tap_write_loader(filename, progname, entry_point,
+                                          loader_bytes, loader_len,
+                                          prog, prog_len);
             basic_free(bld);
             return rc;
         }
 
-        return outfmt_tap_write(filename, progname, entry_point,
-                                prog, prog_len);
+        return is_tzx
+            ? outfmt_tzx_write(filename, progname, entry_point,
+                               prog, prog_len)
+            : outfmt_tap_write(filename, progname, entry_point,
+                               prog, prog_len);
     }
 
     if (!data || data_len == 0) {
