@@ -3,6 +3,7 @@
  * Mirrors src/zxbasm/zxbasm.py and src/api/errmsg.py
  */
 #include "zxbasm.h"
+#include "outfmt_tap.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
@@ -201,6 +202,36 @@ int asm_generate_binary(AsmState *as, const char *filename, const char *format)
 
     if (mem_dump(as, &org, &data, &data_len) != 0) {
         return -1;
+    }
+
+    /* TAP format: faithful port of src/outfmt/tap.py (loader-less core,
+     * S6.3a). Unlike the raw "bin" path, Python's TAP.emit() still
+     * produces header + (possibly empty) data blocks when there is no
+     * code, so route empty data through the emitter too — only the
+     * mem_dump-error path above (shared with "bin") aborts early. */
+    if (format && strcmp(format, "tap") == 0) {
+        /* entry_point: Python sets AUTORUN_ADDR = org when no autorun
+         * was set (asmparse.generate_binary); otherwise the END addr. */
+        int entry_point = as->has_autorun ? (int)as->autorun_addr : org;
+
+        /* program_name = os.path.basename(outputfname)[:10]: take the
+         * substring after the last '/', then the first 10 chars. The
+         * header builder space-pads to exactly 10 anyway. */
+        const char *base = filename ? filename : "";
+        const char *slash = strrchr(base, '/');
+        if (slash) base = slash + 1;
+        char progname[11];
+        size_t pn = 0;
+        for (; pn < 10 && base[pn] != '\0'; pn++) {
+            progname[pn] = base[pn];
+        }
+        progname[pn] = '\0';
+
+        const unsigned char *prog = (const unsigned char *)data;
+        int prog_len = (data && data_len > 0) ? data_len : 0;
+
+        return outfmt_tap_write(filename, progname, entry_point,
+                                prog, prog_len);
     }
 
     if (!data || data_len == 0) {

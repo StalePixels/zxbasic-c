@@ -21,6 +21,7 @@ add_library(zxbasm_lib STATIC
     expr.c
     lexer.c
     memory.c
+    outfmt_tap.c
     parser.c
     z80_opcodes.c
 )
