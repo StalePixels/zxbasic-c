@@ -26,6 +26,7 @@ add_library(zxbasm_lib STATIC
     outfmt_sna.c
     outfmt_tap.c
     outfmt_tzx.c
+    outfmt_z80.c
     parser.c
     z80_opcodes.c
 )

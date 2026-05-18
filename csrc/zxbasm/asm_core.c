@@ -4,6 +4,7 @@
  */
 #include "zxbasm.h"
 #include "outfmt_sna.h"
+#include "outfmt_z80.h"
 #include "outfmt_tap.h"
 #include "outfmt_tzx.h"
 #include "basic.h"
@@ -220,6 +221,21 @@ int asm_generate_binary(AsmState *as, const char *filename, const char *format)
         const unsigned char *prog = (const unsigned char *)data;
         int prog_len = (data && data_len > 0) ? data_len : 0;
         return outfmt_sna_write(filename, entry_point, prog, prog_len);
+    }
+
+    /* Z80 format: faithful port of src/outfmt/z80.py (Z80Emitter) +
+     * src/outfmt/gensnapshot.py. Like .sna, Z80Emitter.emit() ignores
+     * the BASIC loader, the program name and the aux blocks entirely —
+     * it builds a full 48K v1 RLE-compressed snapshot from scratch via
+     *   generate(None, entry_point - 1, entry_point, program_bytes)
+     * so there is NO basic.Basic() loader build on this path. */
+    if (format && strcmp(format, "z80") == 0) {
+        /* entry_point: Python sets AUTORUN_ADDR = org when no autorun
+         * was set (asmparse.generate_binary); otherwise the END addr. */
+        int entry_point = as->has_autorun ? (int)as->autorun_addr : org;
+        const unsigned char *prog = (const unsigned char *)data;
+        int prog_len = (data && data_len > 0) ? data_len : 0;
+        return outfmt_z80_write(filename, entry_point, prog, prog_len);
     }
 
     /* TAP / TZX format: faithful port of src/outfmt/tap.py /
