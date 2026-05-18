@@ -37,10 +37,15 @@ typedef struct Visitor Visitor;
 typedef AstNode *(*VisitFn)(Visitor *v, AstNode *node);
 
 /* Max distinct AST_SENTENCE-kind handlers per pass. The Phase-2 passes
- * register at most a handful (FunctionGraph: GOTO/GOSUB; Optimizer:
- * LET/LETARRAY/LETSUBSTR/RETURN); 32 is generous and keeps registration
- * allocation-free. */
-#define VISITOR_MAX_SENTENCE_HANDLERS 32
+ * register a handful (FunctionGraph: GOTO/GOSUB; Optimizer:
+ * LET/LETARRAY/LETSUBSTR/RETURN), but the Translator pass registers the
+ * full BASIC statement set — Python's translator has ~80 visit_* methods
+ * and the C routes the statement-kind ones through here (33 at S7.1b-ii;
+ * POKE/OUT/BORDER/BEEP/PLOT/DRAW/CIRCLE/LOAD/SAVE/INPUT/… still to come
+ * in Phase 7). Sized well above that ceiling so registration never
+ * overflows the silent-drop in visitor_on_sentence (an overflow would be
+ * a silently-missing handler = wrong codegen). Cheap: pointer arrays. */
+#define VISITOR_MAX_SENTENCE_HANDLERS 128
 
 struct Visitor {
     CompilerState *cs;

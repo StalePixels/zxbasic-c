@@ -1508,6 +1508,45 @@ static AstNode *tr_visit_print_comma(Visitor *v, AstNode *node) {
     return node;
 }
 
+/* visit_PRINT_AT (translator.py:848-853):
+ *   yield node.children[0]
+ *   self.ic_param(TYPE.ubyte, node.children[0].t)
+ *   yield node.children[1]
+ *   self.ic_fparam(TYPE.ubyte, node.children[1].t)
+ *   self.runtime_call(RuntimeLabel.PRINT_AT, 0)  # discard return
+ * Asymmetry is faithful: child[0] (row) ic_param; child[1] (col, last
+ * pushed) ic_fparam. PRINT_AT label = io.py:55 f"{NAMESPACE}.PRINT_AT"
+ * (NAMESPACE == .core; no double-underscore mangle, matching the
+ * .core.PRINT_COMMA / .core.PRINT_EOL convention). */
+static AstNode *tr_visit_print_at(Visitor *v, AstNode *node) {
+    Translator *tr = v->ctx;
+    const TypeInfo *ubyte = tr->cs->symbol_table->basic_types[TYPE_ubyte];
+    AstNode *row = node->child_count > 0 ? node->children[0] : NULL;
+    AstNode *col = node->child_count > 1 ? node->children[1] : NULL;
+    if (row) visitor_visit(v, row);
+    tr_ic_param(tr, ubyte, (row && row->t) ? row->t : "");
+    if (col) visitor_visit(v, col);
+    tr_ic_fparam(tr, ubyte, (col && col->t) ? col->t : "");
+    tr_runtime_call(tr, ".core.PRINT_AT", 0);
+    return node;
+}
+
+/* visit_PRINT_TAB (translator.py:855-858):
+ *   yield node.children[0]
+ *   self.ic_fparam(TYPE.ubyte, node.children[0].t)
+ *   self.runtime_call(RuntimeLabel.PRINT_TAB, 0)
+ * Single child (col) uses ic_fparam. PRINT_TAB label = io.py:59
+ * f"{NAMESPACE}.PRINT_TAB" (.core, no mangle). */
+static AstNode *tr_visit_print_tab(Visitor *v, AstNode *node) {
+    Translator *tr = v->ctx;
+    const TypeInfo *ubyte = tr->cs->symbol_table->basic_types[TYPE_ubyte];
+    AstNode *col = node->child_count > 0 ? node->children[0] : NULL;
+    if (col) visitor_visit(v, col);
+    tr_ic_fparam(tr, ubyte, (col && col->t) ? col->t : "");
+    tr_runtime_call(tr, ".core.PRINT_TAB", 0);
+    return node;
+}
+
 /* ====================================================================
  * String / array-element assignment + string-slice visitors —
  * faithful ports of src/arch/z80/visitor/translator.py:
@@ -2168,6 +2207,11 @@ static void tr_register_handlers(Visitor *v) {
     /* visit_PRINT_COMMA (translator.py:860-861) — the ',' separator's
      * comma-tab call. Part of S7.1b-i (the ',' support). */
     visitor_on_sentence(v, "PRINT_COMMA", tr_visit_print_comma);
+    /* visit_PRINT_AT (translator.py:848-853) / visit_PRINT_TAB
+     * (translator.py:855-858) — the AT/TAB position-control children.
+     * S7.1b-ii. */
+    visitor_on_sentence(v, "PRINT_AT", tr_visit_print_at);
+    visitor_on_sentence(v, "PRINT_TAB", tr_visit_print_tab);
 }
 
 void translator_visit(Translator *tr, AstNode *ast) {

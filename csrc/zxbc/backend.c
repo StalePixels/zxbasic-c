@@ -395,8 +395,10 @@ static int s_log2(long x) { int n = 0; while (x > 1) { x >>= 1; n++; } return n;
 #define RL_PRINTF16    ZXBC_NAMESPACE ".__PRINTF16"
 #define RL_PRINTF      ZXBC_NAMESPACE ".__PRINTF"
 #define RL_PRINTSTR    ZXBC_NAMESPACE ".__PRINTSTR"
+#define RL_PRINT_AT    ZXBC_NAMESPACE ".PRINT_AT"
 #define RL_PRINT_COMMA ZXBC_NAMESPACE ".PRINT_COMMA"
 #define RL_PRINT_EOL   ZXBC_NAMESPACE ".PRINT_EOL"
+#define RL_PRINT_TAB   ZXBC_NAMESPACE ".PRINT_TAB"
 
 /* runtime_call (common.py:156-161): REQUIRES.add(LABEL_REQUIRED_MODULES
  * [label]) if present; returns "call {label}". The label->module map is
@@ -519,8 +521,10 @@ static const char *s_required_module(const char *label) {
     if (strcmp(label, RL_PRINTF16)   == 0) return "printf16.asm";
     if (strcmp(label, RL_PRINTF)     == 0) return "printf.asm";
     if (strcmp(label, RL_PRINTSTR)   == 0) return "printstr.asm";
+    if (strcmp(label, RL_PRINT_AT)   == 0) return "print.asm";
     if (strcmp(label, RL_PRINT_COMMA)== 0) return "print.asm";
     if (strcmp(label, RL_PRINT_EOL)  == 0) return "print.asm";
+    if (strcmp(label, RL_PRINT_TAB)  == 0) return "print.asm";
     return NULL;
 }
 
