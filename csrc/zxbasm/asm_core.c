@@ -103,11 +103,11 @@ void asm_warning(AsmState *as, int lineno, const char *fmt, ...)
  * ---------------------------------------------------------------- */
 
 /* Declared in parser.c */
-extern int parser_parse(AsmState *as, const char *input);
+extern int asm_parser_parse(AsmState *as, const char *input);
 
 int asm_assemble(AsmState *as, const char *input)
 {
-    parser_parse(as, input);
+    asm_parser_parse(as, input);
 
     /* Check for unclosed scopes (missing ENDP) */
     if (as->mem.scope_count > 1) {

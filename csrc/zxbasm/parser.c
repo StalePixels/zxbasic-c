@@ -1816,7 +1816,7 @@ static void parse_program(Parser *p)
 /* ----------------------------------------------------------------
  * Public API — called from asm_core.c
  * ---------------------------------------------------------------- */
-int parser_parse(AsmState *as, const char *input)
+int asm_parser_parse(AsmState *as, const char *input)
 {
     /* Empty / whitespace-only input: PLY's parser cannot reduce its
      * start symbol and calls p_error(None) — written verbatim, no
