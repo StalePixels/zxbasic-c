@@ -20,6 +20,7 @@ add_library(zxbasm_lib STATIC
     asm_instr.c
     basic.c
     expr.c
+    gensnapshot.c
     lexer.c
     memory.c
     outfmt_sna.c
