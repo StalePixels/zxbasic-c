@@ -210,6 +210,127 @@ static AstNode *codegen_find_arraydecl(AstNode *node, AstNode *entry) {
     return NULL;
 }
 
+/* RE_INIT (zxbc.py:28-29):
+ *   re.compile(
+ *     r'^#[ \t]*init[ \t]+'
+ *     r'((?:[._a-zA-Z][._a-zA-Z0-9]*)|(?:"[._a-zA-Z][._a-zA-Z0-9]*"))'
+ *     r'[ \t]*$', re.IGNORECASE)
+ *
+ * Python `RE_INIT.match(m)` anchors `^...$` over one whole asm line (no
+ * embedded newline — `memory` is the post-filter asm vector split on
+ * "\n"). `re.IGNORECASE` only has an observable effect on the literal
+ * `init` (the NAME class [._a-zA-Z][._a-zA-Z0-9]* already spans both
+ * cases), so we match `init`/`INIT`/`Init`/... case-insensitively and
+ * everything else exactly. The capture group is one of two alternatives:
+ * an unquoted NAME, or a double-quoted NAME; the caller applies Python's
+ * `.strip('"')` (strips leading/trailing '"', only present when the
+ * quoted alternative matched).
+ *
+ * On match: returns 1 and writes the captured name (WITHOUT surrounding
+ * quotes — mirroring `.strip('"')`) into `out` (cap-bounded). On no
+ * match returns 0 and leaves `out` untouched. Over-match guards: the
+ * `[ \t]+` after `init` is mandatory (so `#initialize`, `#init` directly
+ * followed by a non-space, etc. do NOT match), the line must end exactly
+ * after the trailing `[ \t]*` (the `$` anchor — nothing else allowed),
+ * and the NAME must start with one of [._a-zA-Z]. */
+static int re_init_name(char c) {
+    return c == '.' || c == '_' ||
+           (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+}
+static int re_init_name_cont(char c) {
+    return re_init_name(c) || (c >= '0' && c <= '9');
+}
+static int re_init(const char *s, char *out, size_t cap) {
+    int i = 0;
+    /* ^# */
+    if (s[i] != '#') return 0;
+    i++;
+    /* [ \t]* */
+    while (s[i] == ' ' || s[i] == '\t') i++;
+    /* init  (re.IGNORECASE: only this literal has letters) */
+    {
+        static const char kw[] = "init";
+        for (int k = 0; k < 4; k++) {
+            char c = s[i + k];
+            char lc = (c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c;
+            if (lc != kw[k]) return 0;
+        }
+        i += 4;
+    }
+    /* [ \t]+  (mandatory — over-match guard for #initialize / #init<x>) */
+    if (!(s[i] == ' ' || s[i] == '\t')) return 0;
+    while (s[i] == ' ' || s[i] == '\t') i++;
+    /* ( NAME | "NAME" ) */
+    int quoted = 0;
+    if (s[i] == '"') { quoted = 1; i++; }
+    int name_start = i;
+    if (!re_init_name(s[i])) return 0;
+    i++;
+    while (re_init_name_cont(s[i])) i++;
+    int name_end = i;
+    if (quoted) {
+        if (s[i] != '"') return 0;
+        i++;
+    }
+    /* [ \t]* */
+    while (s[i] == ' ' || s[i] == '\t') i++;
+    /* $  (end of line — nothing else; mirrors Python `$` on a
+     * newline-free single line) */
+    if (s[i] != '\0') return 0;
+
+    /* `.strip('"')`: the capture group is name_start..name_end; quotes
+     * (if the quoted alternative matched) are outside [name_start,
+     * name_end) by construction, so the slice is already quote-free. */
+    size_t n = (size_t)(name_end - name_start);
+    if (n + 1 > cap) n = cap - 1;
+    memcpy(out, s + name_start, n);
+    out[n] = '\0';
+    return 1;
+}
+
+/* get_inits (zxbc.py:33-42):
+ *
+ *   def get_inits(memory):
+ *       arch.target.backend.INITS.union(zxbparser.INITS)
+ *       i = 0
+ *       for m in memory:
+ *           init = RE_INIT.match(m)
+ *           if init is not None:
+ *               arch.target.backend.INITS.add(init.groups()[0].strip('"'))
+ *               memory[i] = ""
+ *           i += 1
+ *
+ * Line 34 `arch.target.backend.INITS.union(zxbparser.INITS)`:
+ * `arch.target.backend.INITS` is `src/arch/z80/backend/common.py:118`
+ * `INITS: set[str] = set()`; `zxbparser.INITS` is `zxbparser.py:75
+ * INITS = gl.INITS` => `src/api/global_.py:104 INITS: set[str] = set()`
+ * — two DISTINCT plain `set` objects. Built-in `set.union(other)`
+ * RETURNS A NEW SET and DOES NOT mutate the receiver; the result here is
+ * not assigned, so line 34 is a pure NO-OP (the parser-collected inits,
+ * `gl.INITS` / our `cs->inits`, are never read into the emitted output —
+ * `emit_prologue` (backend/main.py:643,674) consumes ONLY `common.INITS`
+ * = our `b->inits`). Mirrored faithfully as a no-op (cs->inits is left
+ * untouched and is NOT merged into b->inits — doing so would diverge
+ * from the Python).
+ *
+ * Lines 36-42: scan the post-filter asm vector; for every RE_INIT match
+ * add the quote-stripped name to backend.INITS (our `b->inits`, the set
+ * `emit_prologue` reads) and blank that asm element (`memory[i] = ""`).
+ * Non-matching lines are left untouched. */
+static void get_inits(Arena *a, Backend *b, StrVec *memory) {
+    /* zxbc.py:34 — see header: built-in set.union returns a discarded
+     * new set; no mutation. Faithful no-op. */
+    char name[256];
+    for (int i = 0; i < memory->len; i++) {
+        if (re_init(memory->data[i], name, sizeof name)) {
+            /* backend.INITS.add(name) — b->inits is a string-keyed set */
+            hashmap_set(&b->inits, arena_strdup(a, name), (void *)1);
+            /* memory[i] = "" */
+            memory->data[i] = arena_strdup(a, "");
+        }
+    }
+}
+
 int codegen_emit(CompilerState *cs, AstNode *ast) {
     Arena *a = &cs->arena;
 
@@ -510,6 +631,14 @@ int codegen_emit(CompilerState *cs, AstNode *ast) {
     preproc_destroy(&ppf);
 
     StrVec asm_lines = split_nl(a, filtered);
+
+    /* zxbc.py:191 — get_inits(asm_output) immediately after
+     * `asm_output = zxbpp.OUTPUT.split("\n")` and BEFORE the asm vector
+     * is consumed (VarTranslator/emit_prologue/MAIN assembly). Unions
+     * (no-op) the parser inits, harvests every surviving `#init`
+     * directive into b->inits (the set emit_prologue reads) and blanks
+     * those lines so zero `#init` survive into the final output. */
+    get_inits(a, &b, &asm_lines);
 
     /* 12 VarTranslator over data_ast (zxbc.py:192-203):
      *   backend.MEMORY[:] = []                      (192)
