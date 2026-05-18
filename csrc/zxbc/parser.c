@@ -2563,7 +2563,44 @@ static AstNode *parse_array_initializer(Parser *p) {
                 if (sub) ast_add_child(p->cs, init, sub);
             } else {
                 AstNode *expr = parse_expression(p, PREC_NONE + 1);
-                if (expr) ast_add_child(p->cs, init, expr);
+                if (expr) {
+                    /* Faithful port of the const-vector element reject in
+                     * src/zxbc/zxbparser.py p_const_vector_elem_list:891
+                     * (first elem) and p_const_vector_elem_list_list:913
+                     * (subsequent elems): for each element e,
+                     *     if not is_static(e):
+                     *         if isinstance(e, sym.UNARY): make_constexpr(...)
+                     *         else: errmsg.syntax_error_not_constant(...)
+                     * i.e. a non-static, non-UNARY element ->
+                     * "Initializer expression is not constant."  The C
+                     * do/while collects BOTH the first and subsequent
+                     * elements, so this single per-element check mirrors
+                     * both Python productions.
+                     *
+                     * CONFINEMENT (S5.10d): narrowed to the only
+                     * C-modellable shape that hits Python's exact reject
+                     * set without the upstream p_addr_of_id:2683
+                     * is_dynamic-conditional CONSTEXPR-wrap the C parser
+                     * does NOT model — a *bare AST_ID resolving to a
+                     * CLASS_var runtime variable*.  check_is_static is
+                     * Python's is_static analogue (CONSTEXPR/NUMBER/CONST);
+                     * a CLASS_const id is is_static-true via check_is_const
+                     * so dim_const0's {xx,xx} is NOT rejected (stays rc=0
+                     * like Python).  The check deliberately does NOT touch
+                     * AST_UNARY (Python's make_constexpr branch) nor
+                     * AST_BINARY (the @a+1 shape) — arrlabels10/2/3/10b are
+                     * Python-ACCEPTED there and a broad is_static port
+                     * would FALSE_POS them (the proven S5.6 over-reach).
+                     * Lineno: Python emits at p.lexer.lineno / p.lineno(2)
+                     * == the const-vector's line == init->lineno (the
+                     * '{'); array11 -> line 4, matching the .err oracle. */
+                    if (!check_is_static(expr)
+                        && expr->tag == AST_ID
+                        && expr->u.id.class_ == CLASS_var) {
+                        err_not_constant(p->cs, init->lineno);
+                    }
+                    ast_add_child(p->cs, init, expr);
+                }
             }
         } while (match(p, BTOK_COMMA));
     }
