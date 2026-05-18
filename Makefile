@@ -25,6 +25,7 @@ PY_AST_DIFF     = csrc/tests/diff_ast_json.py
         test test-zxbpp test-zxbasm test-zxbc-parse test-zxbc-ast-equiv \
         test-semantic-fidelity verify-phase1-calibration \
         test-zxbc-codegen verify-phase5-calibration \
+        test-zxbc-outfmt verify-phase6-calibration \
         sweep-asm-zero-byte regenerate-zxbc-baselines
 
 build:
@@ -91,6 +92,22 @@ test-zxbc-codegen: $(ZXBC_C)
 # Python's asm for the calibration fixture.
 verify-phase5-calibration: $(ZXBC_C)
 	./csrc/tests/run_phase5_calibration.sh $(ZXBC_C)
+
+# Phase 6 outfmt (container) meter (S6.1). Measurement — the five-bucket
+# count IS the meter; the SKIP_C_ERROR -> BYTE_EQUAL transition across
+# S6.2->S6.6 is the red/green. All-RED by design at the Phase-6 entry
+# (C has no container generator — codegen.c writes asm text into the
+# container path). FALSE_POS must stay 0. Staged outside `make test`,
+# same as the Phase-5 codegen meter at its S5.1.
+test-zxbc-outfmt: $(ZXBC_C)
+	./csrc/tests/run_zxbc_outfmt_tests.sh $(ZXBC_C) $(ZXBC_TESTS)
+
+# Phase 6 named calibration gate (.tap byte-equivalence). Verifier —
+# exits non-zero on drift/absence. RED at the Phase-6 entry baseline
+# (C emits asm text into the .tap path), GREEN once the C .tap
+# generator reproduces Python's tape bytes for the calibration fixture.
+verify-phase6-calibration: $(ZXBC_C)
+	./csrc/tests/run_phase6_calibration.sh $(ZXBC_C)
 
 sweep-asm-zero-byte:
 	@matches=$$(find tests/functional -name '*.bin' -size 0); \
