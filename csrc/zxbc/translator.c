@@ -1547,6 +1547,41 @@ static AstNode *tr_visit_print_tab(Visitor *v, AstNode *node) {
     return node;
 }
 
+/* visit_ATTR_TMP (translator_visitor.py:103-118) — the SINGLE handler
+ * for all 8 in-PRINT temporary attrs (INK/PAPER/FLASH/BRIGHT/INVERSE/
+ * OVER/BOLD/ITALIC _TMP):
+ *   yield node.children[0]
+ *   self.ic_fparam(node.children[0].type_, node.children[0].t)
+ *   label = { "INK_TMP": RuntimeLabel.INK_TMP, ... }[node.token]
+ *   self.runtime_call(label, 0)            # discard return
+ * NOTE: ic_fparam uses the CHILD's OWN type_ (ubyte, because the parser
+ * make_typecast'd the operand to ubyte) — NOT a hardcoded constant.
+ * Labels are .core.<NAME>_TMP (io.py:25-32, NAMESPACE == .core, NO
+ * double-underscore mangle — same convention as .core.PRINT_COMMA).
+ * Python's _visit (translator_visitor.py:164-170) routes any token in
+ * ATTR_TMP here; the C visitor dispatches by SENTENCE kind, registered
+ * for all 8 "<NAME>_TMP" kinds in tr_register_handlers. */
+static AstNode *tr_visit_attr_tmp(Visitor *v, AstNode *node) {
+    Translator *tr = v->ctx;
+    AstNode *child0 = node->child_count > 0 ? node->children[0] : NULL;
+    if (child0) visitor_visit(v, child0);
+    tr_ic_fparam(tr, child0 ? child0->type_ : NULL,
+                 (child0 && child0->t) ? child0->t : "");
+
+    const char *kind = node->u.sentence.kind;
+    const char *label = NULL;
+    if      (strcmp(kind, "INK_TMP")     == 0) label = ".core.INK_TMP";
+    else if (strcmp(kind, "PAPER_TMP")   == 0) label = ".core.PAPER_TMP";
+    else if (strcmp(kind, "FLASH_TMP")   == 0) label = ".core.FLASH_TMP";
+    else if (strcmp(kind, "BRIGHT_TMP")  == 0) label = ".core.BRIGHT_TMP";
+    else if (strcmp(kind, "INVERSE_TMP") == 0) label = ".core.INVERSE_TMP";
+    else if (strcmp(kind, "OVER_TMP")    == 0) label = ".core.OVER_TMP";
+    else if (strcmp(kind, "BOLD_TMP")    == 0) label = ".core.BOLD_TMP";
+    else if (strcmp(kind, "ITALIC_TMP")  == 0) label = ".core.ITALIC_TMP";
+    tr_runtime_call(tr, label, 0);
+    return node;
+}
+
 /* ====================================================================
  * String / array-element assignment + string-slice visitors —
  * faithful ports of src/arch/z80/visitor/translator.py:
@@ -2212,6 +2247,17 @@ static void tr_register_handlers(Visitor *v) {
      * S7.1b-ii. */
     visitor_on_sentence(v, "PRINT_AT", tr_visit_print_at);
     visitor_on_sentence(v, "PRINT_TAB", tr_visit_print_tab);
+    /* visit_ATTR_TMP (translator_visitor.py:103-118 + the _visit
+     * ATTR_TMP routing :164-170) — the 8 in-PRINT temporary attrs.
+     * S7.1b-iii. ONE handler, registered for all 8 "<NAME>_TMP" kinds. */
+    visitor_on_sentence(v, "INK_TMP", tr_visit_attr_tmp);
+    visitor_on_sentence(v, "PAPER_TMP", tr_visit_attr_tmp);
+    visitor_on_sentence(v, "BRIGHT_TMP", tr_visit_attr_tmp);
+    visitor_on_sentence(v, "FLASH_TMP", tr_visit_attr_tmp);
+    visitor_on_sentence(v, "OVER_TMP", tr_visit_attr_tmp);
+    visitor_on_sentence(v, "INVERSE_TMP", tr_visit_attr_tmp);
+    visitor_on_sentence(v, "BOLD_TMP", tr_visit_attr_tmp);
+    visitor_on_sentence(v, "ITALIC_TMP", tr_visit_attr_tmp);
 }
 
 void translator_visit(Translator *tr, AstNode *ast) {

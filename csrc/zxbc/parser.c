@@ -3236,24 +3236,36 @@ static AstNode *parse_print_statement(Parser *p) {
             ast_add_child(p->cs, s, tab_sent);
             produced = true;
         } else {
-            /* attr : OVER|INVERSE|INK|PAPER|BRIGHT|FLASH expr  (p_attr)
-             * BOLD expr | ITALIC expr  (p_print_list_expr).
-             * Parser-shape (kind name) for the attr family is S7.1b-iii's
-             * P-iv; left structurally as-is here so it does not break the
-             * in-scope expr/`;`/`,`/eol logic. */
+            /* attr : OVER|INVERSE|INK|PAPER|BRIGHT|FLASH expr  (p_attr,
+             *   zxbparser.py:2055-2057) and BOLD expr | ITALIC expr
+             *   (p_print_list_expr, zxbparser.py:2030-2036).
+             * S7.1b-iii P-iv — EVERY in-PRINT attr (all 8) builds
+             *   make_sentence(lineno, p[1] + "_TMP",
+             *       make_typecast(TYPE.ubyte, p[2], lineno))
+             * i.e. a SENTENCE whose kind is "<NAME>_TMP" with ONE child =
+             * the operand expr wrapped in an unconditional ubyte typecast.
+             * make_typecast returning NULL (None expr) collapses to a
+             * 0-child SENTENCE — Python's make_sentence filters the None
+             * child (sentence.py:20). Same make_typecast(p->cs, ub, …)
+             * idiom as the p_print_elem_expr boolean case just below. */
             const char *attr_name = NULL;
-            if (match(p, BTOK_INK))          attr_name = "INK";
-            else if (match(p, BTOK_PAPER))   attr_name = "PAPER";
-            else if (match(p, BTOK_BRIGHT))  attr_name = "BRIGHT";
-            else if (match(p, BTOK_FLASH))   attr_name = "FLASH";
-            else if (match(p, BTOK_OVER))    attr_name = "OVER";
-            else if (match(p, BTOK_INVERSE)) attr_name = "INVERSE";
-            else if (match(p, BTOK_BOLD))    attr_name = "BOLD";
-            else if (match(p, BTOK_ITALIC))  attr_name = "ITALIC";
+            if (match(p, BTOK_INK))          attr_name = "INK_TMP";
+            else if (match(p, BTOK_PAPER))   attr_name = "PAPER_TMP";
+            else if (match(p, BTOK_BRIGHT))  attr_name = "BRIGHT_TMP";
+            else if (match(p, BTOK_FLASH))   attr_name = "FLASH_TMP";
+            else if (match(p, BTOK_OVER))    attr_name = "OVER_TMP";
+            else if (match(p, BTOK_INVERSE)) attr_name = "INVERSE_TMP";
+            else if (match(p, BTOK_BOLD))    attr_name = "BOLD_TMP";
+            else if (match(p, BTOK_ITALIC))  attr_name = "ITALIC_TMP";
             if (attr_name) {
+                int attr_lineno = p->previous.lineno;
                 AstNode *val = parse_expression(p, PREC_NONE + 1);
-                AstNode *attr_sent = make_sentence_node(p, attr_name, lineno);
-                if (val) ast_add_child(p->cs, attr_sent, val);
+                TypeInfo *ub =
+                    p->cs->symbol_table->basic_types[TYPE_ubyte];
+                AstNode *cast = make_typecast(p->cs, ub, val, attr_lineno);
+                AstNode *attr_sent =
+                    make_sentence_node(p, attr_name, attr_lineno);
+                if (cast) ast_add_child(p->cs, attr_sent, cast);
                 ast_add_child(p->cs, s, attr_sent);
                 produced = true;
             } else if (!check(p, BTOK_NEWLINE) && !check(p, BTOK_EOF) &&

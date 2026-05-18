@@ -400,6 +400,18 @@ static int s_log2(long x) { int n = 0; while (x > 1) { x >>= 1; n++; } return n;
 #define RL_PRINT_EOL   ZXBC_NAMESPACE ".PRINT_EOL"
 #define RL_PRINT_TAB   ZXBC_NAMESPACE ".PRINT_TAB"
 
+/* S7.1b-iii — in-PRINT temporary-attr RuntimeLabels, VERBATIM from
+ * io.py:25-32. NAMESPACE == .core; NO double-underscore mangle (same
+ * convention as RL_PRINT_COMMA). */
+#define RL_BOLD_TMP    ZXBC_NAMESPACE ".BOLD_TMP"
+#define RL_BRIGHT_TMP  ZXBC_NAMESPACE ".BRIGHT_TMP"
+#define RL_FLASH_TMP   ZXBC_NAMESPACE ".FLASH_TMP"
+#define RL_INK_TMP     ZXBC_NAMESPACE ".INK_TMP"
+#define RL_INVERSE_TMP ZXBC_NAMESPACE ".INVERSE_TMP"
+#define RL_ITALIC_TMP  ZXBC_NAMESPACE ".ITALIC_TMP"
+#define RL_OVER_TMP    ZXBC_NAMESPACE ".OVER_TMP"
+#define RL_PAPER_TMP   ZXBC_NAMESPACE ".PAPER_TMP"
+
 /* runtime_call (common.py:156-161): REQUIRES.add(LABEL_REQUIRED_MODULES
  * [label]) if present; returns "call {label}". The label->module map is
  * runtime/core.py:160-225 (only the S5.3-reachable labels). */
@@ -525,6 +537,16 @@ static const char *s_required_module(const char *label) {
     if (strcmp(label, RL_PRINT_COMMA)== 0) return "print.asm";
     if (strcmp(label, RL_PRINT_EOL)  == 0) return "print.asm";
     if (strcmp(label, RL_PRINT_TAB)  == 0) return "print.asm";
+    /* S7.1b-iii — in-PRINT temporary attrs (io.py:81-88 REQUIRED_MODULES,
+     * verbatim). */
+    if (strcmp(label, RL_BOLD_TMP)   == 0) return "bold.asm";
+    if (strcmp(label, RL_BRIGHT_TMP) == 0) return "bright.asm";
+    if (strcmp(label, RL_FLASH_TMP)  == 0) return "flash.asm";
+    if (strcmp(label, RL_INK_TMP)    == 0) return "ink.asm";
+    if (strcmp(label, RL_INVERSE_TMP)== 0) return "inverse.asm";
+    if (strcmp(label, RL_ITALIC_TMP) == 0) return "italic.asm";
+    if (strcmp(label, RL_OVER_TMP)   == 0) return "over.asm";
+    if (strcmp(label, RL_PAPER_TMP)  == 0) return "paper.asm";
     return NULL;
 }
 
