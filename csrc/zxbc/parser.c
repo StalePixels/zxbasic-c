@@ -7,6 +7,7 @@
 #include "parser.h"
 #include "errmsg.h"
 
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -759,6 +760,93 @@ static AstNode *parse_call_or_array(Parser *p, const char *name, int lineno, boo
         AstNode *n = ast_new(p->cs, AST_ARRAYACCESS, lineno);
         if (expr_context)
             entry->u.id.accessed = true;
+
+        /* Port C — make_array_access (zxbparser.py:311-325) wrapper +
+         * sym.ARRAYACCESS.make_node (arrayaccess.py:99-122).
+         *
+         * (a) Wrapper :316 - every subscript is make_typecast'd to
+         *     gl.BOUND_TYPE (== TYPE.uinteger for every target, set in
+         *     each arch package __init__).  If any returns None it is a
+         *     semantic error (already emitted) and make_array_access
+         *     returns None - this is the gating reject for sn_crash
+         *     (a String subscript -> "Cannot convert string to a
+         *     value." via the already-ported make_typecast,
+         *     compiler.c:596).  Python applies this regardless of
+         *     scope, BEFORE make_node's dim-count check.
+         * (b) make_node :100-104 - for scope != parameter only,
+         *     len(variable.bounds) != len(arglist) ->
+         *     "Array '%s' has %i dimensions, not %i"
+         *     (variable.name, #bounds, #args).  A byref array
+         *     parameter has no fixed bound count, so Python skips the
+         *     check for it - mirrored by the SCOPE_parameter guard.
+         * The const-subscript out-of-range case (:110-111) is a
+         * warning, not an error; not required by any owned fixture and
+         * intentionally not emitted here (faithful: it does not flip
+         * exit and the C corpus has no fixture gated on it). */
+        TypeInfo *bound_type = p->cs->symbol_table->basic_types[TYPE_uinteger];
+        bool subscript_error = false;
+        for (int i = 0; i < arglist->child_count; i++) {
+            AstNode *arg = arglist->children[i];
+            if (arg && arg->tag == AST_ARGUMENT && arg->child_count > 0) {
+                /* Python make_array_access (zxbparser.py:316) passes
+                 * arg.lineno - the ARGUMENT's *source* line at the call
+                 * site, i.e. the array-access statement line (== this
+                 * `lineno`).  The C ARGUMENT node's own lineno tracks
+                 * the resolved subscript symbol's declaration line
+                 * (e.g. sn_crash's `f` declared at line 2), so use the
+                 * call-site lineno to byte-match Python's reported
+                 * line (sn_crash -> line 4). */
+                AstNode *cast = make_typecast(p->cs, bound_type,
+                                              arg->children[0], lineno);
+                if (!cast) { subscript_error = true; break; }
+                arg->children[0] = cast;
+                arg->type_ = cast->type_;
+            }
+        }
+        if (subscript_error)
+            return NULL;  /* make_array_access returns None */
+
+        /* Confinement for the C parser's pre-existing array-substring-
+         * assignment grammar divergence (S5.10d-owned, OUT OF S5.10b
+         * scope).  Python's p_let_arr_substr / p_let_arr_substr_single
+         * (zxbparser.py:2733-2756) parse `a$(i, j) = <string>` as a
+         * STRING-array element write whose LAST subscript is a SUBSTRING
+         * index: they pop it before make_array_access, so Python's
+         * dim-count sees nargs-1 (verified: sys_letarrsubstr0 / 1 / 2,
+         * let_array_substr13 -> make_array_access nargs == declared
+         * dims, accepted rc 0).  The C parser has no such production —
+         * it builds the full N-arg ARRAYACCESS — so running the
+         * dim-count reject on a string array in that single-paren-group
+         * shape would reject what Python accepts (FALSE_POS, the
+         * absolute-gate violation).
+         *
+         * The distinguishing signal, available right here: the
+         * substring index is inside the SAME paren group only when NO
+         * `(` postfix group follows the closing `)`.  The postfix form
+         * `a(3,4)(1) = "HELLO"` (let_array_substr8) builds the inner
+         * `a(3,4)` here with `(` as the very next token — there Python
+         * DOES pass the full arglist to make_array_access (nargs == 2)
+         * and rejects, so the dim-count check must still fire.  A
+         * non-string array never triggers the substring grammar, so it
+         * is always checked (let_array_wrong_dims).  Faithful narrower
+         * subset: skip the dim-count reject ONLY for a string-typed
+         * array not followed by a postfix `(` group; never widen past
+         * Python.  (The subscript BOUND_TYPE typecast above still runs —
+         * Python's make_array_substr_assign also typecasts its arglist,
+         * and the cast is idempotent/harmless for the popped index.) */
+        bool str_substr_assign_shape =
+            type_is_string(entry->type_) && !check(p, BTOK_LP);
+
+        if (entry->u.id.scope != SCOPE_parameter && !str_substr_assign_shape) {
+            int ndecl = entry->u.id.arr_boundlist
+                            ? entry->u.id.arr_boundlist->child_count : 0;
+            if (ndecl != arglist->child_count) {
+                zxbc_error(p->cs, lineno, "Array '%s' has %d dimensions, not %d",
+                           entry->u.id.name, ndecl, arglist->child_count);
+                return NULL;
+            }
+        }
+
         ast_add_child(p->cs, n, entry);
         for (int i = 0; i < arglist->child_count; i++)
             ast_add_child(p->cs, n, arglist->children[i]);
@@ -2475,6 +2563,214 @@ static AstNode *parse_array_initializer(Parser *p) {
     return init;
 }
 
+/* ----------------------------------------------------------------
+ * make_bound — array-bound semantic validation
+ *   Faithful port of src/symbols/bound.py SymbolBOUND.make_node
+ *   (invoked via src/zxbc/zxbparser.py:444 make_bound), with the
+ *   five rejects in Python's exact precedence order.
+ *
+ * eval_to_num analogue (src/api/utils.py:173 eval_to_num):
+ *   Python computes eval(node.t, {}, {}) where node.t is the node's
+ *   string repr.  For a NUMBER that repr is str(value) -> the number.
+ *   For a *numeric* named CONST, SymbolBINARY.make_node already FOLDED
+ *   any const+number arithmetic so the CONST's .t is the resolved
+ *   numeric string (verified: `const B = A + 2` -> B.t == '3').  For a
+ *   CONSTEXPR carrying a non-numeric term (e.g. const9's `@dgConnected`
+ *   address-of) the repr is f"#{...}" -> eval() SyntaxError -> None.
+ *
+ *   The C front-end does NOT fold numeric-const arithmetic to a bare
+ *   NUMBER (make_typecast keeps a CONST-ref an AST_ID, so make_binary
+ *   wraps it in a CONSTEXPR rather than taking the fast NUMBER fold).
+ *   To reproduce Python's NET eval_to_num outcome (fold + eval) — and
+ *   so NEVER reject what Python accepts — the C analogue numerically
+ *   evaluates the static expression tree: a CONSTEXPR/BINARY/UNARY of
+ *   numeric leaves resolves to its value (Python folded it to a
+ *   number), while a genuinely non-numeric leaf (address-of, label,
+ *   string, runtime var) yields "unresolved" exactly as Python's
+ *   eval() fails on the `#...`/NameError forms.
+ *
+ * Returns true and stores *out on success; false == Python's None.
+ * ---------------------------------------------------------------- */
+static bool zxbc_eval_to_num(const AstNode *n, double *out);
+
+static bool zxbc_eval_binop(const char *op, double l, double r, double *out) {
+    /* Mirrors compiler.c fold_numeric for the operators a *static*
+     * array-bound CONSTEXPR can contain.  A non-numeric / undefined
+     * operator (or div/mod by zero, as Python's eval would ZeroDivision
+     * -> not caught by eval_to_num's (NameError,SyntaxError,ValueError)
+     * so it would propagate; but a bound never reaches here with /0 in
+     * the corpus) yields false == unresolved. */
+    if (strcmp(op, "PLUS") == 0)  { *out = l + r; return true; }
+    if (strcmp(op, "MINUS") == 0) { *out = l - r; return true; }
+    if (strcmp(op, "MULT") == 0 || strcmp(op, "MUL") == 0) { *out = l * r; return true; }
+    if (strcmp(op, "DIV") == 0)  { if (r == 0) return false; *out = l / r; return true; }
+    if (strcmp(op, "MOD") == 0)  { if (r == 0) return false; *out = fmod(l, r); return true; }
+    if (strcmp(op, "POW") == 0)  { *out = pow(l, r); return true; }
+    if (strcmp(op, "SHL") == 0)  { *out = (double)((int64_t)l << (int64_t)r); return true; }
+    if (strcmp(op, "SHR") == 0)  { *out = (double)((int64_t)l >> (int64_t)r); return true; }
+    if (strcmp(op, "BAND") == 0) { *out = (double)((int64_t)l & (int64_t)r); return true; }
+    if (strcmp(op, "BOR") == 0)  { *out = (double)((int64_t)l | (int64_t)r); return true; }
+    if (strcmp(op, "BXOR") == 0) { *out = (double)((int64_t)l ^ (int64_t)r); return true; }
+    if (strcmp(op, "LT") == 0)   { *out = (l <  r) ? 1 : 0; return true; }
+    if (strcmp(op, "GT") == 0)   { *out = (l >  r) ? 1 : 0; return true; }
+    if (strcmp(op, "EQ") == 0)   { *out = (l == r) ? 1 : 0; return true; }
+    if (strcmp(op, "LE") == 0)   { *out = (l <= r) ? 1 : 0; return true; }
+    if (strcmp(op, "GE") == 0)   { *out = (l >= r) ? 1 : 0; return true; }
+    if (strcmp(op, "NE") == 0)   { *out = (l != r) ? 1 : 0; return true; }
+    if (strcmp(op, "AND") == 0)  { *out = ((int64_t)l && (int64_t)r) ? 1 : 0; return true; }
+    if (strcmp(op, "OR") == 0)   { *out = ((int64_t)l || (int64_t)r) ? 1 : 0; return true; }
+    if (strcmp(op, "XOR") == 0)  { *out = ((!!(int64_t)l) ^ (!!(int64_t)r)) ? 1 : 0; return true; }
+    return false;
+}
+
+static bool zxbc_eval_to_num(const AstNode *n, double *out) {
+    if (!n) return false;
+    switch (n->tag) {
+    case AST_NUMBER:
+        *out = n->u.number.value;
+        return true;
+    case AST_CONSTEXPR:
+        /* Python CONSTEXPR.t == f"#{traverse_const}"; eval() fails on
+         * the leading '#'.  But Python only ever has a CONSTEXPR here
+         * when traverse_const itself is non-numeric — a numeric one was
+         * already folded to a NUMBER upstream.  So recurse the inner
+         * expr: numeric => Python's folded value; non-numeric leaf =>
+         * unresolved (== Python's `#...` -> None). */
+        return n->child_count > 0 && zxbc_eval_to_num(n->children[0], out);
+    case AST_ID:
+        /* A named CONST: Python's .t is the resolved numeric string
+         * (const+number arithmetic already folded).  Resolve via the
+         * stored constant value (default_value_expr).  A non-const ID
+         * (a DIM var) is not static and is rejected earlier by
+         * check_is_static, but defensively yields unresolved here. */
+        if (n->u.id.class_ == CLASS_const && n->u.id.default_value_expr)
+            return zxbc_eval_to_num(n->u.id.default_value_expr, out);
+        return false;
+    case AST_BINARY: {
+        double l, r;
+        if (n->child_count < 2) return false;
+        if (!zxbc_eval_to_num(n->children[0], &l)) return false;
+        if (!zxbc_eval_to_num(n->children[1], &r)) return false;
+        return zxbc_eval_binop(n->u.binary.operator, l, r, out);
+    }
+    case AST_UNARY: {
+        double v;
+        const char *op = n->u.unary.operator;
+        /* ADDRESS (@name) is non-numeric -> Python eval() fails (this
+         * is precisely const9's `@dgConnected` -> Unknown bound). */
+        if (op && strcmp(op, "ADDRESS") == 0) return false;
+        if (n->child_count < 1) return false;
+        if (!zxbc_eval_to_num(n->children[0], &v)) return false;
+        if (op && strcmp(op, "MINUS") == 0) { *out = -v; return true; }
+        if (op && strcmp(op, "PLUS") == 0)  { *out = v;  return true; }
+        if (op && strcmp(op, "NOT") == 0)   { *out = (v == 0) ? 1 : 0; return true; }
+        if (op && strcmp(op, "BNOT") == 0)  { *out = (double)(~(int64_t)v); return true; }
+        return false;
+    }
+    default:
+        /* STRING, builtins, runtime VAR refs, slices, etc. — Python's
+         * eval() raises NameError/SyntaxError/ValueError -> None. */
+        return false;
+    }
+}
+
+/* Port A: faithful src/symbols/bound.py SymbolBOUND.make_node.
+ * Returns the (unchanged) AST_BOUND on success, or NULL after emitting
+ * the matching Python error.  The bound's children are NOT rewritten —
+ * accepted-array AST construction must stay byte-identical (the resolved
+ * lower/upper are recomputed on demand for check_bound's .count). */
+static AstNode *make_bound(Parser *p, AstNode *bound, int lineno) {
+    if (!bound || bound->child_count < 2) return NULL;
+    AstNode *lower = bound->children[0];
+    AstNode *upper = bound->children[1];
+
+    /* bound.py:43 — if not check.is_static(lower, upper) */
+    if (!check_is_static(lower) || !check_is_static(upper)) {
+        zxbc_error(p->cs, lineno, "Array bounds must be constants");
+        return NULL;
+    }
+
+    double lo, up;
+    /* bound.py:47-49 — lower_value = eval_to_num(lower.t); if None */
+    if (!zxbc_eval_to_num(lower, &lo)) {
+        zxbc_error(p->cs, lineno, "Unknown lower bound for array dimension");
+        return NULL;
+    }
+    /* bound.py:52-54 — upper_value = eval_to_num(upper.t); if None */
+    if (!zxbc_eval_to_num(upper, &up)) {
+        zxbc_error(p->cs, lineno, "Unknown upper bound for array dimension");
+        return NULL;
+    }
+    /* bound.py:57-58 — if lower_value < 0 */
+    if (lo < 0) {
+        zxbc_error(p->cs, lineno, "Array bounds must be greater than 0");
+        return NULL;
+    }
+    /* bound.py:61-62 — if lower_value > upper_value */
+    if (lo > up) {
+        zxbc_error(p->cs, lineno,
+                   "Lower array bound must be less or equal to upper one");
+        return NULL;
+    }
+    return bound;
+}
+
+/* check_bound's BOUND.count == upper - lower + 1 (bound.py:36-38), on
+ * the resolved values.  Only called for bounds make_bound accepted. */
+static long bound_count(const AstNode *bound) {
+    double lo = 0, up = 0;
+    if (bound && bound->child_count >= 2) {
+        zxbc_eval_to_num(bound->children[0], &lo);
+        zxbc_eval_to_num(bound->children[1], &up);
+    }
+    return (long)up - (long)lo + 1;
+}
+
+/* Port B: faithful src/zxbc/zxbparser.py:807-838 p_arr_decl_initialized
+ * check_bound closure.  `bounds` are the SUCCESSFULLY-built BOUND nodes
+ * (Python's p[4].children — SymbolBOUNDLIST.make_node skips None bounds,
+ * so a make_bound-rejected dimension is absent, exactly as here).
+ * `remaining` is the const-vector image: an AST_ARRAYINIT == Python's
+ * list; anything else == a scalar leaf.  Recurses bounds[start..] vs the
+ * nested image, in Python's exact branch order.  Returns false (and has
+ * emitted one error) on the first mismatch. */
+static bool check_bound_recurse(Parser *p, AstNode *boundlist, int start,
+                                AstNode *remaining, int lineno) {
+    int nbounds = boundlist ? boundlist->child_count - start : 0;
+    bool rem_is_list = (remaining && remaining->tag == AST_ARRAYINIT);
+
+    if (nbounds <= 0) {  /* zxbparser.py:810 — not boundlist */
+        if (!rem_is_list)
+            return true;  /* :811-812 — return True (OK) */
+        zxbc_error(p->cs, lineno,
+                   "Unexpected extra vector dimensions. It should be %d",
+                   remaining->child_count);
+        return false;     /* :814-817 */
+    }
+
+    if (!rem_is_list) {   /* :819 — not isinstance(remaining, list) */
+        zxbc_error(p->cs, lineno,
+                   "Mismatched vector size. Missing %d extra dimension(s)",
+                   nbounds);
+        return false;     /* :821-824 */
+    }
+
+    long want = bound_count(boundlist->children[start]);
+    if ((long)remaining->child_count != want) {  /* :826 */
+        zxbc_error(p->cs, lineno,
+                   "Mismatched vector size. Expected %ld elements, got %d.",
+                   want, remaining->child_count);
+        return false;     /* :828-830 */
+    }
+
+    for (int i = 0; i < remaining->child_count; i++) {  /* :833-835 */
+        if (!check_bound_recurse(p, boundlist, start + 1,
+                                 remaining->children[i], lineno))
+            return false;
+    }
+    return true;
+}
+
 static AstNode *parse_dim_statement(Parser *p) {
     bool is_const = match(p, BTOK_CONST);
     if (!is_const) consume(p, BTOK_DIM, "Expected DIM or CONST");
@@ -2504,7 +2800,13 @@ static AstNode *parse_dim_statement(Parser *p) {
             AstNode *bound = ast_new(p->cs, AST_BOUND, lineno);
             if (lower_expr) ast_add_child(p->cs, bound, lower_expr);
             if (upper_expr) ast_add_child(p->cs, bound, upper_expr);
-            ast_add_child(p->cs, bounds, bound);
+            /* Port A — sym.BOUND.make_node (bound.py:40-65) via
+             * make_bound (zxbparser.py:442-444).  SymbolBOUNDLIST
+             * .make_node (boundlist.py:38-43) skips a None bound, so a
+             * rejected dimension is absent from the boundlist — exactly
+             * what check_bound (Port B) then walks. */
+            if (make_bound(p, bound, lineno))
+                ast_add_child(p->cs, bounds, bound);
         } while (match(p, BTOK_COMMA));
         consume(p, BTOK_RP, "Expected ')' after array bounds");
 
@@ -2541,6 +2843,22 @@ static AstNode *parse_dim_statement(Parser *p) {
             }
         }
 
+        /* Port B — p_arr_decl_initialized.check_bound
+         * (zxbparser.py:807-838).  Python runs it ONLY for the
+         * const-vector-initialized form (`=> {...}` / `= {...}`), i.e.
+         * an AST_ARRAYINIT image, and only when bounds/typedef/vector
+         * all parsed (p[4]/p[6]/p[8] not None — type is always set
+         * here; bounds always exists).  The error lineno is p.lineno(8)
+         * == the const-vector's line == init->lineno (set at its '{').
+         * On mismatch Python returns before declare_array — but the C
+         * declare here is symboltable_declare (further down) and a
+         * reject has already flipped error_count, so exit is 1 exactly
+         * as Python.  Faithful: do NOT touch the bare-DIM (p_decl_arr)
+         * path, which has no check_bound. */
+        if (init && init->tag == AST_ARRAYINIT) {
+            check_bound_recurse(p, bounds, 0, init, init->lineno);
+        }
+
         /* Check: cannot initialize array of type string */
         if (init && type && type_is_string(type)) {
             zxbc_error(p->cs, lineno, "Cannot initialize array of type string");
@@ -2570,6 +2888,15 @@ static AstNode *parse_dim_statement(Parser *p) {
         }
         AstNode *id_node = symboltable_declare(p->cs->symbol_table, p->cs, dim_name, lineno, CLASS_array);
         id_node->type_ = type;
+        /* Port C support — the declared bound list is the faithful
+         * analogue of Python entry.bounds (symboltable.declare_array),
+         * read by arrayaccess.make_node's dim-count check at every
+         * array-access site.  symboltable_access_array returns this
+         * same shared symbol node, so stamp the boundlist on the entry
+         * for ALL arrays (the SCOPE_local block below additionally
+         * needs arr_init/is_zero_based; this stamp is strictly additive
+         * u.id metadata — not serialised by zxbc-ast-dump). */
+        id_node->u.id.arr_boundlist = bounds;
         ast_add_child(p->cs, decl, id_node);
         ast_add_child(p->cs, decl, bounds);
         if (arr_at_expr) ast_add_child(p->cs, decl, arr_at_expr);
@@ -2586,7 +2913,7 @@ static AstNode *parse_dim_statement(Parser *p) {
          * for the zero-based numeric corpus, exactly as the global path
          * (var_translator.c:459-463). */
         if (id_node->u.id.scope == SCOPE_local) {
-            id_node->u.id.arr_boundlist = bounds;
+            /* arr_boundlist already stamped above for all arrays. */
             id_node->u.id.arr_init = init;
             bool zb = true;
             for (int bi = 0; bi < bounds->child_count; bi++) {
@@ -2961,6 +3288,20 @@ static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function, bool is_decl
                 param_node->u.argument.byref = byref;
                 param_node->u.argument.is_array = is_array;
                 param_node->type_ = param_type;
+                /* Port D — p_param_def_type (zxbparser.py:3129):
+                 *   default_value = make_typecast(typedef, p[3],
+                 *                                  id_.lineno)
+                 * Route the parsed default through the already-ported
+                 * make_typecast so a string default for a numeric param
+                 * raises "Cannot convert string to a value. Use VAL()
+                 * function" (compiler.c:596) at the param-name line,
+                 * exactly as Python (gates optional_param3's first
+                 * error).  make_typecast is a no-op when types match /
+                 * node->type_ is NULL, so this never rejects anything
+                 * Python's make_node would not. */
+                if (default_val)
+                    default_val = make_typecast(p->cs, param_type,
+                                                default_val, param_line);
                 if (default_val) ast_add_child(p->cs, param_node, default_val);
                 ast_add_child(p->cs, params, param_node);
             } while (match(p, BTOK_COMMA));
