@@ -13,6 +13,7 @@
 #include "errmsg.h"
 #include "peephole/engine.h"
 #include "optimizer/optimizer.h"
+#include "asm_bridge.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -157,18 +158,38 @@ static char *codegen_le2_adapter(Arena *a, Z80StrList mem) {
 }
 
 /* output() (zxbc.py:45-68): #-lines pass through; non-':' lines get a
- * leading '\t'; every element written + '\n' (element may contain '\n'). */
-static void emit_output(FILE *f, StrVec mem, Arena *a) {
+ * leading '\t'; every element written + '\n' (element may contain '\n').
+ *
+ * emit_output_str renders `mem` to a single arena-allocated NUL-terminated
+ * string that is byte-identical to the bytes emit_output would fwrite.
+ * emit_output is now a thin fwrite wrapper over it so the asm-text path
+ * stays byte-for-byte unchanged. */
+static char *emit_output_str(StrVec mem, Arena *a) {
+    StrBuf sb;
+    strbuf_init(&sb);
     for (int i = 0; i < mem.len; i++) {
         char *m = rstrip_ws(a, mem.data[i]);
         if (m[0] != '\0' && m[0] == '#') {
-            fprintf(f, "%s\n", m);
+            strbuf_append(&sb, m);
+            strbuf_append_char(&sb, '\n');
             continue;
         }
         if (m[0] != '\0' && strchr(m, ':') == NULL)
-            fputc('\t', f);
-        fprintf(f, "%s\n", m);
+            strbuf_append_char(&sb, '\t');
+        strbuf_append(&sb, m);
+        strbuf_append_char(&sb, '\n');
     }
+    const char *cs = strbuf_cstr(&sb);
+    size_t n = strlen(cs);
+    char *out = arena_alloc(a, n + 1);
+    memcpy(out, cs, n + 1);
+    strbuf_free(&sb);
+    return out;
+}
+
+static void emit_output(FILE *f, StrVec mem, Arena *a) {
+    const char *s = emit_output_str(mem, a);
+    fwrite(s, 1, strlen(s), f);
 }
 
 /* S5.6 — locate the parser-built ARRAYDECL node whose child[0] is the
@@ -435,16 +456,26 @@ int codegen_emit(CompilerState *cs, AstNode *ast) {
     for (int i = 0; i < asm_lines.len; i++) vec_push(final, asm_lines.data[i]);
     for (int i = 0; i < epilogue.len; i++)  vec_push(final, epilogue.data[i]);
 
-    /* 14 output(asm_output, output_file)  (zxbc.py:212-214) */
+    /* output(asm_output, ...) then optional assemble  (zxbc.py:212-228) */
     int rc = 0;
-    FILE *of = fopen(cs->opts.output_filename, "wb");
-    if (!of) {
-        zxbc_error(cs, 0, "cannot open output file '%s'",
-                   cs->opts.output_filename);
-        rc = 1;
+    if (strcmp(cs->opts.output_file_type, "bin") == 0) {
+        /* zxbc.py:215-228: render asm_output to text, assemble it, then
+         * generate_binary; gl.has_errors -> return 5. */
+        const char *asm_text = emit_output_str(final, a);
+        if (zxbc_asm_to_bin(asm_text, cs->opts.output_filename) != 0)
+            rc = 5;
     } else {
-        emit_output(of, final, a);
-        fclose(of);
+        /* "asm" (zxbc.py:212-214) and all not-yet-ported formats
+         * (tap/tzx/sna/z80, S6.3-S6.6): unchanged write-asm-to-file. */
+        FILE *of = fopen(cs->opts.output_filename, "wb");
+        if (!of) {
+            zxbc_error(cs, 0, "cannot open output file '%s'",
+                       cs->opts.output_filename);
+            rc = 1;
+        } else {
+            emit_output(of, final, a);
+            fclose(of);
+        }
     }
 
     vec_free(prologue); vec_free(epilogue); vec_free(asm_lines);

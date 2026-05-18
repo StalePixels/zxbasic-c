@@ -45,6 +45,7 @@ add_library(zxbc_parser_lib STATIC
     optimizer/optmain.c
     backend.c
     codegen.c
+    asm_bridge.c
 )
 
 target_include_directories(zxbc_parser_lib PUBLIC
@@ -53,6 +54,11 @@ target_include_directories(zxbc_parser_lib PUBLIC
 )
 
 target_link_libraries(zxbc_parser_lib PUBLIC zxbpp_lib)
+
+# S6.2b: the `.bin` output path calls into the assembler library via
+# asm_bridge.c. zxbasm_lib's PUBLIC include dir lets asm_bridge.c find
+# zxbasm.h without exposing it to the rest of zxbc.
+target_link_libraries(zxbc_parser_lib PUBLIC zxbasm_lib)
 
 if(UNIX)
     target_link_libraries(zxbc_parser_lib PUBLIC m)
