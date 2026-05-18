@@ -524,6 +524,88 @@ static void resolve_temp_label(AsmState *as, const char *fname, Label *lbl)
 }
 
 /* ----------------------------------------------------------------
+ * Memory map (mirrors src/zxbasm/memory.py:294-299
+ *
+ *   return "\n".join(sorted(
+ *       "%04X: %s" % (x.value, x.name)
+ *       for x in self.global_labels.values() if x.is_address))
+ *
+ * Builds the joined "hex address: label" listing for the global
+ * scope. Address labels only (EQU constants have is_address False).
+ * Formatted lines are sorted lexicographically (Python sorted() on a
+ * list of ASCII str, == strcmp here) and joined with '\n' with NO
+ * trailing newline.  Result is arena-allocated.
+ * ---------------------------------------------------------------- */
+typedef struct {
+    Arena *arena;
+    char **lines;
+    int count;
+    int cap;
+} MemMapCollector;
+
+static bool mem_memory_map_collect(const char *key, void *value, void *userdata)
+{
+    (void)key;
+    MemMapCollector *c = (MemMapCollector *)userdata;
+    Label *lbl = (Label *)value;
+
+    /* Python: if x.is_address */
+    if (!lbl->is_address) return true;
+
+    /* Python: "%04X: %s" % (x.value, x.name)
+     * x.name for these (non-temporary, declared) labels == x._name,
+     * which maps to the C Label.name field. Python "%X" on a Python
+     * int widens naturally for values > 0xFFFF; %04llX matches that
+     * for non-negative addresses without masking or truncation. */
+    const char *name = lbl->name ? lbl->name : "";
+    int needed = snprintf(NULL, 0, "%04llX: %s",
+                          (long long)lbl->value, name);
+    char *line = arena_alloc(c->arena, (size_t)needed + 1);
+    snprintf(line, (size_t)needed + 1, "%04llX: %s",
+             (long long)lbl->value, name);
+
+    if (c->count >= c->cap) {
+        int new_cap = c->cap ? c->cap * 2 : 8;
+        char **grown = arena_alloc(c->arena, sizeof(char *) * (size_t)new_cap);
+        if (c->count > 0)
+            memcpy(grown, c->lines, sizeof(char *) * (size_t)c->count);
+        c->lines = grown;
+        c->cap = new_cap;
+    }
+    c->lines[c->count++] = line;
+    return true;
+}
+
+static int mem_memory_map_cmp(const void *a, const void *b)
+{
+    /* Python sorted() on ASCII strings == strcmp ordering */
+    return strcmp(*(const char *const *)a, *(const char *const *)b);
+}
+
+char *mem_memory_map(Memory *m, Arena *arena)
+{
+    MemMapCollector c = { arena, NULL, 0, 0 };
+
+    /* Python: self.global_labels == self.local_labels[0] */
+    hashmap_foreach(&m->label_scopes[0], mem_memory_map_collect, &c);
+
+    qsort(c.lines, (size_t)c.count, sizeof(char *), mem_memory_map_cmp);
+
+    /* Python: "\n".join(...) — separator only, no trailing newline,
+     * empty string when there are zero qualifying labels. */
+    StrBuf sb;
+    strbuf_init(&sb);
+    for (int i = 0; i < c.count; i++) {
+        if (i > 0) strbuf_append_char(&sb, '\n');
+        strbuf_append(&sb, c.lines[i]);
+    }
+
+    char *result = arena_strdup(arena, strbuf_cstr(&sb));
+    strbuf_free(&sb);
+    return result;
+}
+
+/* ----------------------------------------------------------------
  * Memory dump — resolve all pending labels and emit binary
  * ---------------------------------------------------------------- */
 int mem_dump(AsmState *as, int *org_out, uint8_t **data_out, int *data_len)

@@ -349,6 +349,7 @@ void mem_set_label(AsmState *as, const char *label, int lineno, bool local);
 void mem_enter_proc(AsmState *as, int lineno);
 void mem_exit_proc(AsmState *as, int lineno);
 int mem_dump(AsmState *as, int *org_out, uint8_t **data_out, int *data_len);
+char *mem_memory_map(Memory *m, Arena *arena);
 
 /* Namespace helpers */
 char *normalize_namespace(AsmState *as, const char *ns);

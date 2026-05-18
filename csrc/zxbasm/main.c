@@ -233,9 +233,52 @@ int main(int argc, char *argv[])
     /* Step 3: Handle #init entries and generate binary */
     /* TODO: #init support (CALL NN for each init label, JP NN at end) */
 
-    /* Step 4: Memory map */
+    /* Step 4: Memory map (mirrors src/zxbasm/zxbasm.py:183-185)
+     *
+     *   if OPTIONS.memory_map:
+     *       with open(OPTIONS.memory_map, "wt") as f:
+     *           f.write(asmparse.MEMORY.memory_map)
+     *
+     * Python skips this when MEMORY.memory_bytes is empty: zxbasm.py:163
+     * (`if not asmparse.MEMORY.memory_bytes: ... return 0`) returns
+     * before the write.
+     *
+     * The faithful C analogue of "memory_bytes is non-empty" is "was
+     * Memory.set_memory_slot() ever called". Python populates
+     * memory_bytes[org]=0 from set_memory_slot(), reached BOTH from
+     * __set_byte()/add_instruction (memory.py:157) AND from EVERY
+     * non-temporary declare_label() including EQU constants
+     * (memory.py:249). So an EQU-only unit has memory_bytes={0:0}
+     * (verified) and Python DOES write an (empty) mmap; only a unit
+     * with zero bytes AND zero declared labels has empty memory_bytes
+     * (and that path fails earlier with a parse error anyway).
+     *
+     * byte_set[] alone is too strict here: mem_declare_label()
+     * deliberately does not set byte_set[] (memory.c:240-244), so an
+     * EQU-only unit would be wrongly suppressed. Mirror Python by
+     * also treating "a label was declared in the global scope"
+     * (label_scopes[0], where top-level + merged PROC labels land,
+     * the same map mem_dump() sweeps) as non-empty. */
     if (memory_map_file) {
-        /* TODO: generate memory map */
+        bool any_byte = as.mem.label_scopes[0].count > 0;
+        for (int i = 0; !any_byte && i < MAX_MEM; i++) {
+            if (as.mem.byte_set[i]) any_byte = true;
+        }
+        if (any_byte) {
+            FILE *mf = fopen(memory_map_file, "w");
+            if (!mf) {
+                fprintf(stderr, "Cannot open memory map file: %s\n",
+                        memory_map_file);
+                if (as.err_file && as.err_file != stderr)
+                    fclose(as.err_file);
+                asm_destroy(&as);
+                free(default_out);
+                return 1;
+            }
+            char *mmap = mem_memory_map(&as.mem, &as.arena);
+            fputs(mmap, mf);
+            fclose(mf);
+        }
     }
 
     /* Step 5: Generate binary output */
