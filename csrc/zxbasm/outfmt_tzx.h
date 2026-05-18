@@ -17,6 +17,8 @@
 #ifndef OUTFMT_TZX_H
 #define OUTFMT_TZX_H
 
+#include "outfmt_tap.h" /* OutfmtAuxBin / OutfmtAuxHeadless aux descriptors */
+
 /*
  * Write a loader-less TZX file faithful to Python's TZX.emit()
  * (tzx.py:123-143) with loader_bytes is None and no aux blocks:
@@ -67,5 +69,28 @@ int outfmt_tzx_write_loader(const char *filename,
                             int loader_len,
                             const unsigned char *program_bytes,
                             int program_len);
+
+/*
+ * Aux-aware public TZX writer — faithful TZX.emit() INCLUDING the
+ * aux_bin_blocks / aux_headless_bin_blocks tail (tzx.py:123-143). The
+ * TZX analogue of outfmt_tap_write_full; the entry the future asm_bridge
+ * format-wiring (carried gate) calls. Delegates to the shared core with
+ * is_tzx == 1. See outfmt_tap.h for the OutfmtAuxBin / OutfmtAuxHeadless
+ * semantics. n_aux_bin == 0 && n_aux_headless == 0 is byte-identical to
+ * outfmt_tzx_write_loader.
+ *
+ * Returns 0 on success, -1 on failure.
+ */
+int outfmt_tzx_write_full(const char *filename,
+                          const char *program_name,
+                          int entry_point,
+                          const unsigned char *loader_bytes,
+                          int loader_len,
+                          const unsigned char *program_bytes,
+                          int program_len,
+                          const OutfmtAuxBin *aux_bin,
+                          int n_aux_bin,
+                          const OutfmtAuxHeadless *aux_headless,
+                          int n_aux_headless);
 
 #endif /* OUTFMT_TZX_H */

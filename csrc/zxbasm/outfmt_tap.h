@@ -14,6 +14,37 @@
 #define OUTFMT_TAP_H
 
 /*
+ * Aux-block descriptors — faithful port of the two aux lists that
+ * Python's (TZX|TAP).emit() consumes after the program CODE block
+ * (tzx.py:130-141):
+ *
+ *   for name, block in aux_bin_blocks:           -> save_code(name, 0, block)
+ *       self.save_code(name, 0, block)
+ *   for block in aux_headless_bin_blocks:        -> standard_block(block)
+ *       self.standard_block(block)
+ *
+ * OutfmtAuxBin  == one (basename, bytes) pair from aux_bin_blocks; each
+ *                  is emitted as a headered CODE block at addr 0 (the
+ *                  SAME header/data path as the program CODE block).
+ * OutfmtAuxHeadless == one bytes entry from aux_headless_bin_blocks;
+ *                  each is emitted as a raw standard_block (NO header).
+ *
+ * Every existing caller passes ZERO aux blocks (n_aux_bin == 0,
+ * n_aux_headless == 0), so the aux loops never execute and output is
+ * byte-identical to the pre-S6.7a emitter.
+ */
+typedef struct {
+    const char *name;          /* CODE block title (space-padded to 10) */
+    const unsigned char *data; /* block bytes */
+    int len;                   /* number of block bytes */
+} OutfmtAuxBin;
+
+typedef struct {
+    const unsigned char *data; /* raw block bytes (no header) */
+    int len;                   /* number of block bytes */
+} OutfmtAuxHeadless;
+
+/*
  * Write a loader-less TAP file faithful to Python's TAP.emit():
  *   save_code(program_name, entry_point, program_bytes)  then dump.
  *
@@ -78,7 +109,18 @@ int outfmt_tap_write_loader(const char *filename,
  *
  * Used by outfmt_tap_write_loader (is_tzx=0) and the outfmt_tzx_* entry
  * points in outfmt_tzx.c (is_tzx=1). Other parameters are exactly as
- * outfmt_tap_write_loader. Returns 0 on success, -1 on failure.
+ * outfmt_tap_write_loader.
+ *
+ * Aux blocks — faithful (TZX|TAP).emit() tail (tzx.py:137-141):
+ * immediately AFTER the program CODE block and BEFORE the file is
+ * written, each aux_bin[i] is emitted via save_code(name, addr=0, data)
+ * (the program CODE block's header/data path) and each aux_headless[i]
+ * via a raw standard_block(data) (no header). Order: program CODE block,
+ * then all aux_bin in list order, then all aux_headless in list order.
+ * Pass n_aux_bin == 0 and n_aux_headless == 0 (aux_bin / aux_headless
+ * may be NULL) for the no-aux path — byte-identical to pre-S6.7a.
+ *
+ * Returns 0 on success, -1 on failure.
  */
 int outfmt_tape_emit(int is_tzx,
                      const char *filename,
@@ -87,6 +129,32 @@ int outfmt_tape_emit(int is_tzx,
                      const unsigned char *loader_bytes,
                      int loader_len,
                      const unsigned char *program_bytes,
-                     int program_len);
+                     int program_len,
+                     const OutfmtAuxBin *aux_bin,
+                     int n_aux_bin,
+                     const OutfmtAuxHeadless *aux_headless,
+                     int n_aux_headless);
+
+/*
+ * Aux-aware public TAP writer — faithful (TZX|TAP).emit() INCLUDING the
+ * aux_bin_blocks / aux_headless_bin_blocks tail (tzx.py:123-143). This is
+ * the entry point the future asm_bridge format-wiring (carried gate)
+ * will call. Parameters are exactly as outfmt_tape_emit minus is_tzx
+ * (fixed at 0 == TAP). Passing n_aux_bin == 0 && n_aux_headless == 0 is
+ * byte-identical to outfmt_tap_write_loader.
+ *
+ * Returns 0 on success, -1 on failure.
+ */
+int outfmt_tap_write_full(const char *filename,
+                          const char *program_name,
+                          int entry_point,
+                          const unsigned char *loader_bytes,
+                          int loader_len,
+                          const unsigned char *program_bytes,
+                          int program_len,
+                          const OutfmtAuxBin *aux_bin,
+                          int n_aux_bin,
+                          const OutfmtAuxHeadless *aux_headless,
+                          int n_aux_headless);
 
 #endif /* OUTFMT_TAP_H */

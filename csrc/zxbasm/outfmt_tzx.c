@@ -35,7 +35,9 @@
  *   save_code(program_name, entry_point, program_bytes)
  *   dump(output_filename)
  * Delegates to the shared core with is_tzx == 1 (TZX preamble +
- * 0x10/pause standard_block).
+ * 0x10/pause standard_block) and ZERO aux blocks — byte-identical to
+ * the pre-S6.7a emitter (the aux loops never execute). Signature
+ * UNCHANGED so asm_core.c is untouched.
  * ---------------------------------------------------------------- */
 int outfmt_tzx_write_loader(const char *filename,
                             const char *program_name,
@@ -47,7 +49,37 @@ int outfmt_tzx_write_loader(const char *filename,
 {
     return outfmt_tape_emit(/*is_tzx=*/1, filename, program_name, entry_point,
                             loader_bytes, loader_len,
-                            program_bytes, program_len);
+                            program_bytes, program_len,
+                            /*aux_bin=*/NULL, /*n_aux_bin=*/0,
+                            /*aux_headless=*/NULL, /*n_aux_headless=*/0);
+}
+
+/* ----------------------------------------------------------------
+ * Public entry — aux-aware faithful TZX.emit() (tzx.py:123-143
+ * INCLUDING the aux_bin_blocks / aux_headless_bin_blocks tail). The TZX
+ * analogue of outfmt_tap_write_full; the future asm_bridge format-wiring
+ * (carried gate) calls this. Delegates to the shared core with
+ * is_tzx == 1, threading the 4 aux params straight through.
+ * n_aux_bin == 0 && n_aux_headless == 0 is byte-identical to
+ * outfmt_tzx_write_loader.
+ * ---------------------------------------------------------------- */
+int outfmt_tzx_write_full(const char *filename,
+                          const char *program_name,
+                          int entry_point,
+                          const unsigned char *loader_bytes,
+                          int loader_len,
+                          const unsigned char *program_bytes,
+                          int program_len,
+                          const OutfmtAuxBin *aux_bin,
+                          int n_aux_bin,
+                          const OutfmtAuxHeadless *aux_headless,
+                          int n_aux_headless)
+{
+    return outfmt_tape_emit(/*is_tzx=*/1, filename, program_name, entry_point,
+                            loader_bytes, loader_len,
+                            program_bytes, program_len,
+                            aux_bin, n_aux_bin,
+                            aux_headless, n_aux_headless);
 }
 
 /* ----------------------------------------------------------------

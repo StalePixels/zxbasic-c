@@ -282,19 +282,33 @@ static void tap_save_program(TapBuf *b, const char *title,
 }
 
 /* ----------------------------------------------------------------
- * Shared emit core — faithful (TZX|TAP).emit() (tzx.py:123-143, no aux
- * blocks; aux_bin_blocks / aux_headless_bin_blocks remain out of scope
- * for both formats — separate bridge plumbing):
+ * Shared emit core — faithful (TZX|TAP).emit() (tzx.py:123-143),
+ * INCLUDING the aux_bin_blocks / aux_headless_bin_blocks tail:
  *
  *   if loader_bytes is not None:
  *       save_program("loader", loader_bytes, line=1)
- *   save_code(program_name, entry_point, program_bytes)
- *   dump(output_filename)
+ *   self.save_code(program_name, entry_point, program_bytes)
+ *   for name, block in aux_bin_blocks:
+ *       self.save_code(name, 0, block)
+ *   for block in aux_headless_bin_blocks:
+ *       self.standard_block(block)
+ *   self.dump(output_filename)
  *
  * is_tzx selects the two-point TAP/TZX variance (preamble in init,
  * 0x10/pause in standard_block); EVERYTHING ELSE is the shared TZX
  * machinery, inherited by TAP in the Python. The is_tzx == 0 call path
  * is byte-identical to the pre-S6.4 TAP emitter.
+ *
+ * Aux blocks: every existing caller passes n_aux_bin == 0 and
+ * n_aux_headless == 0, so the two aux loops below never execute and the
+ * output is byte-identical to the pre-S6.7a emitter (the loops simply do
+ * not run -- no-aux-identical by construction). When present, aux_bin[i]
+ * goes through tap_save_code(buf, name, addr=0, data, len) -- the
+ * exact same header/data path as the program CODE block -- and
+ * aux_headless[i] through tap_standard_block(buf, data, len) -- the raw
+ * block, no header. Order matches Python: program CODE block first, then
+ * ALL aux_bin (list order), then ALL aux_headless (list order), then
+ * dump.
  *
  * Declared in outfmt_tap.h so outfmt_tzx.c can call it with is_tzx==1.
  * ---------------------------------------------------------------- */
@@ -305,7 +319,11 @@ int outfmt_tape_emit(int is_tzx,
                      const unsigned char *loader_bytes,
                      int loader_len,
                      const unsigned char *program_bytes,
-                     int program_len)
+                     int program_len,
+                     const OutfmtAuxBin *aux_bin,
+                     int n_aux_bin,
+                     const OutfmtAuxHeadless *aux_headless,
+                     int n_aux_headless)
 {
     TapBuf b;
     tapbuf_init(&b, is_tzx); /* TAP: empty; TZX: "ZXTape!" preamble. */
@@ -319,6 +337,24 @@ int outfmt_tape_emit(int is_tzx,
     }
 
     tap_save_code(&b, program_name, entry_point, program_bytes, program_len);
+
+    /* for name, block in aux_bin_blocks: save_code(name, 0, block)
+     * (tzx.py:138-139). No-op when n_aux_bin == 0 — pre-S6.7a callers
+     * are byte-identical by construction. */
+    for (int i = 0; i < n_aux_bin; i++) {
+        int alen = aux_bin[i].len;
+        if (alen < 0) alen = 0;
+        tap_save_code(&b, aux_bin[i].name, /*addr=*/0,
+                      aux_bin[i].data, alen);
+    }
+
+    /* for block in aux_headless_bin_blocks: standard_block(block)
+     * (tzx.py:140-141). No-op when n_aux_headless == 0. */
+    for (int i = 0; i < n_aux_headless; i++) {
+        int hlen = aux_headless[i].len;
+        if (hlen < 0) hlen = 0;
+        tap_standard_block(&b, aux_headless[i].data, (size_t)hlen);
+    }
 
     if (b.oom) {
         tapbuf_free(&b);
@@ -341,8 +377,9 @@ int outfmt_tape_emit(int is_tzx,
 
 /* ----------------------------------------------------------------
  * Public entry — faithful TAP.emit() (tzx.py:123-143, no aux blocks).
- * Thin wrapper over the shared core with is_tzx == 0 — byte-identical
- * to the pre-S6.4 implementation.
+ * Thin wrapper over the shared core with is_tzx == 0 and ZERO aux
+ * blocks — byte-identical to the pre-S6.4/S6.7a implementation (the aux
+ * loops never execute). Signature UNCHANGED so asm_core.c is untouched.
  * ---------------------------------------------------------------- */
 int outfmt_tap_write_loader(const char *filename,
                             const char *program_name,
@@ -354,7 +391,36 @@ int outfmt_tap_write_loader(const char *filename,
 {
     return outfmt_tape_emit(/*is_tzx=*/0, filename, program_name, entry_point,
                             loader_bytes, loader_len,
-                            program_bytes, program_len);
+                            program_bytes, program_len,
+                            /*aux_bin=*/NULL, /*n_aux_bin=*/0,
+                            /*aux_headless=*/NULL, /*n_aux_headless=*/0);
+}
+
+/* ----------------------------------------------------------------
+ * Public entry — aux-aware faithful TAP.emit() (tzx.py:123-143 INCLUDING
+ * the aux_bin_blocks / aux_headless_bin_blocks tail). The future
+ * asm_bridge format-wiring (carried gate) calls this. Thin wrapper over
+ * the shared core with is_tzx == 0, threading the 4 aux params straight
+ * through. n_aux_bin == 0 && n_aux_headless == 0 is byte-identical to
+ * outfmt_tap_write_loader.
+ * ---------------------------------------------------------------- */
+int outfmt_tap_write_full(const char *filename,
+                          const char *program_name,
+                          int entry_point,
+                          const unsigned char *loader_bytes,
+                          int loader_len,
+                          const unsigned char *program_bytes,
+                          int program_len,
+                          const OutfmtAuxBin *aux_bin,
+                          int n_aux_bin,
+                          const OutfmtAuxHeadless *aux_headless,
+                          int n_aux_headless)
+{
+    return outfmt_tape_emit(/*is_tzx=*/0, filename, program_name, entry_point,
+                            loader_bytes, loader_len,
+                            program_bytes, program_len,
+                            aux_bin, n_aux_bin,
+                            aux_headless, n_aux_headless);
 }
 
 /* ----------------------------------------------------------------
