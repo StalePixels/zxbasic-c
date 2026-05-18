@@ -101,6 +101,12 @@ static bool config_apply_option(const char *key, const char *value, void *userda
         opts->optimization_level = atoi(value);
     } else if (strcmp(key, "org") == 0 && !(opts->cmdline_set & OPT_SET_ORG)) {
         parse_int(value, &opts->org);
+    } else if (strcmp(key, "heap_address") == 0 && !(opts->cmdline_set & OPT_SET_HEAP_ADDR)) {
+        /* Python: heap_address is an int-typed OPTIONS key (registered in
+         * arch/.../backend/main.py); config.load_config_from_file applies any
+         * key present in the section to OPTIONS[opt] (config.py:137-138).
+         * Mirror the existing 'org' arm exactly. */
+        parse_int(value, &opts->heap_address);
     } else if (strcmp(key, "heap_size") == 0 && !(opts->cmdline_set & OPT_SET_HEAP_SIZE)) {
         opts->heap_size = atoi(value);
     } else if (strcmp(key, "debug_level") == 0 && !(opts->cmdline_set & OPT_SET_DEBUG)) {
@@ -224,6 +230,14 @@ int zxbc_parse_args(int argc, char **argv, CompilerOptions *opts) {
             case 'H':
                 opts->heap_size = atoi(ya_optarg);
                 opts->cmdline_set |= OPT_SET_HEAP_SIZE;
+                break;
+            case LOPT_HEAP_ADDR:
+                /* Python: OPTIONS.heap_address = parse_int(options.heap_address).
+                 * parse_int returns None if unparseable -> stays at default
+                 * (Python None == C -1). Mirror that: only update on success;
+                 * a parse failure leaves opts->heap_address at -1 (auto). */
+                parse_int(ya_optarg, &opts->heap_address);
+                opts->cmdline_set |= OPT_SET_HEAP_ADDR;
                 break;
             case LOPT_DEBUG_MEMORY:
                 opts->memory_check = true;

@@ -339,6 +339,8 @@ int codegen_emit(CompilerState *cs, AstNode *ast) {
     Backend b;
     backend_init(&b, a);
     b.org = cs->opts.org;
+    b.heap_size = cs->opts.heap_size;
+    b.heap_address = cs->opts.heap_address;
     b.headerless = cs->opts.headerless;
     b.autorun = cs->opts.autorun;
     b.opt_level = cs->opts.optimization_level;

@@ -109,6 +109,7 @@ typedef struct CompilerOptions {
 #define OPT_SET_SINCLAIR         (1u << 9)
 #define OPT_SET_STRICT           (1u << 10)
 #define OPT_SET_OUTPUT_TYPE      (1u << 11)
+#define OPT_SET_HEAP_ADDR        (1u << 12)
 
 /* Initialize options with defaults matching Python's config.init() */
 void compiler_options_init(CompilerOptions *opts);

@@ -4084,11 +4084,24 @@ StrVec backend_emit_prologue(Backend *b) {
     if (!mem_branch && hashmap_has(&b->inits, ZXBC_NAMESPACE ".__MEM_INIT"))
         mem_branch = true;
     if (mem_branch) {
-        /* heap-size lines — unreached by calib; later S5.x (heap programs). */
-        sv_pushf(b, &heap_init, "; Defines HEAP SIZE\n%s.ZXBASIC_HEAP_SIZE EQU 4768",
-                 ZXBC_NAMESPACE);
-        sv_pushf(b, &heap_init, "%s.ZXBASIC_MEM_HEAP:", ZXBC_NAMESPACE);
-        sv_push(b, &heap_init, "DEFS 4768");
+        /* main.py:643-651. The label strings %s.ZXBASIC_HEAP_SIZE /
+         * %s.ZXBASIC_MEM_HEAP ARE Python's OPTIONS.heap_size_label /
+         * OPTIONS.heap_start_label defaults (f"{NAMESPACE}.ZXBASIC_HEAP_SIZE"
+         * / f"{NAMESPACE}.ZXBASIC_MEM_HEAP", NAMESPACE=.core). The C does not
+         * parse --heap-size-label/--heap-start-label (that is S7.2 CLI-parity,
+         * out of scope), so the default-label form is faithful for every
+         * C-supported invocation. str(int) / "%s" % int ⇒ decimal text. */
+        sv_pushf(b, &heap_init, "; Defines HEAP SIZE\n%s.ZXBASIC_HEAP_SIZE EQU %d",
+                 ZXBC_NAMESPACE, b->heap_size);
+        if (b->heap_address == -1) {
+            /* OPTIONS.heap_address is None */
+            sv_pushf(b, &heap_init, "%s.ZXBASIC_MEM_HEAP:", ZXBC_NAMESPACE);
+            sv_pushf(b, &heap_init, "DEFS %d", b->heap_size);
+        } else {
+            sv_pushf(b, &heap_init,
+                     "; Defines HEAP ADDRESS\n%s.ZXBASIC_MEM_HEAP EQU %d",
+                     ZXBC_NAMESPACE, b->heap_address);
+        }
     }
 
     sv_pushf(b, &heap_init,

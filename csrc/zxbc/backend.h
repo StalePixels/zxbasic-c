@@ -93,6 +93,8 @@ typedef struct Backend {
      * port threads them onto the Backend — the driver sets these from
      * cs->opts before emit). Defaults match options.c / backend.init(). */
     int  org;        /* OPTIONS.org (default 32768) */
+    int  heap_size;  /* OPTIONS.heap_size (default 4768) */
+    int  heap_address; /* OPTIONS.heap_address; -1 ⇒ auto (Python None) */
     bool headerless; /* OPTIONS.headerless (default false) */
     bool autorun;    /* OPTIONS.autorun (default false) */
     int  opt_level;  /* OPTIONS.optimization_level (default 2) */

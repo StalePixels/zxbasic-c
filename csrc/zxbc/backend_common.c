@@ -99,6 +99,8 @@ void backend_init(Backend *b, Arena *arena) {
      * (Backend.init OPTIONS.org default 32768). The driver overrides
      * these from cs->opts before emit. */
     b->org = 32768;
+    b->heap_size = 4768;       /* OPTIONS.heap_size default */
+    b->heap_address = -1;      /* OPTIONS.heap_address default (Python None) */
     b->headerless = false;
     b->autorun = false;
     b->opt_level = 2;
