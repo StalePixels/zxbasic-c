@@ -22,6 +22,7 @@ add_library(zxbasm_lib STATIC
     expr.c
     lexer.c
     memory.c
+    outfmt_sna.c
     outfmt_tap.c
     outfmt_tzx.c
     parser.c
