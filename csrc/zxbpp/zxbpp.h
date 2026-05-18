@@ -111,6 +111,13 @@ typedef struct PreprocState {
     /* ASM mode: inside asm..end asm block, comment char is ; not ' */
     bool in_asm;
 
+    /* true only for the zxbc 2nd-pass whole-file ASM re-filter — zxbc.py
+     * setMode(PreprocMode.ASM)/filter_; mirrors src/zxbpp/zxbasmpplex.py:
+     * emit comments + whitespace + asm body verbatim, process only
+     * #-directives + macro-expand IDs. Distinct from in_asm (the BASIC
+     * first-pass asm..end asm tracker). */
+    bool asm_filter_mode;
+
     /* Block comment nesting depth: /' increments, '/ decrements */
     int block_comment_level;
 

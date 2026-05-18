@@ -14,6 +14,7 @@
 #include "peephole/engine.h"
 #include "optimizer/optimizer.h"
 #include "asm_bridge.h"
+#include "zxbpp.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -384,10 +385,131 @@ int codegen_emit(CompilerState *cs, AstNode *ast) {
     char *rejoined = join_sep(a, lines, "\n");
     vec_free(lines);
 
-    /* 11 zxbpp ASM-mode re-filter + get_inits (zxbc.py:183-191):
-     * identity for directive-free asm (calib has no '#' directives;
-     * REQUIRES empty). Full re-filter is S7 (runtime #include) scope. */
-    StrVec asm_lines = split_nl(a, rejoined);
+    /* 11 zxbpp ASM-mode re-filter (zxbc.py:183-187): a FRESH ASM-mode
+     * preprocessor pass over the just-generated asm string, keyed on the
+     * original input filename, whose OUTPUT (with `#include once` bodies
+     * inlined) replaces asm_output. Faithful to:
+     *
+     *   set_option_defines()                # zxbpp.init() prep
+     *   zxbpp.reset_id_table()
+     *   zxbpp.setMode(zxbpp.PreprocMode.ASM)
+     *   zxbpp.OUTPUT = ""
+     *   zxbpp.filter_(asm_output, filename=input_filename)
+     *   asm_output = zxbpp.OUTPUT.split("\n")
+     *
+     * A fresh PreprocState is the C analogue of the reset_id_table()+""
+     * OUTPUT reset; ppf.in_asm = true is the setMode(ASM) toggle;
+     * preproc_string(.., input_filename) is filter_(asm_output,
+     * filename=input_filename) (zxbpp.py:912-925 LEXER.input(input_,
+     * filename)); ppf.output (read via strbuf_cstr) is the zxbpp.OUTPUT
+     * global. Include search path = src/lib/arch/<arch>/{stdlib,runtime}
+     * cwd-relative (stdlib first, runtime second — zxbpp.py:162,182-205;
+     * Python's <...> form => local_first=False, pure path search,
+     * first-match-wins) then OPTIONS.include_path — built EXACTLY as the
+     * first pass does (main.c:55-69, same arch/include_path sources, same
+     * order/access() guard); the cwd-relative form is what makes the C
+     * `#line` path string byte-match Python (zxbpp.py:220
+     * get_relative_filename_path). The original input filename is
+     * cs->opts.input_filename — the same value main.c:71 passes to the
+     * first-pass preproc_file (zxbc.py:187 filename=input_filename).
+     *
+     * NOTE (S7.1c-i scope): the inlined bodies still carry their #init
+     * lines and the prologue still lacks the call .core.__PRINT_INIT /
+     * __MEM_INIT lines — that is the get_inits harvest, deferred to
+     * S7.1c-ii (zxbc.py:188-191); the heap EQU/DEFS specifics are
+     * S7.1c-iii. Not implemented here, by design. */
+    PreprocState ppf;
+    preproc_init(&ppf);
+    ppf.in_asm = true;       /* zxbpp.setMode(PreprocMode.ASM) analogue:
+                              * still needed for the #line-silent-consume
+                              * and the backslash-continuation join — both
+                              * part of the existing byte-correct #line
+                              * machinery (kept, not reverted). */
+    ppf.asm_filter_mode = true; /* select the dedicated ASM-filter line
+                              * model — emit `;` comments + their bodies +
+                              * whitespace + asm body VERBATIM, process
+                              * only #-directives + macro-expand IDs;
+                              * mirrors src/zxbpp/zxbasmpplex.py (distinct
+                              * from in_asm, the BASIC asm..end asm
+                              * tracker). zxbc.py:181-189 second pass. */
+    ppf.debug_level = cs->opts.debug_level;
+    {
+        const char *arch = cs->opts.architecture ? cs->opts.architecture : "zx48k";
+        char stdlib_path[PATH_MAX];
+        char runtime_path[PATH_MAX];
+
+        snprintf(stdlib_path, sizeof(stdlib_path), "src/lib/arch/%s/stdlib", arch);
+        snprintf(runtime_path, sizeof(runtime_path), "src/lib/arch/%s/runtime", arch);
+        if (access(stdlib_path, R_OK) == 0) {
+            vec_push(ppf.include_paths, arena_strdup(&ppf.arena, stdlib_path));
+            vec_push(ppf.include_paths, arena_strdup(&ppf.arena, runtime_path));
+        }
+    }
+    if (cs->opts.include_path)
+        vec_push(ppf.include_paths, cs->opts.include_path);
+
+    /* set_option_defines() + reset_id_table() (zxbc.py:183-184): Python
+     * re-seeds zxbpp's ID_TABLE from config.OPTIONS.__DEFINES before the
+     * ASM filter_ (zxbpp.py:106-113 reset_id_table iterates
+     * OPTIONS.__DEFINES). __DEFINES holds (a) the option-driven defines
+     * from set_option_defines() (src/zxbc/args_config.py:177-188:
+     * __MEMORY_CHECK__ if memory_check, __CHECK_ARRAY_BOUNDARY__ if
+     * array_check, __ENABLE_BREAK__ if enable_break, __OPT_STRATEGY__
+     * always = opt_strategy) and (b) ___PRINT_IS_USED___ = 1 added by
+     * p_start when the program used PRINT (src/zxbc/zxbparser.py:512-513,
+     * PRINT_IS_USED). The fresh ppf is the cleared ID_TABLE; these
+     * preproc_define calls are the reset_id_table() re-seed. Faithful to
+     * the exact set: empty bodies for the flags (Python "" value),
+     * "1" for ___PRINT_IS_USED___, the opt_strategy number for
+     * __OPT_STRATEGY__. ___PRINT_IS_USED___ is the byte-critical one:
+     * copy_attr.asm:1 `#ifdef ___PRINT_IS_USED___` gates its
+     * `#include once <print.asm>` (copy_attr.asm:2), so without this the
+     * runtime include-resolution ORDER diverges from Python. */
+    if (cs->opts.memory_check)
+        preproc_define(&ppf, "__MEMORY_CHECK__", "", 0, NULL);
+    if (cs->opts.array_check)
+        preproc_define(&ppf, "__CHECK_ARRAY_BOUNDARY__", "", 0, NULL);
+    if (cs->opts.enable_break)
+        preproc_define(&ppf, "__ENABLE_BREAK__", "", 0, NULL);
+    {
+        char optstrat[16];
+        snprintf(optstrat, sizeof(optstrat), "%d", (int)cs->opts.opt_strategy);
+        preproc_define(&ppf, "__OPT_STRATEGY__", optstrat, 0, NULL);
+    }
+    if (cs->print_is_used)
+        preproc_define(&ppf, "___PRINT_IS_USED___", "1", 0, NULL);
+
+    (void)preproc_string(&ppf, rejoined, cs->opts.input_filename);
+
+    /* Extract the produced text exactly as main.c:80 extracts the
+     * first-pass output (char *source = strbuf_cstr(&pp.output)). This
+     * inlined string replaces `rejoined` as the input to split_nl —
+     * asm_output = zxbpp.OUTPUT.split("\n") (zxbc.py:190).
+     *
+     * preproc_string (preproc.c:2136) prepends a leading
+     * `#line 1 "<input_filename>"` to its output (the baseline-#line that
+     * the BASIC first pass / preproc_file:2052 also emit, and which IS
+     * faithful to the BASIC first pass — verified: standalone
+     * `zxbpp.py hi.bas` => first line `#line 1 "/tmp/hi.bas"`). But
+     * Python's ASM-mode `filter_` does NOT emit it: LEXER.input
+     * (base_pplex.py:148-152) only sets the input string — the first
+     * `#line` Python emits is the begin-of-include marker
+     * (base_pplex.py:111), so hi_py.asm starts directly with the asm
+     * (line 1 = `org 32768`). Mirror Python's filter_: drop exactly that
+     * single synthetic leading line if present, so the C OUTPUT begins
+     * with the asm content like zxbpp.OUTPUT does (zxbc.py:186-190). */
+    const char *filtered = arena_strdup(a, strbuf_cstr(&ppf.output));
+    {
+        size_t fl = strlen("#line 1 \"") + strlen(cs->opts.input_filename) + 2;
+        char *lead = arena_alloc(a, fl + 1);
+        snprintf(lead, fl + 1, "#line 1 \"%s\"\n", cs->opts.input_filename);
+        size_t ll = strlen(lead);
+        if (strncmp(filtered, lead, ll) == 0)
+            filtered += ll;
+    }
+    preproc_destroy(&ppf);
+
+    StrVec asm_lines = split_nl(a, filtered);
 
     /* 12 VarTranslator over data_ast (zxbc.py:192-203):
      *   backend.MEMORY[:] = []                      (192)

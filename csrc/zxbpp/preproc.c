@@ -52,6 +52,7 @@ void preproc_init(PreprocState *pp)
     pp->expect_warnings = 0;
     pp->has_output = false;
     pp->in_asm = false;
+    pp->asm_filter_mode = false;
     pp->block_comment_level = 0;
     pp->builtins_registered = false;
     pp->err_file = stderr;
@@ -1865,6 +1866,68 @@ static bool is_directive(const char *line)
  */
 static void process_line(PreprocState *pp, const char *line)
 {
+    /* zxbc 2nd-pass whole-file ASM re-filter (zxbc.py:181-189
+     * setMode(PreprocMode.ASM); OUTPUT=""; filter_(asm_output, ...)).
+     * Faithful to the dedicated ASM lexer src/zxbpp/zxbasmpplex.py:
+     *
+     *  - `;` is t_INITIAL_COMMENT (zxbasmpplex.py:92-97): t.type="TOKEN",
+     *    push "asmcomment", `return t` — and t_asmcomment_TOKEN (`.+`,
+     *    zxbasmpplex.py:99-101) `return t`. So `;` and the WHOLE comment
+     *    body are emitted VERBATIM (contrast zxbpplex.py:84-86
+     *    t_INITIAL_COMMENT which pushes singlecomment and has NO return
+     *    => discards). => no is_comment_only_line / strip_comment here.
+     *  - whitespace: t_defexpr_INITIAL_SEPARATOR (`[ \t]+`,
+     *    zxbasmpplex.py:332-334) `return t` => leading/trailing/inner
+     *    whitespace emitted VERBATIM (no collapse / no trim).
+     *  - there is NO `/'...'/` block-comment rule in zxbasmpplex.py
+     *    (that is zxbpplex.py:170 COMMENT_BLOCK, BASIC-only) => skip the
+     *    block-comment machinery entirely.
+     *  - `#` at column 1 (t_INIIAL_sharp, zxbasmpplex.py:320-326) pushes
+     *    the "prepro" state => `#`-directive lines still processed
+     *    (#include [once], #define/#undef, #ifdef/#ifndef/#if/#else/
+     *    #endif, #pragma, #line, #init, #require, #error, #warning).
+     *  - t_INITIAL_ID (`[_A-Za-z][_A-Za-z0-9]*`, zxbasmpplex.py:109-111)
+     *    `return t` as ID; the grammar reduces asm body via `defs NEWLINE`
+     *    and zxbpp.py:318/347 calls expand_macros(p[1], ...) => IDs in the
+     *    asm body ARE macro-expanded (shared defines_table). So we still
+     *    run expand_macros_in_text on emitted content lines; it copies
+     *    `;`+body and whitespace through verbatim and only substitutes
+     *    macro IDs — exactly the zxbasmpplex.py net behavior.
+     *
+     * Gated SOLELY on asm_filter_mode: when false, EVERY existing
+     * behavior below is byte-unchanged (BASIC first pass, inline
+     * asm..end asm via in_asm, comment stripping). in_asm /
+     * check_asm_boundary semantics are untouched. */
+    if (pp->asm_filter_mode) {
+        if (is_directive(line)) {
+            process_directive(pp, line);
+            return;
+        }
+        if (!is_enabled(pp)) return;
+
+        /* Empty line => verbatim blank line (t_INITIAL_NEWLINE
+         * zxbasmpplex.py:103-107 `return t`). */
+        if (*line == '\0') {
+            strbuf_append_char(&pp->output, '\n');
+            pp->has_output = true;
+            return;
+        }
+
+        /* Content line: macro-expand IDs only; comments (`;`+body) and
+         * all whitespace pass through verbatim (expand_macros_in_text
+         * copies non-ID chars char-for-char, including `;`, the comment
+         * body, spaces and tabs). NO comment strip, NO whitespace
+         * collapse, NO block-comment handling. */
+        char *expanded = expand_macros_in_text(pp, line);
+        strbuf_append(&pp->output, expanded);
+        if (strchr(expanded, '\n') != NULL) {
+            strbuf_printf(&pp->output, "\n#line %d", pp->current_line + 1);
+        }
+        strbuf_append_char(&pp->output, '\n');
+        pp->has_output = true;
+        return;
+    }
+
     /* Handle block comments (/' ... '/) with nesting support.
      * Python tracks __COMMENT_LEVEL as an integer counter. */
     if (pp->block_comment_level > 0) {
