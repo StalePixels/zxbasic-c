@@ -150,6 +150,28 @@ static int find_column(Lexer *lex, int p)
     return p - i + 1;
 }
 
+/* True if a complete trailing-'h' hex literal — t_HEXA's first alternation
+ * "[0-9](_?[0-9a-fA-F])*[hH]" — starts at position p. Used so the temp-label
+ * check yields to hex exactly when PLY's longest-match would pick t_HEXA over
+ * t_TMPLABEL (e.g. "0F_Fh"), while leaving "0F"/"0F_" as temp labels. */
+static bool hexa_h_match_at(Lexer *lex, int p)
+{
+    const char *s = lex->input;
+    if (!isdigit((unsigned char)s[p]))
+        return false;
+    p++;
+    /* (_?[0-9a-fA-F])* */
+    for (;;) {
+        int q = p;
+        if (s[q] == '_')
+            q++;
+        if (!isxdigit((unsigned char)s[q]))
+            break;
+        p = q + 1;
+    }
+    return s[p] == 'h' || s[p] == 'H';
+}
+
 Token lexer_next(Lexer *lex)
 {
     Token tok;
@@ -322,6 +344,7 @@ Token lexer_next(Lexer *lex)
          * We must check temp label BEFORE consuming hex digits. */
         if (isdigit((unsigned char)c)) {
             StrBuf sb;
+            int num_start = lex->pos; /* start of the numeric token */
             strbuf_init(&sb);
             strbuf_append_char(&sb, lexer_advance(lex));
 
@@ -340,7 +363,11 @@ Token lexer_next(Lexer *lex)
                  lexer_peek(lex) == 'f' || lexer_peek(lex) == 'F') &&
                 /* Not followed by alnum (would be hex like 1FAh) */
                 (lex->pos + 1 >= (int)strlen(lex->input) ||
-                 !isalnum((unsigned char)lex->input[lex->pos + 1]))) {
+                 !isalnum((unsigned char)lex->input[lex->pos + 1])) &&
+                /* and not the prefix of a longer trailing-'h' hex literal:
+                 * PLY's longest match prefers t_HEXA over t_TMPLABEL, so
+                 * "0F_Fh" is hex while "0F"/"0F_" stay temp labels */
+                !hexa_h_match_at(lex, num_start)) {
                 strbuf_append_char(&sb, (char)toupper((unsigned char)lexer_advance(lex)));
                 tok.type = TOK_ID;
                 tok.sval = arena_strdup(&lex->as->arena, strbuf_cstr(&sb));
@@ -365,13 +392,17 @@ Token lexer_next(Lexer *lex)
                         lexer_advance(lex);
                 }
 
-                const char *numstr = strbuf_cstr(&sb);
-                size_t numlen = strlen(numstr);
-                if (numlen > 0 && (numstr[numlen - 1] == 'h' || numstr[numlen - 1] == 'H')) {
-                    /* Hex number with h suffix */
-                    char *hex = arena_strndup(&lex->as->arena, numstr, numlen - 1);
+                /* The isxdigit loop above stops at 'h'/'H' (isxdigit('h') is
+                 * false), so the collected digits never include it. Mirror the
+                 * pure-decimal-'h' sub-branch: explicitly peek-and-consume a
+                 * trailing 'h'/'H' using the same not-followed-by-alnum guard. */
+                if (!lexer_eof(lex) &&
+                    (lexer_peek(lex) == 'h' || lexer_peek(lex) == 'H') &&
+                    (lex->pos + 1 >= (int)strlen(lex->input) ||
+                     !isalnum((unsigned char)lex->input[lex->pos + 1]))) {
+                    lexer_advance(lex); /* consume 'h' */
                     tok.type = TOK_INTEGER;
-                    tok.ival = (int64_t)strtoll(hex, NULL, 16);
+                    tok.ival = (int64_t)strtoll(strbuf_cstr(&sb), NULL, 16);
                     strbuf_free(&sb);
                     return tok;
                 }
