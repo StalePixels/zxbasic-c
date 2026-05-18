@@ -18,6 +18,7 @@
 add_library(zxbasm_lib STATIC
     asm_core.c
     asm_instr.c
+    basic.c
     expr.c
     lexer.c
     memory.c

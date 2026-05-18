@@ -4,6 +4,7 @@
  */
 #include "zxbasm.h"
 #include "outfmt_tap.h"
+#include "basic.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
@@ -229,6 +230,70 @@ int asm_generate_binary(AsmState *as, const char *filename, const char *format)
 
         const unsigned char *prog = (const unsigned char *)data;
         int prog_len = (data && data_len > 0) ? data_len : 0;
+
+        /* BASIC loader (asmparse.py:1048-1059). When use_basic_loader is
+         * not set, Python's loader_bytes stays None -> loader-less path,
+         * byte-identical to S6.3a. */
+        if (as->use_basic_loader) {
+            Basic *bld = basic_new();
+            if (!bld) {
+                return -1;
+            }
+
+            /* if org > 16383: add_line([["CLEAR", org - 1]]) */
+            if (org > 16383) {
+                BasicLine *ln = basic_line_new();
+                BasicSentence *st = basic_sentence_new("CLEAR");
+                basic_sentence_add_number(st, (double)(org - 1));
+                basic_line_add_sentence(ln, st);
+                basic_add_line(bld, ln);
+            }
+
+            /* add_line([["LOAD", '""', program.token("CODE")]]) */
+            {
+                BasicLine *ln = basic_line_new();
+                BasicSentence *st = basic_sentence_new("LOAD");
+                basic_sentence_add_string(st, "\"\""); /* 0x22 0x22 */
+                basic_sentence_add_token(st, "CODE");   /* [175] */
+                basic_line_add_sentence(ln, st);
+                basic_add_line(bld, ln);
+            }
+
+            if (as->autorun) {
+                /* add_line([["RANDOMIZE", token("USR"), AUTORUN_ADDR]]) */
+                BasicLine *ln = basic_line_new();
+                BasicSentence *st = basic_sentence_new("RANDOMIZE");
+                basic_sentence_add_token(st, "USR");   /* [192] */
+                basic_sentence_add_number(st, (double)entry_point);
+                basic_line_add_sentence(ln, st);
+                basic_add_line(bld, ln);
+            } else {
+                /* add_line([["REM"],
+                 *           ["RANDOMIZE", token("USR"), AUTORUN_ADDR]]) */
+                BasicLine *ln = basic_line_new();
+                BasicSentence *rem = basic_sentence_new("REM");
+                basic_line_add_sentence(ln, rem);
+                BasicSentence *st = basic_sentence_new("RANDOMIZE");
+                basic_sentence_add_token(st, "USR");   /* [192] */
+                basic_sentence_add_number(st, (double)entry_point);
+                basic_line_add_sentence(ln, st);
+                basic_add_line(bld, ln);
+            }
+
+            if (basic_oom(bld)) {
+                basic_free(bld);
+                return -1;
+            }
+
+            int loader_len = 0;
+            const unsigned char *loader_bytes = basic_bytes(bld, &loader_len);
+
+            int rc = outfmt_tap_write_loader(filename, progname, entry_point,
+                                             loader_bytes, loader_len,
+                                             prog, prog_len);
+            basic_free(bld);
+            return rc;
+        }
 
         return outfmt_tap_write(filename, progname, entry_point,
                                 prog, prog_len);

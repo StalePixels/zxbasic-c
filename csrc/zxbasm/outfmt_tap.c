@@ -26,6 +26,7 @@
 /* ZX Spectrum block / header type constants (tzx.py:22-32). */
 #define TAP_BLOCK_TYPE_HEADER 0x00 /* BLOCK_TYPE_HEADER */
 #define TAP_BLOCK_TYPE_DATA   0xFF /* BLOCK_TYPE_DATA */
+#define TAP_HEADER_TYPE_BASIC 0x00 /* HEADER_TYPE_BASIC (PROGRAM) */
 #define TAP_HEADER_TYPE_CODE  0x03 /* HEADER_TYPE_CODE */
 
 /* ----------------------------------------------------------------
@@ -180,22 +181,65 @@ static void tap_save_code(TapBuf *b, const char *title, int addr,
     free(payload);
 }
 
+/* standard_program_header(title, length, line) (tzx.py:105-107):
+ *   save_header(HEADER_TYPE_BASIC, title, length, param1=line, param2=length)
+ * NOTE param2 = length here (NOT 32768 like the CODE header). */
+static void tap_standard_program_header(TapBuf *b, const char *title,
+                                        int length, int line)
+{
+    tap_save_header(b, TAP_HEADER_TYPE_BASIC, title, length,
+                    /*param1=*/line, /*param2=*/length);
+}
+
+/* save_program(title, prog_bytes, line) (tzx.py:117-121):
+ *   standard_program_header(title, len(prog_bytes), line)
+ *   payload = [BLOCK_TYPE_DATA] + [b & 0xFF for b in prog_bytes]
+ *   standard_block(payload) */
+static void tap_save_program(TapBuf *b, const char *title,
+                             const unsigned char *prog_bytes,
+                             int prog_len, int line)
+{
+    tap_standard_program_header(b, title, prog_len, line);
+
+    size_t payload_len = (size_t)prog_len + 1; /* +1 for BLOCK_TYPE_DATA */
+    unsigned char *payload = (unsigned char *)malloc(payload_len);
+    if (!payload) {
+        b->oom = 1;
+        return;
+    }
+    payload[0] = TAP_BLOCK_TYPE_DATA;
+    for (int i = 0; i < prog_len; i++) {
+        payload[i + 1] = (unsigned char)(prog_bytes[i] & 0xFF);
+    }
+    tap_standard_block(b, payload, payload_len);
+    free(payload);
+}
+
 /* ----------------------------------------------------------------
- * Public entry — faithful loader-less TAP.emit() (tzx.py:123-143
- * with loader_bytes is None and no aux blocks):
+ * Public entry — faithful TAP.emit() (tzx.py:123-143, no aux blocks):
+ *   if loader_bytes is not None:
+ *       save_program("loader", loader_bytes, line=1)
  *   save_code(program_name, entry_point, program_bytes)
  *   dump(output_filename)
  * ---------------------------------------------------------------- */
-int outfmt_tap_write(const char *filename,
-                     const char *program_name,
-                     int entry_point,
-                     const unsigned char *program_bytes,
-                     int program_len)
+int outfmt_tap_write_loader(const char *filename,
+                            const char *program_name,
+                            int entry_point,
+                            const unsigned char *loader_bytes,
+                            int loader_len,
+                            const unsigned char *program_bytes,
+                            int program_len)
 {
     TapBuf b;
     tapbuf_init(&b); /* TAP.__init__: self.output = bytearray() (empty) */
 
     if (program_len < 0) program_len = 0;
+
+    /* loader_bytes is not None  -> save_program("loader", ..., line=1).
+     * NULL (or negative length) means Python's loader_bytes is None. */
+    if (loader_bytes != NULL && loader_len >= 0) {
+        tap_save_program(&b, "loader", loader_bytes, loader_len, /*line=*/1);
+    }
 
     tap_save_code(&b, program_name, entry_point, program_bytes, program_len);
 
@@ -216,4 +260,20 @@ int outfmt_tap_write(const char *filename,
 
     tapbuf_free(&b);
     return 0;
+}
+
+/* ----------------------------------------------------------------
+ * Public entry — faithful loader-less TAP.emit() (tzx.py:123-143
+ * with loader_bytes is None and no aux blocks). Byte-identical to
+ * S6.3a: delegates to the loader-aware path with no loader.
+ * ---------------------------------------------------------------- */
+int outfmt_tap_write(const char *filename,
+                     const char *program_name,
+                     int entry_point,
+                     const unsigned char *program_bytes,
+                     int program_len)
+{
+    return outfmt_tap_write_loader(filename, program_name, entry_point,
+                                   /*loader_bytes=*/NULL, /*loader_len=*/-1,
+                                   program_bytes, program_len);
 }
