@@ -108,16 +108,36 @@ int main(int argc, char *argv[]) {
             zxbc_error(&cs, 0, "No DATA defined");
         }
 
-        /* Post-parse semantic passes (Python order: Unreachable ->
-         * FunctionGraph -> Optimizer; src/zxbc/zxbc.py:107-141). S2.1
-         * groundwork: inert no-op until the passes land in S2.2-S2.4.
-         * A pass signals an error via zxbc_error() -> cs.error_count,
-         * which the re-check below maps to rc = 1 (mirrors Python
-         * gl.has_errors, zxbc.py:139-141). */
-        visitor_run_passes(&cs, ast);
-
-        if (cs.error_count > 0)
+        /* Faithful post-parse error gate (src/zxbc/zxbc.py:108).
+         * Python returns 1 IMMEDIATELY after parser.parse() if
+         * gl.has_errors, BEFORE running any visitor pass. The C
+         * check_pending_labels / check_pending_calls / No-DATA checks
+         * above are the C analogue of the work Python's p_start +
+         * parse() complete before that gate; if any of them set an
+         * error, Python's first `if gl.has_errors: return 1`
+         * (zxbc.py:108) short-circuits and the OptimizerVisitor (which
+         * would emit e.g. the "Useless empty IF ignored" [W140]
+         * warning) never runs. Mirror that here: when an error is
+         * already present, set rc=1 and skip visitor_run_passes so the
+         * C does not emit post-error visitor warnings Python suppresses.
+         * This only short-circuits an already-error state — it can
+         * never add a rejection, only suppress post-error output to
+         * match Python (FALSE_POS-safe by construction). The no-error
+         * path is unchanged. */
+        if (cs.error_count > 0) {
             rc = 1;
+        } else {
+            /* Post-parse semantic passes (Python order: Unreachable ->
+             * FunctionGraph -> Optimizer; src/zxbc/zxbc.py:107-141).
+             * S2.1 groundwork: inert no-op until the passes land in
+             * S2.2-S2.4. A pass signals an error via zxbc_error() ->
+             * cs.error_count, which the re-check below maps to rc = 1
+             * (mirrors Python gl.has_errors, zxbc.py:139-141). */
+            visitor_run_passes(&cs, ast);
+
+            if (cs.error_count > 0)
+                rc = 1;
+        }
     }
 
     if (rc == 0 && cs.opts.parse_only) {

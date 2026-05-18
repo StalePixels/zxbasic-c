@@ -227,6 +227,14 @@ static TypeInfo *parse_type_name(Parser *p) {
     return type_new_ref(p->cs, t, p->previous.lineno, false);
 }
 
+/* Resolve a TypeInfo to its final BasicType (mirrors compiler.c
+ * resolve_basic_type / ast.c type_is_string's final_type unwrap). */
+static BasicType typeref_basic(const TypeInfo *t) {
+    if (!t) return TYPE_unknown;
+    const TypeInfo *f = t->final_type ? t->final_type : t;
+    return f->basic_type;
+}
+
 /* Parse optional "AS type" clause. Returns NULL if no AS found. */
 static TypeInfo *parse_typedef(Parser *p) {
     if (!match(p, BTOK_AS)) return NULL;
@@ -2949,6 +2957,12 @@ static AstNode *parse_dim_statement(Parser *p) {
     }
 
     TypeInfo *type = parse_typedef(p);
+    /* An explicit "AS type" clause yields a non-implicit TYPEREF
+     * (parse_type_name -> type_new_ref(..., implicit=false)); the
+     * epsilon / inferred typedef is implicit. This mirrors Python's
+     * typedef.implicit (zxbparser.py p_type_def vs p_type_def_empty)
+     * and gates Port beta's faithful suffix-vs-AS-type check. */
+    bool had_as_clause = (type != NULL);
 
     /* DIM x AS type AT expr (memory-mapped variable) */
     AstNode *at_expr = NULL;
@@ -2981,12 +2995,60 @@ static AstNode *parse_dim_statement(Parser *p) {
             type = type_new_ref(p->cs, init_expr->type_, lineno, true);
         } else {
             type = type_new_ref(p->cs, p->cs->default_type, lineno, true);
-            /* Strict mode: error on implicit type in DIM */
-            if (p->cs->opts.strict) {
-                for (int i = 0; i < name_count; i++)
-                    zxbc_error(p->cs, lineno, "strict mode: missing type declaration for '%s'", names[i]);
+        }
+    }
+
+    /* Port beta — deprecated-suffix vs explicit-AS-type mismatch.
+     * Faithful port of symboltable.py declare (:104-109) + the
+     * declare_variable 2nd message (:521-524), reachable on the C DIM
+     * path (which calls symboltable_declare, not _declare_variable).
+     * Python's declare first error fires iff: the id carries a
+     * deprecated suffix AND entry.type_ (the typedef passed) is not
+     * None and NOT implicit AND its type != the suffix type. The
+     * declare_variable 2nd message then fires under the same
+     * non-implicit-typedef + mismatch condition. An explicit "AS type"
+     * clause is exactly Python's non-implicit typedef (had_as_clause);
+     * a sigil-only DIM ("DIM a%", typedef implicit) or a matching
+     * "DIM a% as Integer" must stay accepted (Python does). The two
+     * message strings are byte-identical to the existing
+     * symboltable_declare_variable port (compiler.c:237/240). */
+    if (had_as_clause && type && !type->implicit) {
+        size_t nl = strlen(name);
+        if (nl > 0 && is_deprecated_suffix(name[nl - 1])) {
+            BasicType suffix_bt = suffix_to_type(name[nl - 1]);
+            BasicType decl_bt = typeref_basic(type);
+            if (decl_bt != TYPE_unknown && decl_bt != suffix_bt) {
+                zxbc_error(p->cs, lineno,
+                           "expected type %s for '%s', got %s",
+                           basictype_to_string(suffix_bt), name,
+                           basictype_to_string(decl_bt));
+                zxbc_error(p->cs, lineno,
+                           "'%s' suffix is for type '%s' but it was declared as '%s'",
+                           name, basictype_to_string(suffix_bt),
+                           basictype_to_string(decl_bt));
             }
         }
+    }
+
+    /* Port gamma — strict-mode implicit-type redirect.
+     * Faithful port of declare_variable (symboltable.py:531-532) ->
+     * warning_implicit_type (errmsg.py:117-122) -> (under strict)
+     * syntax_error_undeclared_type (errmsg.py:271-272). Python emits
+     * the strict-mode error whenever the resolved entry type is
+     * implicit and not unknown, under config.OPTIONS.strict — i.e.
+     * BOTH the no-AS/no-init default-type case (already handled by the
+     * removed special block) AND the implicit-typed-initializer case
+     * ("DIM a = 5", the gap). A sigil-typed DIM yields a concrete
+     * non-implicit type (Python's declare overrides entry.type_ to a
+     * non-implicit TYPEREF) and an explicit AS clause is non-implicit
+     * — neither trips it (Python accepts both under strict). We do NOT
+     * emit the non-strict [W100] implicit-type warning here (that
+     * pre-existing W-code-formatting gap is S3.x-owned); Port gamma is
+     * confined to exactly Python's strict-mode reject. */
+    if (p->cs->opts.strict && type && type->implicit &&
+        typeref_basic(type) != TYPE_unknown) {
+        for (int i = 0; i < name_count; i++)
+            err_undeclared_type(p->cs, lineno, names[i]);
     }
 
     if (name_count == 1) {
