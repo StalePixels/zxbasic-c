@@ -379,6 +379,25 @@ static int s_log2(long x) { int n = 0; while (x > 1) { x >>= 1; n++; } return n;
 #define RL_READ      ZXBC_NAMESPACE ".__READ"
 #define RL_RESTORE   ZXBC_NAMESPACE ".__RESTORE"
 
+/* S7.1b-i — PRINT-family RuntimeLabels + REQUIRED_MODULES, taken VERBATIM
+ * from src/arch/z80/backend/runtime/io.py:11-59 (label string values) and
+ * io.py:70-113 (REQUIRED_MODULES). NAMESPACE == .core (namespace.py:10 ->
+ * global_.py:129 CORE_NAMESPACE). Numeric PRINT* labels mangle with a
+ * double-underscore (e.g. .core.__PRINTU8); COPY_ATTR / PRINT_COMMA /
+ * PRINT_EOL do not. */
+#define RL_COPY_ATTR   ZXBC_NAMESPACE ".COPY_ATTR"
+#define RL_PRINTI8     ZXBC_NAMESPACE ".__PRINTI8"
+#define RL_PRINTU8     ZXBC_NAMESPACE ".__PRINTU8"
+#define RL_PRINTI16    ZXBC_NAMESPACE ".__PRINTI16"
+#define RL_PRINTU16    ZXBC_NAMESPACE ".__PRINTU16"
+#define RL_PRINTI32    ZXBC_NAMESPACE ".__PRINTI32"
+#define RL_PRINTU32    ZXBC_NAMESPACE ".__PRINTU32"
+#define RL_PRINTF16    ZXBC_NAMESPACE ".__PRINTF16"
+#define RL_PRINTF      ZXBC_NAMESPACE ".__PRINTF"
+#define RL_PRINTSTR    ZXBC_NAMESPACE ".__PRINTSTR"
+#define RL_PRINT_COMMA ZXBC_NAMESPACE ".PRINT_COMMA"
+#define RL_PRINT_EOL   ZXBC_NAMESPACE ".PRINT_EOL"
+
 /* runtime_call (common.py:156-161): REQUIRES.add(LABEL_REQUIRED_MODULES
  * [label]) if present; returns "call {label}". The label->module map is
  * runtime/core.py:160-225 (only the S5.3-reachable labels). */
@@ -489,7 +508,35 @@ static const char *s_required_module(const char *label) {
     /* S5.8d — DATA/READ/RESTORE (datarestore.py:16-19). */
     if (strcmp(label, RL_READ)       == 0) return "read_restore.asm";
     if (strcmp(label, RL_RESTORE)    == 0) return "read_restore.asm";
+    /* S7.1b-i — PRINT family (io.py:70-113 REQUIRED_MODULES, verbatim). */
+    if (strcmp(label, RL_COPY_ATTR)  == 0) return "copy_attr.asm";
+    if (strcmp(label, RL_PRINTI8)    == 0) return "printi8.asm";
+    if (strcmp(label, RL_PRINTU8)    == 0) return "printu8.asm";
+    if (strcmp(label, RL_PRINTI16)   == 0) return "printi16.asm";
+    if (strcmp(label, RL_PRINTU16)   == 0) return "printu16.asm";
+    if (strcmp(label, RL_PRINTI32)   == 0) return "printi32.asm";
+    if (strcmp(label, RL_PRINTU32)   == 0) return "printu32.asm";
+    if (strcmp(label, RL_PRINTF16)   == 0) return "printf16.asm";
+    if (strcmp(label, RL_PRINTF)     == 0) return "printf.asm";
+    if (strcmp(label, RL_PRINTSTR)   == 0) return "printstr.asm";
+    if (strcmp(label, RL_PRINT_COMMA)== 0) return "print.asm";
+    if (strcmp(label, RL_PRINT_EOL)  == 0) return "print.asm";
     return NULL;
+}
+
+/* S7.1b-i — translator-time REQUIRES registration. Python's
+ * common.runtime_call (translator_visitor.py:119-123) does
+ * backend.REQUIRES.add(LABEL_REQUIRED_MODULES[label]) AT TRANSLATOR TIME
+ * (not at backend call-Quad emission — emit_call never calls
+ * s_runtime_call). This is the faithful seam: the C tr_runtime_call calls
+ * here so the label's asm module lands in b->requires_ exactly when the IC
+ * `call` is emitted, mirroring the Python ordering and driving the heap /
+ * #include-once branch. No-ops for labels with no module mapping (same as
+ * Python's `if label in LABEL_REQUIRED_MODULES`). */
+void backend_register_runtime_module(Backend *b, const char *label) {
+    const char *mod = s_required_module(label);
+    if (mod != NULL)
+        hashmap_set(&b->requires_, mod, (void *)1);
 }
 static char *s_runtime_call(Backend *b, const char *label) {
     const char *mod = s_required_module(label);

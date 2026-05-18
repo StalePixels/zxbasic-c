@@ -568,15 +568,21 @@ static void tr_ic_larrd(Translator *tr, int offset, char **idx, int idxn,
     tr_emit_quad(tr, "larrd", 5, args);
 }
 
-/* runtime_call (translator_visitor.py:119-123): ic_call(label,num); the
- *
- * runtime_call (translator_visitor.py:119-123): ic_call(label,num); the
- * label->REQUIRES module is wired by the backend's s_runtime_call when the
- * "call" Quad is emitted (REQUIRES set there, mirroring Python adding to
- * backend.REQUIRES). Faithful: the Quad("call",label,num) carries the
- * runtime label; backend.c maps it to its asm module. */
+/* S7.1b-i — backend.c (non-static): registers label->asm module into
+ * b->requires_, the faithful translator-time analogue of Python
+ * common.runtime_call's backend.REQUIRES.add(LABEL_REQUIRED_MODULES
+ * [label]) (translator_visitor.py:122-123). Forward-declared here because
+ * backend.h is owned elsewhere; defined in backend.c. */
+void backend_register_runtime_module(Backend *b, const char *label);
+
+/* runtime_call (translator_visitor.py:119-123): ic_call(label,num) then
+ * REQUIRES.add(LABEL_REQUIRED_MODULES[label]) AT TRANSLATOR TIME. The
+ * backend's emit_call does NOT register REQUIRES for translator-emitted
+ * call Quads, so the registration must happen here, exactly as Python's
+ * common.runtime_call does it (right after ic_call, before the next IC). */
 static void tr_runtime_call(Translator *tr, const char *label, int num) {
     tr_ic_call(tr, label, num);
+    backend_register_runtime_module(tr->backend, label);
 }
 
 /* LabelRef mangling (labelref.py:20): LABELS_NAMESPACE + "." + MANGLE_CHR
@@ -1383,6 +1389,126 @@ static AstNode *tr_visit_read(Visitor *v, AstNode *node) {
 }
 
 /* ====================================================================
+ * S7.1b-i — visit_PRINT (core: string + numeric + ';'/',' + trailing EOL)
+ *
+ * Faithful port of src/arch/z80/visitor/translator.py:813-846:
+ *
+ *   def visit_PRINT(self, node):
+ *       self.norm_attr()                        # runtime_call(COPY_ATTR,0)
+ *       for i in node.children:
+ *           yield i
+ *           if i.token in ("PRINT_TAB","PRINT_AT","PRINT_COMMA")
+ *                          + self.ATTR_TMP:
+ *               continue
+ *           self.ic_fparam(i.type_, i.t)
+ *           label = { bool:PRINTU8, i8:PRINTI8, u8:PRINTU8, i16:PRINTI16,
+ *                     u16:PRINTU16, i32:PRINTI32, u32:PRINTU32,
+ *                     f16:PRINTF16, f:PRINTF, str:PRINTSTR
+ *                   }[self.TSUFFIX(i.type_)]
+ *           self.runtime_call(label, 0)
+ *       if node.eol:
+ *           self.runtime_call(RuntimeLabel.PRINT_EOL, 0)
+ *
+ * norm_attr (translator_visitor.py:172-174) == runtime_call(COPY_ATTR,0).
+ * The skip-list elements are SENTENCE kinds only — a bare-expr child is
+ * never one of them, so the C check is "child is an AST_SENTENCE whose
+ * kind is in the list". ATTR_TMP (translator_visitor.py:40-41) =
+ * (INK_TMP,PAPER_TMP,BRIGHT_TMP,FLASH_TMP,OVER_TMP,INVERSE_TMP,
+ *  BOLD_TMP,ITALIC_TMP). The PRINT_AT/PRINT_TAB/PRINT_COMMA/_TMP child
+ * visitors themselves are S7.1b-ii/iii — but the skip path must already
+ * exist here (Python's loop has it unconditionally), so PRINT does not
+ * fparam/print a control child. The per-type label is keyed by
+ * tr_tsuffix (the faithful TSUFFIX port, translator.c:99). */
+
+/* The Python `i.token in (...) + self.ATTR_TMP` skip-set, as SENTENCE
+ * kinds. ATTR_TMP is the *_TMP attr family (S7.1b-iii); listed here
+ * because Python's visit_PRINT loop skips them unconditionally. */
+static bool tr_print_is_control_child(const AstNode *child) {
+    if (child == NULL || child->tag != AST_SENTENCE ||
+        child->u.sentence.kind == NULL)
+        return false;
+    const char *k = child->u.sentence.kind;
+    return strcmp(k, "PRINT_TAB")   == 0 ||
+           strcmp(k, "PRINT_AT")    == 0 ||
+           strcmp(k, "PRINT_COMMA") == 0 ||
+           strcmp(k, "INK_TMP")     == 0 ||
+           strcmp(k, "PAPER_TMP")   == 0 ||
+           strcmp(k, "BRIGHT_TMP")  == 0 ||
+           strcmp(k, "FLASH_TMP")   == 0 ||
+           strcmp(k, "OVER_TMP")    == 0 ||
+           strcmp(k, "INVERSE_TMP") == 0 ||
+           strcmp(k, "BOLD_TMP")    == 0 ||
+           strcmp(k, "ITALIC_TMP")  == 0;
+}
+
+/* visit_PRINT dict: TSUFFIX(i.type_) -> RuntimeLabel string. The .core
+ * label strings mirror the existing handler convention (see tr_visit_stop
+ * ".core.__STOP", tr_visit_restore ".core.__RESTORE") and io.py values. */
+static const char *tr_print_label_for(const char *suf) {
+    if (strcmp(suf, "bool") == 0) return ".core.__PRINTU8";
+    if (strcmp(suf, "i8")   == 0) return ".core.__PRINTI8";
+    if (strcmp(suf, "u8")   == 0) return ".core.__PRINTU8";
+    if (strcmp(suf, "i16")  == 0) return ".core.__PRINTI16";
+    if (strcmp(suf, "u16")  == 0) return ".core.__PRINTU16";
+    if (strcmp(suf, "i32")  == 0) return ".core.__PRINTI32";
+    if (strcmp(suf, "u32")  == 0) return ".core.__PRINTU32";
+    if (strcmp(suf, "f16")  == 0) return ".core.__PRINTF16";
+    if (strcmp(suf, "f")    == 0) return ".core.__PRINTF";
+    if (strcmp(suf, "str")  == 0) return ".core.__PRINTSTR";
+    /* Python would KeyError on any other suffix — fail loud, do not
+     * silently emit a wrong PRINT routine. */
+    fprintf(stderr, "zxbc: visit_PRINT: no PRINT label for TSUFFIX '%s'\n",
+            suf);
+    return ".core.__PRINTU8";
+}
+
+static AstNode *tr_visit_print(Visitor *v, AstNode *node) {
+    Translator *tr = v->ctx;
+
+    /* :814  self.norm_attr() == runtime_call(COPY_ATTR, 0). */
+    tr_runtime_call(tr, ".core.COPY_ATTR", 0);
+
+    /* :815-843  for i in node.children: yield i; ... */
+    for (int idx = 0; idx < node->child_count; idx++) {
+        AstNode *i = node->children[idx];
+
+        /* yield i — visit the child subtree (value-load / control-call). */
+        if (i) visitor_visit(v, i);
+
+        /* :820-829  skip the print-control children (their own visitors
+         * already did the work; PRINT must not fparam/print them). */
+        if (tr_print_is_control_child(i))
+            continue;
+
+        /* :831  self.ic_fparam(i.type_, i.t) */
+        tr_ic_fparam(tr, i ? i->type_ : NULL,
+                     (i && i->t) ? i->t : "");
+
+        /* :832-843  label = {...}[TSUFFIX(i.type_)]; runtime_call(label,0) */
+        const char *suf = tr_tsuffix(i ? i->type_ : NULL);
+        tr_runtime_call(tr, tr_print_label_for(suf), 0);
+    }
+
+    /* :845-846  if node.eol: runtime_call(PRINT_EOL, 0) */
+    if (node->u.sentence.eol)
+        tr_runtime_call(tr, ".core.PRINT_EOL", 0);
+
+    return node;
+}
+
+/* visit_PRINT_COMMA (translator.py:860-861): runtime_call(PRINT_COMMA,0)
+ * — no children. The ',' separator's PRINT_COMMA SENTENCE child is
+ * visited via visit_PRINT's `yield i`; this emits the comma-tab call,
+ * then visit_PRINT's skip-list (tr_print_is_control_child) keeps PRINT
+ * from fparam/printing the sentence. PRINT_AT/PRINT_TAB visit handlers
+ * are deliberately deferred to S7.1b-ii. */
+static AstNode *tr_visit_print_comma(Visitor *v, AstNode *node) {
+    Translator *tr = v->ctx;
+    tr_runtime_call(tr, ".core.PRINT_COMMA", 0);
+    return node;
+}
+
+/* ====================================================================
  * String / array-element assignment + string-slice visitors —
  * faithful ports of src/arch/z80/visitor/translator.py:
  *   visit_LETARRAY        :329-364
@@ -2034,6 +2160,14 @@ static void tr_register_handlers(Visitor *v) {
      * emit_data_blocks). READ/RESTORE are active sentence handlers. */
     visitor_on_sentence(v, "READ", tr_visit_read);
     visitor_on_sentence(v, "RESTORE", tr_visit_restore);
+    /* S7.1b-i — core PRINT (string + numeric + ';'/',' + trailing EOL).
+     * PRINT_AT/PRINT_TAB/PRINT_COMMA/_TMP child visitors are S7.1b-ii/iii;
+     * visit_PRINT itself (the loop, COPY_ATTR, type-keyed PRINT*,
+     * PRINT_EOL) lands here. */
+    visitor_on_sentence(v, "PRINT", tr_visit_print);
+    /* visit_PRINT_COMMA (translator.py:860-861) — the ',' separator's
+     * comma-tab call. Part of S7.1b-i (the ',' support). */
+    visitor_on_sentence(v, "PRINT_COMMA", tr_visit_print_comma);
 }
 
 void translator_visit(Translator *tr, AstNode *ast) {

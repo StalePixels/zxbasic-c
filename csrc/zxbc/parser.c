@@ -3187,9 +3187,39 @@ static AstNode *parse_print_statement(Parser *p) {
 
     AstNode *s = make_sentence_node(p, "PRINT", lineno);
 
-    while (!check(p, BTOK_NEWLINE) && !check(p, BTOK_EOF) && !check(p, BTOK_CO)) {
-        /* Print attributes: INK, PAPER, BRIGHT, FLASH, etc. */
+    /* Faithful port of the Python print_list / print_elem grammar
+     * (zxbparser.py:1978-2073):
+     *
+     *   print_list : print_elem                       (p_print_list_elem)
+     *              | print_list SC    print_elem       (p_print_list)
+     *              | print_list COMMA print_elem       (p_print_list_comma)
+     *   print_elem : expr | print_at | print_tab | attr
+     *              | BOLD expr | ITALIC expr | <empty>
+     *
+     * p_print_list_elem builds the PRINT SENTENCE and sets eol=True.
+     * p_print_list (SC, i.e. ';')   : eol = (next print_elem is not None);
+     *                                 NO separator child is appended;
+     *                                 append the next print_elem iff present.
+     * p_print_list_comma (',')      : eol = (next print_elem is not None);
+     *                                 append a "PRINT_COMMA" SENTENCE child;
+     *                                 append the next print_elem iff present.
+     * A None print_elem (epsilon) is filtered out of the SENTENCE's
+     * children (sentence.py:20) — i.e. it contributes no child.
+     *
+     * eol default is True (the fresh print_list); a trailing separator
+     * with nothing after it (epsilon -> None) flips it False. */
+    s->u.sentence.eol = true;
+
+    /* parse_one_print_elem(): consumes a single print_elem and appends it
+     * to `s` (the bare expr / PRINT_AT / PRINT_TAB / attr node — Python
+     * makes the expr a *direct* child of the PRINT sentence, no wrapper).
+     * Returns true if a (non-None) print_elem was consumed, false for the
+     * epsilon production (nothing parsed). */
+    for (;;) {
+        bool produced = false;
+
         if (match(p, BTOK_AT)) {
+            /* print_at : AT expr COMMA expr  (p_print_list_at) */
             AstNode *row = parse_expression(p, PREC_NONE + 1);
             consume(p, BTOK_COMMA, "Expected ',' after AT row");
             AstNode *col = parse_expression(p, PREC_NONE + 1);
@@ -3197,22 +3227,22 @@ static AstNode *parse_print_statement(Parser *p) {
             if (row) ast_add_child(p->cs, at_sent, row);
             if (col) ast_add_child(p->cs, at_sent, col);
             ast_add_child(p->cs, s, at_sent);
-            match(p, BTOK_SC); /* optional semicolon */
-            continue;
-        }
-        if (match(p, BTOK_TAB)) {
+            produced = true;
+        } else if (match(p, BTOK_TAB)) {
+            /* print_tab : TAB expr  (p_print_list_tab) */
             AstNode *col = parse_expression(p, PREC_NONE + 1);
             AstNode *tab_sent = make_sentence_node(p, "PRINT_TAB", lineno);
             if (col) ast_add_child(p->cs, tab_sent, col);
             ast_add_child(p->cs, s, tab_sent);
-            match(p, BTOK_SC);
-            continue;
-        }
-
-        /* Print attributes: INK, PAPER, BRIGHT, FLASH, OVER, INVERSE, BOLD, ITALIC */
-        {
+            produced = true;
+        } else {
+            /* attr : OVER|INVERSE|INK|PAPER|BRIGHT|FLASH expr  (p_attr)
+             * BOLD expr | ITALIC expr  (p_print_list_expr).
+             * Parser-shape (kind name) for the attr family is S7.1b-iii's
+             * P-iv; left structurally as-is here so it does not break the
+             * in-scope expr/`;`/`,`/eol logic. */
             const char *attr_name = NULL;
-            if (match(p, BTOK_INK))     attr_name = "INK";
+            if (match(p, BTOK_INK))          attr_name = "INK";
             else if (match(p, BTOK_PAPER))   attr_name = "PAPER";
             else if (match(p, BTOK_BRIGHT))  attr_name = "BRIGHT";
             else if (match(p, BTOK_FLASH))   attr_name = "FLASH";
@@ -3225,32 +3255,63 @@ static AstNode *parse_print_statement(Parser *p) {
                 AstNode *attr_sent = make_sentence_node(p, attr_name, lineno);
                 if (val) ast_add_child(p->cs, attr_sent, val);
                 ast_add_child(p->cs, s, attr_sent);
-                match(p, BTOK_SC);
-                continue;
+                produced = true;
+            } else if (!check(p, BTOK_NEWLINE) && !check(p, BTOK_EOF) &&
+                       !check(p, BTOK_CO) && !check(p, BTOK_SC) &&
+                       !check(p, BTOK_COMMA)) {
+                /* print_elem : expr  (p_print_elem_expr). The BARE expr is
+                 * the PRINT sentence's child (no PRINT_ITEM wrapper —
+                 * Python has no such node). If the expr is boolean it is
+                 * make_typecast'd to ubyte exactly as
+                 * p_print_elem_expr does. */
+                AstNode *expr = parse_expression(p, PREC_NONE + 1);
+                if (expr) {
+                    const TypeInfo *et = expr->type_;
+                    const TypeInfo *ef = (et && et->final_type)
+                                         ? et->final_type : et;
+                    if (ef && ef->basic_type == TYPE_boolean) {
+                        TypeInfo *ub =
+                            p->cs->symbol_table->basic_types[TYPE_ubyte];
+                        AstNode *cast = make_typecast(p->cs, ub, expr,
+                                                      expr->lineno);
+                        if (cast) expr = cast;
+                    }
+                    ast_add_child(p->cs, s, expr);
+                    produced = true;
+                }
             }
+            /* else: epsilon print_elem -> None (produced stays false). */
         }
 
-        /* Separator: ; or , */
+        /* Separator handling (p_print_list / p_print_list_comma): the
+         * separator's eol = (the print_elem that follows it is not None).
+         * `;` (SC) appends NO child; `,` (COMMA) appends a PRINT_COMMA
+         * SENTENCE child. Loop continues only while a separator is seen. */
         if (match(p, BTOK_SC)) {
+            bool next_present = !check(p, BTOK_NEWLINE) &&
+                                !check(p, BTOK_EOF) && !check(p, BTOK_CO);
+            s->u.sentence.eol = next_present;
+            continue;
+        }
+        if (match(p, BTOK_COMMA)) {
+            bool next_present = !check(p, BTOK_NEWLINE) &&
+                                !check(p, BTOK_EOF) && !check(p, BTOK_CO);
+            s->u.sentence.eol = next_present;
             AstNode *sep = make_sentence_node(p, "PRINT_COMMA", lineno);
             ast_add_child(p->cs, s, sep);
             continue;
         }
-        if (match(p, BTOK_COMMA)) {
-            AstNode *sep = make_sentence_node(p, "PRINT_TAB", lineno);
-            ast_add_child(p->cs, s, sep);
-            continue;
-        }
 
-        /* Print expression */
-        AstNode *expr = parse_expression(p, PREC_NONE + 1);
-        if (expr) {
-            AstNode *pe = make_sentence_node(p, "PRINT_ITEM", expr->lineno);
-            ast_add_child(p->cs, pe, expr);
-            ast_add_child(p->cs, s, pe);
-        } else {
-            break;
-        }
+        /* No separator: the print_list is complete. If the first
+         * print_elem was epsilon and there is nothing at all (bare
+         * `PRINT`), Python still built the SENTENCE with eol=True (the
+         * None child filtered out) — that is the s/eol default already.
+         *
+         * `produced` distinguishes "consumed a real print_elem" from the
+         * epsilon production; the SENTENCE/eol bookkeeping above already
+         * handled both, so the list simply terminates here. */
+        (void)produced;
+        break;
     }
 
     return s;

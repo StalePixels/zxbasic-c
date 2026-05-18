@@ -311,6 +311,12 @@ struct AstNode {
         struct {
             char *kind;       /* "LET", "IF", "FOR", "PRINT", etc. */
             bool sentinel;    /* sentinel marker for program end, etc. */
+            /* PRINT trailing-newline flag, mirrors Python node.eol
+             * (zxbparser.py:2039,2045,2054). Default false (zero-init for
+             * every sentence); set true/false explicitly only by the PRINT
+             * production in parse_print_statement. No other sentence reads
+             * it. node.eol True -> emit a trailing PRINT_EOL. */
+            bool eol;
         } sentence;
 
         /* AST_ASM */
