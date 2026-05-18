@@ -582,6 +582,16 @@ AstNode *parse_primary(Parser *p) {
                 ast_add_child(p->cs, call, entry);
                 ast_add_child(p->cs, call, args);
                 call->type_ = entry->type_;
+                /* SymbolCALL.filename = gl.FILENAME at parse point
+                 * (symbols/call.py:42) — for the R3-R10 fname=. */
+                if (p->cs->current_file)
+                    call->u.call.filename =
+                        arena_strdup(&p->cs->arena, p->cs->current_file);
+                /* Python call.py:102 inline-vs-deferred dispatch:
+                 * callee already a finished definition (real PARAMLIST,
+                 * not forwarded) == entry.declared and not forwarded. */
+                call->u.call.callee_inline =
+                    (entry->u.id.params != NULL && !entry->u.id.forwarded);
                 vec_push(p->cs->function_calls, call);
                 return call;
             }
@@ -814,6 +824,19 @@ static AstNode *parse_call_or_array(Parser *p, const char *name, int lineno, boo
     }
     ast_add_child(p->cs, n, entry);
     ast_add_child(p->cs, n, arglist);
+
+    /* SymbolCALL.filename = gl.FILENAME at parse point
+     * (symbols/call.py:42) — used as fname= for the R3-R10 argument
+     * errors in check_call_arguments. */
+    if (p->cs->current_file)
+        n->u.call.filename = arena_strdup(&p->cs->arena, p->cs->current_file);
+    /* Python call.py:102 inline-vs-deferred dispatch (see zxbc.h
+     * call.callee_inline): R3-R10 run in the deferred loop only for
+     * calls Python would also defer (callee not a finished
+     * definition at call-parse time). */
+    n->u.call.callee_inline =
+        (entry->tag == AST_ID && entry->u.id.params != NULL &&
+         !entry->u.id.forwarded);
 
     /* Track for post-parse validation (check_pending_calls) */
     vec_push(p->cs->function_calls, n);
@@ -1965,6 +1988,18 @@ static AstNode *parse_statement(Parser *p) {
         if (id_node && id_node->tag == AST_ID &&
             id_node->u.id.class_ != CLASS_var &&
             id_node->u.id.class_ != CLASS_const) {
+            /* SymbolCALL.filename = gl.FILENAME at parse point
+             * (symbols/call.py:42) — fname= for R3-R10. Set before the
+             * FUNCCALL->CALL retag; the `call` union member is shared
+             * by both tags (children-only nodes). */
+            if (p->cs->current_file)
+                s->u.call.filename =
+                    arena_strdup(&p->cs->arena, p->cs->current_file);
+            /* Python call.py:102 inline-vs-deferred dispatch (see
+             * zxbc.h call.callee_inline). */
+            s->u.call.callee_inline =
+                (id_node->tag == AST_ID && id_node->u.id.params != NULL &&
+                 !id_node->u.id.forwarded);
             vec_push(p->cs->function_calls, s);
         }
 
@@ -3001,6 +3036,15 @@ static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function, bool is_decl
      * function_header_pre (zxbparser.py:2957) sets params_size = p[2].size
      * for declare and definition alike. */
     id_node->u.id.param_size = parser_assign_param_offsets(p, params);
+
+    /* S5.10a — stamp the callee PARAMLIST on the shared function ID
+     * (Python entry.ref.params, set by function_header_pre for declare
+     * and definition alike, zxbparser.py:2957). The definition's
+     * PARAMLIST overwrites the declare's on the same entry, exactly as
+     * Python's funcref.params does. check_call_arguments reads this
+     * stable handle instead of id_node->parent (which a later call
+     * node's ast_add_child re-parents). */
+    id_node->u.id.params = params;
 
     if (is_declare) {
         /* Forward declaration — no body to parse */

@@ -1151,8 +1151,251 @@ bool check_pending_labels(CompilerState *cs, AstNode *ast) {
     return result;
 }
 
+/* ----------------------------------------------------------------
+ * check_call_arguments — faithful port of src/api/check.py
+ * check_call_arguments (api/check.py:91-183).
+ *
+ * Checks every argument of one pending function/sub call against the
+ * callee's parameter signature. Returns true on success; on the first
+ * reject it emits the Python-verbatim diagnostic and returns false.
+ *
+ * Data-model mapping (Python -> C):
+ *   entry.ref.params      -> entry->parent->children[1] (AST_PARAMLIST),
+ *                            its AST_ARGUMENT children
+ *   param.name/byref      -> param->u.argument.name / .byref
+ *   param.class_          -> param->u.argument.is_array ? array : var
+ *   param.type_           -> param->type_
+ *   param.default_value   -> param->children[0]  (NULL if child_count==0)
+ *   args                  -> call->children[1] (AST_ARGLIST) children
+ *   arg.name              -> arg->u.argument.name (NULL == positional)
+ *   arg.value             -> arg->children[0]
+ *   arg.class_            -> getattr(value,'class_',unknown):
+ *                            value->u.id.class_ if value is AST_ID else unknown
+ *   arg.typecast(t)       -> make_typecast() replacing arg->children[0]
+ *
+ * Diagnostics route through cs->current_file; Python passes
+ * fname=filename (the call-site file, SymbolCALL.filename) for
+ * R3/R4/R5/R6 and fname=arg.filename for R7/R9 — both equal the
+ * call-site file for every owned single-scope fixture. We swap
+ * cs->current_file to call->u.call.filename for the duration of the
+ * argument checks and restore it after (the faithful analogue of the
+ * fname= kwarg), then R11 keeps its existing call->lineno reporting.
+ * ---------------------------------------------------------------- */
+/* named_args dict lookup by key (api/check.py:104). Returns the slot
+ * index of `name` in the parallel name array, or -1 if absent. */
+static int na_find(const char **names, int n, const char *name) {
+    for (int k = 0; k < n; k++)
+        if (names[k] && name && strcmp(names[k], name) == 0)
+            return k;
+    return -1;
+}
+
+static bool check_call_arguments(CompilerState *cs, AstNode *call,
+                                 AstNode *entry, const char *id_) {
+    /* entry.ref.params — the callee PARAMLIST (api/check.py:106),
+     * stamped on the shared function ID at FUNCDECL-build time
+     * (parser.c id_node->u.id.params). It is NULL for a builtin /
+     * unresolved / non-function entry, where Python's
+     * check_is_declared / check_is_callable would already have
+     * returned False before any R3-R11 — so leave the arg checks
+     * unfired (FALSE_POS-0). */
+    if (entry->tag != AST_ID || entry->u.id.params == NULL)
+        return true;
+    AstNode *paramlist = entry->u.id.params;
+    if (paramlist->tag != AST_PARAMLIST)
+        return true;
+    int nparams = paramlist->child_count;
+
+    if (call->child_count < 2)
+        return true;
+    AstNode *arglist = call->children[1];
+    if (!arglist || arglist->tag != AST_ARGLIST)
+        return true;
+
+    /* args is mutated in place by the default-fill (Python appends to
+     * the SymbolARGLIST) and by typecast; iterate arglist->children
+     * directly and grow it via ast_add_child, exactly as Python's
+     * symbols.ARGLIST.make_node(args, arg) does. */
+
+    /* named_args: dict[name -> arg]. param/arg counts are tiny; an
+     * arena array of distinct names models len(named_args) and the
+     * "param.name in named_args" / "named_args[param.name]" lookups
+     * (api/check.py:104,125-135,149-150). */
+    int cap = nparams + arglist->child_count + 1;
+    const char **na_name = arena_alloc(&cs->arena,
+                                       (size_t)cap * sizeof(char *));
+    AstNode **na_arg = arena_alloc(&cs->arena,
+                                   (size_t)cap * sizeof(AstNode *));
+    int na_len = 0;
+#define NA_FIND(nm) na_find(na_name, na_len, (nm))
+#define NA_SET(nm, av) do { int _f = NA_FIND(nm); \
+    if (_f >= 0) { na_arg[_f] = (av); } \
+    else { na_name[na_len] = (nm); na_arg[na_len] = (av); na_len++; } } while (0)
+
+    /* R3 — unexpected (mis-named) keyword argument (api/check.py:106-110).
+     * param_names = {x.name for x in entry.ref.params}. */
+    for (int a = 0; a < arglist->child_count; a++) {
+        AstNode *arg = arglist->children[a];
+        if (!arg || arg->tag != AST_ARGUMENT) continue;
+        const char *an = arg->u.argument.name;
+        if (an == NULL) continue;
+        bool found = false;
+        for (int pi = 0; pi < nparams; pi++) {
+            AstNode *pm = paramlist->children[pi];
+            if (pm && pm->u.argument.name &&
+                strcmp(pm->u.argument.name, an) == 0) { found = true; break; }
+        }
+        if (!found) {
+            zxbc_error(cs, call->lineno, "Unexpected argument '%s'", an);
+            return false;
+        }
+    }
+
+    /* zip(args, entry.ref.params): pair positionally, stopping at the
+     * shorter (api/check.py:112-125). R4 — positional after keyword;
+     * a positional arg's name is back-filled from its paired param. */
+    const char *last_arg_name = NULL;
+    int zipn = arglist->child_count < nparams ? arglist->child_count : nparams;
+    for (int z = 0; z < zipn; z++) {
+        AstNode *arg = arglist->children[z];
+        AstNode *param = paramlist->children[z];
+        if (!arg || arg->tag != AST_ARGUMENT) continue;
+        if (last_arg_name != NULL && arg->u.argument.name == NULL) {
+            zxbc_error(cs, call->lineno,
+                       "Positional argument cannot go after keyword argument '%s'",
+                       last_arg_name);
+            return false;
+        }
+        if (arg->u.argument.name != NULL) {
+            last_arg_name = arg->u.argument.name;
+        } else {
+            arg->u.argument.name = param ? param->u.argument.name : NULL;
+        }
+        NA_SET(arg->u.argument.name, arg);
+    }
+
+    /* Default-fill (api/check.py:127-135): if fewer named args than
+     * params, walk params in order; skip those already supplied; stop
+     * (break) at the first missing param with no default; otherwise
+     * synthesise an ARGUMENT from param.default_value, append it to
+     * args (ARGLIST.make_node) and to named_args. */
+    if (na_len < nparams) {
+        for (int pi = 0; pi < nparams; pi++) {
+            AstNode *param = paramlist->children[pi];
+            if (!param) continue;
+            const char *pn = param->u.argument.name;
+            if (NA_FIND(pn) >= 0) continue;
+            AstNode *defv = (param->child_count >= 1) ? param->children[0]
+                                                      : NULL;
+            if (defv == NULL) break;
+            AstNode *arg = ast_new(cs, AST_ARGUMENT, call->lineno);
+            arg->u.argument.name = (char *)pn;
+            arg->u.argument.byref = false;
+            ast_add_child(cs, arg, defv);
+            arg->type_ = defv->type_;
+            ast_add_child(cs, arglist, arg);
+            NA_SET(pn, arg);
+        }
+    }
+
+    /* R5 — too many positional args: any arg still un-named after the
+     * zip+back-fill is beyond the parameter list (api/check.py:137-140). */
+    for (int a = 0; a < arglist->child_count; a++) {
+        AstNode *arg = arglist->children[a];
+        if (!arg || arg->tag != AST_ARGUMENT) continue;
+        if (arg->u.argument.name == NULL) {
+            zxbc_error(cs, call->lineno,
+                       "Too many arguments for Function '%s'", id_);
+            return false;
+        }
+    }
+
+    /* R6 — argument/parameter count mismatch (api/check.py:142-147). */
+    if (na_len != nparams) {
+        const char *plural = (nparams != 1) ? "s" : "";
+        zxbc_error(cs, call->lineno,
+                   "Function '%s' takes %d parameter%s, not %d",
+                   id_, nparams, plural, arglist->child_count);
+        return false;
+    }
+
+    /* Per-parameter checks (api/check.py:149-173). */
+    for (int pi = 0; pi < nparams; pi++) {
+        AstNode *param = paramlist->children[pi];
+        if (!param) continue;
+        int ai = NA_FIND(param->u.argument.name);
+        if (ai < 0) continue;
+        AstNode *arg = na_arg[ai];
+        if (!arg || arg->child_count < 1) continue;
+
+        AstNode *aval = arg->children[0];
+        SymbolClass arg_class = (aval && aval->tag == AST_ID)
+                                    ? aval->u.id.class_ : CLASS_unknown;
+        SymbolClass param_class =
+            param->u.argument.is_array ? CLASS_array : CLASS_var;
+
+        /* R7 — array/var class mismatch (api/check.py:152-154).
+         * str(arg.value) is the ID name (_id.py:88). */
+        if ((arg_class == CLASS_var || arg_class == CLASS_array) &&
+            param_class != arg_class) {
+            const char *vstr = (aval && aval->tag == AST_ID)
+                                   ? aval->u.id.name : "";
+            zxbc_error(cs, call->lineno, "Invalid argument '%s'", vstr);
+            return false;
+        }
+
+        /* R8 — arg -> param typecast (api/check.py:156-157).
+         * arg.typecast() == make_typecast replacing arg.value; on
+         * failure make_typecast already emitted the Python-verbatim
+         * message (Array/string/value conversion) and returned NULL. */
+        AstNode *casted = make_typecast(cs, param->type_, aval,
+                                        call->lineno);
+        if (casted == NULL)
+            return false;
+        arg->children[0] = casted;
+        if (casted->parent != arg) casted->parent = arg;
+
+        /* R9 / R10 — ByRef parameter (api/check.py:159-170). Checked
+         * AFTER the typecast: if the cast wrapped the value in a
+         * TYPECAST (type mismatch on a ByRef param) arg.value is no
+         * longer an ID/ARRAYLOAD and R9 fires (bad_fname_err0). */
+        if (param->u.argument.byref) {
+            AstNode *v = arg->children[0];
+            bool is_var_ref =
+                v && (v->tag == AST_ID || v->tag == AST_ARRAYLOAD ||
+                      v->tag == AST_ARRAYACCESS);
+            if (!is_var_ref) {
+                zxbc_error(cs, call->lineno,
+                           "Expected a variable name, not an expression (parameter By Reference)");
+                return false;
+            }
+            /* arg.class_ recomputed from the (possibly cast) value;
+             * not in (var, array, unknown) -> R10. Python omits fname
+             * here, so it reports gl.FILENAME — equivalently our
+             * (already-swapped) cs->current_file. */
+            SymbolClass vc = (v->tag == AST_ID) ? v->u.id.class_
+                                                : CLASS_unknown;
+            if (vc != CLASS_var && vc != CLASS_array &&
+                vc != CLASS_unknown) {
+                zxbc_error(cs, call->lineno,
+                           "Expected a variable or array name (parameter By Reference)");
+                return false;
+            }
+            arg->u.argument.byref = true;
+        }
+    }
+
+#undef NA_FIND
+#undef NA_SET
+    return true;
+}
+
 /* check_pending_calls: validate forward-referenced function calls.
- * Matches Python's src/api/check.py check_pending_calls(). */
+ * Matches Python's src/api/check.py check_pending_calls() (:186-196):
+ * for each pending call, run check_call_arguments. The R2 (SUB used as
+ * FUNCTION) and R11 (declared-but-not-implemented) checks predate
+ * S5.10a and are retained; S5.10a adds the R3-R10 argument checks via
+ * check_call_arguments above. */
 bool check_pending_calls(CompilerState *cs) {
     bool result = true;
 
@@ -1197,7 +1440,40 @@ bool check_pending_calls(CompilerState *cs) {
             continue;
         }
 
-        /* Check if forward-declared but never implemented */
+        /* R3-R10 argument checks (api/check.py check_call_arguments).
+         * Run ONLY for calls Python would have deferred to
+         * gl.FUNCTION_CALLS — i.e. callee NOT a finished definition at
+         * call-parse time (Python call.py:104-110). Python checks the
+         * inline branch (call.py:103) at parse; the C has no inline
+         * path, so an inline-domain call is outside this deferred
+         * loop's faithful scope — skipping it here both stays faithful
+         * to Python's dispatch split and keeps FALSE_POS at 0 for the
+         * pre-existing parenless-call parser-shape divergence
+         * (funcnoparm: a def-first 0-arg `xx` call the C parser
+         * synthesises where PLY reduces a 1-arg parenless call). The
+         * pre-existing R2/R11 checks below are NOT gated by this. */
+        if (!call->u.call.callee_inline) {
+            /* Python passes fname=filename (SymbolCALL.filename, the
+             * call-site file) for R3-R6 and fname=arg.filename for
+             * R7/R9 — both the call-site file for our single-scope
+             * fixtures. Swap cs->current_file to the captured call
+             * filename for the duration, then restore it (the faithful
+             * analogue of the fname= kwarg). */
+            char *saved_file = cs->current_file;
+            if (call->u.call.filename)
+                cs->current_file = call->u.call.filename;
+            bool ok = check_call_arguments(cs, call, entry, name);
+            cs->current_file = saved_file;
+            if (!ok) {
+                result = false;
+                continue;
+            }
+        }
+
+        /* R11 — forward-declared but never implemented (api/check.py
+         * :175-181). Python reports fname=entry.filename; the existing
+         * call->lineno + cs->current_file behaviour predates S5.10a and
+         * is retained unchanged. */
         if (entry->u.id.forwarded) {
             const char *kind = (cls == CLASS_sub) ? "sub" : "function";
             zxbc_error(cs, call->lineno, "%s '%s' declared but not implemented",

@@ -184,6 +184,18 @@ struct AstNode {
             bool addr_set;
             /* Function-specific fields */
             AstNode *body;       /* function body (for FUNCDECL) */
+            /* S5.10a — the callee's PARAMLIST, the faithful analogue of
+             * Python entry.ref.params (id_/ref/funcref.py:50). Stamped
+             * on the shared function ID node when its FUNCDECL is built
+             * (the DECLARE forward node and the real definition both set
+             * it; the definition's value wins, mirroring Python where
+             * the definition's PARAMLIST replaces the declare's on the
+             * same funcref). check_call_arguments reads this rather than
+             * chasing id->parent, which the post-parse call-node
+             * ast_add_child re-parents away from the FUNCDECL for any
+             * call that is textually AFTER the definition. NULL until a
+             * FUNCDECL is built for this entry. */
+            AstNode *params;     /* AST_PARAMLIST (Python entry.ref.params) */
             int local_size;      /* bytes for local vars */
             int param_size;      /* bytes for parameters */
 
@@ -240,7 +252,42 @@ struct AstNode {
             bool is_forward;
         } funcdecl;
 
-        /* AST_CALL/FUNCCALL: child[0] = callee ID, child[1] = ARGLIST */
+        /* AST_CALL/FUNCCALL: child[0] = callee ID, child[1] = ARGLIST.
+         * S5.10a — `filename` is the call-site source filename captured
+         * at parse time, the faithful analogue of Python
+         * SymbolCALL.filename (symbols/call.py:42, set from the
+         * make_node `filename` arg which is gl.FILENAME at the call's
+         * parse point). check_pending_calls / check_call_arguments
+         * (api/check.py:91-196) pass it as `fname=` to the R3-R10
+         * argument-error messages so a #line-directive'd call reports
+         * the directive's filename (bad_fname_err*), not the post-parse
+         * cs->current_file. NULL == use cs->current_file. CALL/FUNCCALL
+         * tag nodes never use any other `u.*` member (children-only;
+         * tr_visit_call_common reads no `u.*`), so this dedicated
+         * struct cannot alias. */
+        struct {
+            char *filename;
+            /* S5.10a — Python SymbolCALL.make_node (symbols/call.py
+             * :102-110) dispatches the argument check INLINE at the
+             * call site when `entry.declared and not entry.forwarded`
+             * (the callee is already a fully-parsed definition);
+             * otherwise the call is appended to gl.FUNCTION_CALLS and
+             * checked LATER by check_pending_calls. The C deferred loop
+             * (check_pending_calls) is the faithful analogue of ONLY
+             * that gl.FUNCTION_CALLS path, so the ported R3-R10
+             * argument checks must run there only for calls Python
+             * would also have deferred — i.e. callee NOT a finished
+             * definition at call-parse time. `callee_inline` is true
+             * when the resolved callee already had a real PARAMLIST and
+             * was not forwarded when this call node was built (Python's
+             * inline branch); R3-R10 skip such calls (the C has no
+             * inline path — those are out of the deferred loop's
+             * faithful scope), which keeps FALSE_POS at 0 for the
+             * pre-existing parenless-call parser-shape divergence
+             * (funcnoparm). The pre-existing R2/R11 firing is
+             * unaffected by this flag. */
+            bool callee_inline;
+        } call;
         /* AST_VARDECL: child[0] = ID, child[1] = initializer (or NULL) */
         /* AST_ARRAYDECL: child[0] = ID, child[1] = BOUNDLIST */
         /* AST_ARRAYACCESS/ARRAYLOAD: child[0] = array ID, child[1..n] = indices */
