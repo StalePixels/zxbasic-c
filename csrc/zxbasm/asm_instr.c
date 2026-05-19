@@ -46,6 +46,51 @@ static void int_to_le(int64_t val, int n_bytes, uint8_t *out)
     }
 }
 
+/* Resolve a DEFS pseudo-op's byte count (N) and fill byte.
+ *
+ * Faithful mirror of src/zxbasm/asm.py:75-91 (the DEFS branch of
+ * Asm.bytes()):
+ *
+ *   if self.asm == "DEFS":
+ *       if self.pending:
+ *           N = self.arg[0]
+ *           if isinstance(N, Expr):
+ *               N = N.eval()
+ *           return (0,) * N                 # pending: N ZERO bytes
+ *       args = self.argval()
+ *       arg0 = args[0]; arg1 = args[1]
+ *       if arg1 > 255:
+ *           errmsg.warning_value_will_be_truncated(self.lineno)
+ *       num = arg1 & 0xFF
+ *       return bytearray((num,) * arg0)      # resolved: arg0 x (arg1 & 0xFF)
+ *
+ * So: pending -> N zero bytes; resolved -> N copies of (fill & 0xFF),
+ * with the "value will be truncated" warning when the fill > 255. The
+ * count N has NO ceiling in either pass. */
+int asm_defs_resolve(AsmState *as, AsmInstr *instr, uint8_t *fill_out)
+{
+    int64_t count_val = 0;
+    int64_t fill_val = 0;
+
+    if (instr->defs_count) {
+        if (!expr_eval(as, instr->defs_count, &count_val, instr->pending))
+            count_val = 0;
+    }
+    if (instr->defs_fill) {
+        if (!expr_eval(as, instr->defs_fill, &fill_val, instr->pending))
+            fill_val = 0;
+    }
+
+    if (fill_val > 255 && !instr->pending) {
+        asm_warning(as, instr->lineno, "value will be truncated");
+    }
+
+    int n = (int)count_val;
+    if (n < 0) n = 0;
+    if (fill_out) *fill_out = (uint8_t)(fill_val & 0xFF);
+    return n;
+}
+
 /* Compute bytes for an instruction */
 int asm_instr_bytes(AsmState *as, AsmInstr *instr, uint8_t *out, int out_size)
 {
@@ -94,28 +139,23 @@ int asm_instr_bytes(AsmState *as, AsmInstr *instr, uint8_t *out, int out_size)
     }
 
     if (instr->type == ASM_DEFS) {
-        /* DEFS count, fill */
-        int64_t count_val = 0;
-        int64_t fill_val = 0;
-
-        if (instr->defs_count) {
-            if (!expr_eval(as, instr->defs_count, &count_val, instr->pending))
-                count_val = 0;
-        }
-        if (instr->defs_fill) {
-            if (!expr_eval(as, instr->defs_fill, &fill_val, instr->pending))
-                fill_val = 0;
-        }
-
-        if (fill_val > 255 && !instr->pending) {
-            asm_warning(as, instr->lineno, "value will be truncated");
-        }
-
-        int n = (int)count_val;
-        if (n > out_size) n = out_size;
-        if (n < 0) n = 0;
-        uint8_t fill = (uint8_t)(fill_val & 0xFF);
-        memset(out, fill, (size_t)n);
+        /* DEFS count, fill. Mirrors src/zxbasm/asm.py:75-91: produces
+         * EXACTLY N bytes with NO ceiling (pending -> N x 0x00;
+         * resolved -> N x (fill & 0xFF)). The location counter must
+         * advance by N in BOTH passes. asm_defs_resolve() owns the
+         * faithful pending/fill/&0xFF/warning semantics.
+         *
+         * Note: the byte count returned is the true (unclamped) N so
+         * direct callers learn the real size; only `out_size` bytes are
+         * actually written into `out` so a fixed-size caller buffer is
+         * never overflowed. Callers that need every byte of a large DEFS
+         * (memory.c) special-case ASM_DEFS and write straight into the
+         * memory image instead of through a stack buffer. */
+        uint8_t fill = 0;
+        int n = asm_defs_resolve(as, instr, &fill);
+        int w = n;
+        if (w > out_size) w = out_size;
+        memset(out, fill, (size_t)w);
         return n;
     }
 

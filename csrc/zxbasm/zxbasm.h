@@ -226,6 +226,14 @@ int count_arg_slots(const char *mnemonic, int *arg_bytes, int max_args);
  * Writes to `out` (must be large enough). */
 int asm_instr_bytes(AsmState *as, AsmInstr *instr, uint8_t *out, int out_size);
 
+/* Resolve a DEFS pseudo-op's count (N) and fill byte, mirroring
+ * src/zxbasm/asm.py:75-91 (the DEFS branch of Asm.bytes()):
+ *   - pending  -> N zero bytes        (return (0,) * N)
+ *   - resolved -> N copies of fill&0xFF (bytearray((arg1 & 0xFF,) * arg0));
+ *                 emits the "value will be truncated" warning when arg1 > 255.
+ * Returns N (>= 0, NOT clamped to any buffer size) and the fill byte. */
+int asm_defs_resolve(AsmState *as, AsmInstr *instr, uint8_t *fill_out);
+
 /* ----------------------------------------------------------------
  * Memory model
  * ---------------------------------------------------------------- */

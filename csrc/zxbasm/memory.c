@@ -450,7 +450,32 @@ void mem_add_instruction(AsmState *as, AsmInstr *instr)
     }
     vec_push(blk->instrs, instr);
 
-    /* Emit bytes */
+    /* Emit bytes.
+     *
+     * DEFS is special-cased: its byte count is unbounded (DEFS 4768 etc.)
+     * so it must NOT be funnelled through the fixed 256-byte stack buffer.
+     * Mirrors Python Memory.add_instruction() (src/zxbasm/memory.py:160-161)
+     * which does `for byte in instr.bytes(): self.__set_byte(...)`, i.e. the
+     * location counter advances by EXACTLY len(instr.bytes()). For a pending
+     * DEFS, asm.py:80 returns `(0,) * N` (N zero bytes); for a resolved one,
+     * asm.py:91 returns `(num,) * arg0` (N copies of fill & 0xFF) — N in
+     * both passes, no ceiling. We write the fill byte straight into the
+     * memory image with the same MAX_MEM overflow guard as the copy loop. */
+    if (instr->type == ASM_DEFS) {
+        uint8_t fill = 0;
+        int n = asm_defs_resolve(as, instr, &fill);
+        for (int i = 0; i < n; i++) {
+            if (m->index + i >= MAX_MEM) {
+                asm_error(as, instr->lineno, "Memory overflow at address %d", m->index + i);
+                return;
+            }
+            m->bytes[m->index + i] = fill;
+            m->byte_set[m->index + i] = true;
+        }
+        m->index += n;
+        return;
+    }
+
     uint8_t buf[256];
     int n = asm_instr_bytes(as, instr, buf, sizeof(buf));
 
@@ -699,6 +724,23 @@ int mem_dump(AsmState *as, int *org_out, uint8_t **data_out, int *data_len)
             }
         }
         instr->pending = false;
+
+        /* DEFS special-case: unbounded byte count, so bypass the fixed
+         * 256-byte stack buffer (see mem_add_instruction). Mirrors Python
+         * Memory.dump() (src/zxbasm/memory.py:194-200): once resolved,
+         * a.bytes() yields N copies of (fill & 0xFF) (asm.py:91) which are
+         * written back over memory_bytes[i + r] for r in range(len(tmp)).
+         * Same length N as the first (pending) pass, so the location
+         * counter set up there is already correct. */
+        if (instr->type == ASM_DEFS) {
+            uint8_t fill = 0;
+            int n = asm_defs_resolve(as, instr, &fill);
+            for (int j = 0; j < n && (i + j) < MAX_MEM; j++) {
+                m->bytes[i + j] = fill;
+            }
+            continue;
+        }
+
         uint8_t buf[256];
         int n = asm_instr_bytes(as, instr, buf, sizeof(buf));
 
