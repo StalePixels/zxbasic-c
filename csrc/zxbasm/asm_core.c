@@ -8,6 +8,7 @@
 #include "outfmt_tap.h"
 #include "outfmt_tzx.h"
 #include "basic.h"
+#include "cwalk.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
@@ -198,7 +199,36 @@ int asm_assemble(AsmState *as, const char *input)
  * Binary output
  * Mirrors src/outfmt/binary.py — just write raw bytes
  * ---------------------------------------------------------------- */
-int asm_generate_binary(AsmState *as, const char *filename, const char *format)
+/* Read an entire file as raw bytes (faithful to Python's
+ * `with src.api.utils.open_file(fname) as f: f.read()` — binary read of
+ * the whole file). Returns a malloc'd buffer (caller frees) and sets
+ * *out_len. Returns NULL on open/read failure (Python's open_file would
+ * raise -> unhandled -> abort; we mirror by erroring out cleanly). */
+static unsigned char *asm_read_file_bytes(const char *path, long *out_len)
+{
+    FILE *f = fopen(path, "rb");
+    if (!f) return NULL;
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return NULL; }
+    long n = ftell(f);
+    if (n < 0) { fclose(f); return NULL; }
+    if (fseek(f, 0, SEEK_SET) != 0) { fclose(f); return NULL; }
+    /* malloc(0) is implementation-defined; ensure a valid pointer for
+     * an empty file (Python's f.read() yields b"" — a valid empty
+     * block). */
+    unsigned char *buf = malloc(n > 0 ? (size_t)n : 1);
+    if (!buf) { fclose(f); return NULL; }
+    if (n > 0 && fread(buf, 1, (size_t)n, f) != (size_t)n) {
+        free(buf); fclose(f); return NULL;
+    }
+    fclose(f);
+    *out_len = n;
+    return buf;
+}
+
+int asm_generate_binary(AsmState *as, const char *filename, const char *format,
+                        char **binary_files, int binary_files_count,
+                        char **headless_binary_files,
+                        int headless_binary_files_count)
 {
     int org;
     uint8_t *data;
@@ -271,12 +301,106 @@ int asm_generate_binary(AsmState *as, const char *filename, const char *format)
         const unsigned char *prog = (const unsigned char *)data;
         int prog_len = (data && data_len > 0) ? data_len : 0;
 
+        /* Aux blocks — faithful asmparse.generate_binary (asmparse.py:
+         * 1030-1038), built unconditionally BEFORE the loader build:
+         *
+         *   bin_blocks = []
+         *   for fname in binary_files:
+         *       with open_file(fname) as f:
+         *           bin_blocks.append((os.path.basename(fname), f.read()))
+         *   headless_bin_blocks = []
+         *   for fname in headless_binary_files:
+         *       with open_file(fname) as f:
+         *           headless_bin_blocks.append(f.read())
+         *
+         * A headed block = (basename(path), raw file bytes); a headless
+         * block = raw file bytes. Files read as raw bytes. Only this
+         * TAP/TZX branch builds these — sna/z80/bin ignore aux, matching
+         * Python (generate_binary only forwards them to the TAP/TZX
+         * emitter). Each name is a null-terminated basename copy via
+         * cwk_path_get_basename (os.path.basename parity). On any
+         * file-read failure we free everything and return -1 (Python's
+         * open_file would raise -> unhandled -> abort; we mirror by
+         * erroring out cleanly rather than silently skipping). */
+        OutfmtAuxBin *aux_bin = NULL;
+        OutfmtAuxHeadless *aux_headless = NULL;
+        int n_aux_bin = 0;
+        int n_aux_headless = 0;
+        int aux_err = 0;
+
+        if (binary_files_count > 0) {
+            aux_bin = calloc((size_t)binary_files_count, sizeof(*aux_bin));
+            if (!aux_bin) aux_err = 1;
+        }
+        for (int i = 0; !aux_err && i < binary_files_count; i++) {
+            long flen = 0;
+            unsigned char *fbytes = asm_read_file_bytes(binary_files[i], &flen);
+            if (!fbytes) {
+                fprintf(stderr, "Cannot open append-binary file: %s\n",
+                        binary_files[i]);
+                aux_err = 1;
+                break;
+            }
+            const char *bn = NULL;
+            size_t bnlen = 0;
+            cwk_path_get_basename(binary_files[i], &bn, &bnlen);
+            char *name = malloc(bnlen + 1);
+            if (!name) { free(fbytes); aux_err = 1; break; }
+            if (bnlen > 0 && bn) memcpy(name, bn, bnlen);
+            name[bnlen] = '\0';
+            aux_bin[n_aux_bin].name = name;
+            aux_bin[n_aux_bin].data = fbytes;
+            aux_bin[n_aux_bin].len  = (int)flen;
+            n_aux_bin++;
+        }
+
+        if (!aux_err && headless_binary_files_count > 0) {
+            aux_headless = calloc((size_t)headless_binary_files_count,
+                                  sizeof(*aux_headless));
+            if (!aux_headless) aux_err = 1;
+        }
+        for (int i = 0; !aux_err && i < headless_binary_files_count; i++) {
+            long flen = 0;
+            unsigned char *fbytes =
+                asm_read_file_bytes(headless_binary_files[i], &flen);
+            if (!fbytes) {
+                fprintf(stderr, "Cannot open append-headless-binary file: %s\n",
+                        headless_binary_files[i]);
+                aux_err = 1;
+                break;
+            }
+            aux_headless[n_aux_headless].data = fbytes;
+            aux_headless[n_aux_headless].len  = (int)flen;
+            n_aux_headless++;
+        }
+
+        if (aux_err) {
+            for (int i = 0; i < n_aux_bin; i++) {
+                free((void *)aux_bin[i].name);
+                free((void *)aux_bin[i].data);
+            }
+            for (int i = 0; i < n_aux_headless; i++)
+                free((void *)aux_headless[i].data);
+            free(aux_bin);
+            free(aux_headless);
+            return -1;
+        }
+
         /* BASIC loader (asmparse.py:1048-1059). When use_basic_loader is
          * not set, Python's loader_bytes stays None -> loader-less path,
-         * byte-identical to S6.3a. */
+         * byte-identical to S6.3a (the _full writers with loader NULL/-1
+         * and zero aux are byte-identical to the non-_full writers). */
         if (as->use_basic_loader) {
             Basic *bld = basic_new();
             if (!bld) {
+                for (int i = 0; i < n_aux_bin; i++) {
+                    free((void *)aux_bin[i].name);
+                    free((void *)aux_bin[i].data);
+                }
+                for (int i = 0; i < n_aux_headless; i++)
+                    free((void *)aux_headless[i].data);
+                free(aux_bin);
+                free(aux_headless);
                 return -1;
             }
 
@@ -322,6 +446,14 @@ int asm_generate_binary(AsmState *as, const char *filename, const char *format)
 
             if (basic_oom(bld)) {
                 basic_free(bld);
+                for (int i = 0; i < n_aux_bin; i++) {
+                    free((void *)aux_bin[i].name);
+                    free((void *)aux_bin[i].data);
+                }
+                for (int i = 0; i < n_aux_headless; i++)
+                    free((void *)aux_headless[i].data);
+                free(aux_bin);
+                free(aux_headless);
                 return -1;
             }
 
@@ -329,21 +461,51 @@ int asm_generate_binary(AsmState *as, const char *filename, const char *format)
             const unsigned char *loader_bytes = basic_bytes(bld, &loader_len);
 
             int rc = is_tzx
-                ? outfmt_tzx_write_loader(filename, progname, entry_point,
-                                          loader_bytes, loader_len,
-                                          prog, prog_len)
-                : outfmt_tap_write_loader(filename, progname, entry_point,
-                                          loader_bytes, loader_len,
-                                          prog, prog_len);
+                ? outfmt_tzx_write_full(filename, progname, entry_point,
+                                        loader_bytes, loader_len,
+                                        prog, prog_len,
+                                        aux_bin, n_aux_bin,
+                                        aux_headless, n_aux_headless)
+                : outfmt_tap_write_full(filename, progname, entry_point,
+                                        loader_bytes, loader_len,
+                                        prog, prog_len,
+                                        aux_bin, n_aux_bin,
+                                        aux_headless, n_aux_headless);
             basic_free(bld);
+            for (int i = 0; i < n_aux_bin; i++) {
+                free((void *)aux_bin[i].name);
+                free((void *)aux_bin[i].data);
+            }
+            for (int i = 0; i < n_aux_headless; i++)
+                free((void *)aux_headless[i].data);
+            free(aux_bin);
+            free(aux_headless);
             return rc;
         }
 
-        return is_tzx
-            ? outfmt_tzx_write(filename, progname, entry_point,
-                               prog, prog_len)
-            : outfmt_tap_write(filename, progname, entry_point,
-                               prog, prog_len);
+        /* No-loader path: _full writers with loader NULL/-1 are
+         * byte-identical to outfmt_{tap,tzx}_write when aux counts are
+         * 0 (S6.7a header contract), and emit the aux tail otherwise. */
+        {
+            int rc = is_tzx
+                ? outfmt_tzx_write_full(filename, progname, entry_point,
+                                        NULL, -1, prog, prog_len,
+                                        aux_bin, n_aux_bin,
+                                        aux_headless, n_aux_headless)
+                : outfmt_tap_write_full(filename, progname, entry_point,
+                                        NULL, -1, prog, prog_len,
+                                        aux_bin, n_aux_bin,
+                                        aux_headless, n_aux_headless);
+            for (int i = 0; i < n_aux_bin; i++) {
+                free((void *)aux_bin[i].name);
+                free((void *)aux_bin[i].data);
+            }
+            for (int i = 0; i < n_aux_headless; i++)
+                free((void *)aux_headless[i].data);
+            free(aux_bin);
+            free(aux_headless);
+            return rc;
+        }
     }
 
     if (!data || data_len == 0) {

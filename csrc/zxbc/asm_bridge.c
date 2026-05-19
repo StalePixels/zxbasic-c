@@ -32,7 +32,10 @@
 
 int zxbc_asm_to_binary(const char *asm_text, const char *out_filename,
                        const char *format, bool use_basic_loader,
-                       bool autorun) {
+                       bool autorun,
+                       char **binary_files, int binary_files_count,
+                       char **headless_binary_files,
+                       int headless_binary_files_count) {
     AsmState as;
     asm_init(&as);
     as.use_basic_loader = use_basic_loader;
@@ -41,7 +44,10 @@ int zxbc_asm_to_binary(const char *asm_text, const char *out_filename,
     int aerr = asm_assemble(&as, asm_text);
     int gerr = 0;
     if (aerr == 0)
-        gerr = asm_generate_binary(&as, out_filename, format);
+        gerr = asm_generate_binary(&as, out_filename, format,
+                                   binary_files, binary_files_count,
+                                   headless_binary_files,
+                                   headless_binary_files_count);
 
     asm_destroy(&as);
     return (aerr != 0 || gerr != 0) ? 1 : 0;

@@ -103,6 +103,20 @@ typedef struct CompilerOptions {
     char **defines;
     int defines_count;
 
+    /* --append-binary / --append-headless-binary filenames, in order,
+     * one per occurrence (Python args_parser.py:175-183 default=[]
+     * action="append" -> options.append_binary /
+     * options.append_headless_binary are ordered lists of filename
+     * strings). Raw ya_optarg pointers, realloc-grown arrays — exactly
+     * the `defines` idiom. asmparse.generate_binary (asmparse.py:1013-
+     * 1044) reads each file's raw bytes; headed = (basename, bytes),
+     * headless = bytes. Zero-init by compiler_options_init's memset,
+     * same convention as the `defines` pair. */
+    char **append_binary;
+    int append_binary_count;
+    char **append_headless_binary;
+    int append_headless_binary_count;
+
     /* Optimization */
     OptStrategy opt_strategy;
 

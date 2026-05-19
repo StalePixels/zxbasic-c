@@ -30,6 +30,33 @@ int main(int argc, char *argv[]) {
         return rc < 0 ? 0 : rc;  /* -1 = --help/--version (success) */
     }
 
+    /* Format-gate — faithful port of args_config.py:151-152:
+     *
+     *   if options.append_binary and OPTIONS.output_file_type not in
+     *       {FileType.TAP, FileType.TZX}:
+     *       parser.error("Option --append-binary needs either tap or
+     *                     tzx output format")
+     *
+     * ONLY options.append_binary gates (NOT append_headless_binary —
+     * Python only checks append_binary). parser.error prints to stderr
+     * and exits 2. The C parser.error-analogue convention (see
+     * zxbasm/main.c:138, the args_config.py:158-159 "No such file or
+     * directory" parser.error port) is: fprintf(stderr, "error: <msg>")
+     * then exit 2. Fires after args are parsed and output_file_type is
+     * resolved (last-wins in args.c), before any compilation/output.
+     * Scope: this gate emits exit-2 + the one error: line ONLY — the
+     * argparse usage: preamble is S7.2d, deliberately not reproduced
+     * here. */
+    if (cs.opts.append_binary_count > 0
+        && !(cs.opts.output_file_type
+             && (strcmp(cs.opts.output_file_type, "tap") == 0
+                 || strcmp(cs.opts.output_file_type, "tzx") == 0))) {
+        fprintf(stderr,
+            "error: Option --append-binary needs either tap or tzx output format\n");
+        compiler_destroy(&cs);
+        return 2;
+    }
+
     cs.current_file = cs.opts.input_filename;
 
     /* Command-line flag deprecation warnings (args_config.py:107-132).

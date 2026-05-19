@@ -269,6 +269,23 @@ int zxbc_parse_args(int argc, char **argv, CompilerOptions *opts) {
                     sizeof(char *) * (opts->defines_count + 1));
                 opts->defines[opts->defines_count++] = ya_optarg;
                 break;
+            case LOPT_APPEND_BIN:
+                /* --append-binary FILE (Python args_parser.py:175-177
+                 * default=[] action="append"): accumulate the raw
+                 * filename in order. Mirrors the -D/disable-warning
+                 * idiom (raw ya_optarg pointer, realloc-grown array). */
+                opts->append_binary = realloc(opts->append_binary,
+                    sizeof(char *) * (opts->append_binary_count + 1));
+                opts->append_binary[opts->append_binary_count++] = ya_optarg;
+                break;
+            case LOPT_APPEND_HEADLESS_BIN:
+                /* --append-headless-binary FILE (Python
+                 * args_parser.py:178-183 default=[] action="append"):
+                 * same idiom; ordered list of raw filenames. */
+                opts->append_headless_binary = realloc(opts->append_headless_binary,
+                    sizeof(char *) * (opts->append_headless_binary_count + 1));
+                opts->append_headless_binary[opts->append_headless_binary_count++] = ya_optarg;
+                break;
             case 'M':
                 opts->memory_map = ya_optarg;
                 break;

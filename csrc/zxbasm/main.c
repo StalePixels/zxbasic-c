@@ -281,8 +281,12 @@ int main(int argc, char *argv[])
         }
     }
 
-    /* Step 5: Generate binary output */
-    int result = asm_generate_binary(&as, output_file, output_format);
+    /* Step 5: Generate binary output.
+     * zxbasm's own --append-binary CLI is NOT wired in this slice
+     * (S6.7a-owned) — pass empty/zero aux to preserve zxbasm's exact
+     * current behaviour (no appended blocks). */
+    int result = asm_generate_binary(&as, output_file, output_format,
+                                     NULL, 0, NULL, 0);
 
     /* Cleanup */
     if (as.err_file && as.err_file != stderr)

@@ -345,8 +345,19 @@ void asm_destroy(AsmState *as);
 /* Assemble preprocessed input text */
 int asm_assemble(AsmState *as, const char *input);
 
-/* Generate binary output */
-int asm_generate_binary(AsmState *as, const char *filename, const char *format);
+/* Generate binary output.
+ *
+ * binary_files / headless_binary_files (each: list of filename strings +
+ * count) are the zxbc --append-binary / --append-headless-binary lists,
+ * faithful to asmparse.generate_binary(... binary_files=...,
+ * headless_binary_files=...) (asmparse.py:1013-1044). Only the TAP/TZX
+ * branch consumes them (Python only appends aux blocks for tap/tzx;
+ * sna/z80/bin ignore them). Pass NULL/0 for none (zxbasm's own CLI does
+ * not wire these — its callers pass empty/zero, preserving behaviour). */
+int asm_generate_binary(AsmState *as, const char *filename, const char *format,
+                        char **binary_files, int binary_files_count,
+                        char **headless_binary_files,
+                        int headless_binary_files_count);
 
 /* Error/warning reporting (matches Python's errmsg format) */
 void asm_error(AsmState *as, int lineno, const char *fmt, ...) PRINTF_FMT(3, 4);

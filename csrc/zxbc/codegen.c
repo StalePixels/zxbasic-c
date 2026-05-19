@@ -789,7 +789,11 @@ int codegen_emit(CompilerState *cs, AstNode *ast) {
         if (zxbc_asm_to_binary(asm_text, cs->opts.output_filename,
                                cs->opts.output_file_type,
                                cs->opts.use_basic_loader,
-                               cs->opts.autorun) != 0)
+                               cs->opts.autorun,
+                               cs->opts.append_binary,
+                               cs->opts.append_binary_count,
+                               cs->opts.append_headless_binary,
+                               cs->opts.append_headless_binary_count) != 0)
             rc = 5;
     }
 
