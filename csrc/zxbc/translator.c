@@ -1576,6 +1576,27 @@ static AstNode *tr_visit_unary(Visitor *v, AstNode *node) {
     return node;
 }
 
+/* visit_CONSTEXPR (arch/z80/visitor/translator.py:130-131):
+ *     def visit_CONSTEXPR(self, node):
+ *         yield node.t
+ * i.e. emit NO runtime code — the consuming op (POKE/LET/array AT/...)
+ * reads node.t. SymbolCONSTEXPR.t (constexpr.py:43-45) ==
+ * "#" + Translator.traverse_const(self). Set node->t here so the parent
+ * visitor reads the static folded operand; crucially do NOT recurse the
+ * UNARY ADDRESS child (visitor_generic would, re-emitting the empty
+ * `ld hl,`). This is the fold that makes @label / DIM..AT @label match
+ * Python (no spurious runtime). */
+static AstNode *tr_visit_constexpr(Visitor *v, AstNode *node) {
+    Translator *tr = v->ctx;
+    const char *r = tr_traverse_const(tr, node);
+    size_t rl = strlen(r);
+    char *s = arena_alloc(&tr->cs->arena, rl + 2);
+    s[0] = '#';
+    memcpy(s + 1, r, rl + 1);
+    node->t = s;
+    return node;
+}
+
 /* visit_IF (translator.py:679-697). children[0]=cond, [1]=THEN block,
  * [2]=ELSE block (optional). The condition type selects the width/float
  * jzero emitter (the nef.bas float-compare-in-IF residual). */
@@ -2804,6 +2825,7 @@ static void tr_register_handlers(Visitor *v) {
     visitor_on_tag(v, AST_ASM, tr_visit_asm);
     /* visit_UNARY (translator.py:139-148). */
     visitor_on_tag(v, AST_UNARY, tr_visit_unary);
+    visitor_on_tag(v, AST_CONSTEXPR, tr_visit_constexpr);
     visitor_on_tag(v, AST_ARGLIST, tr_visit_arglist);
     visitor_on_tag(v, AST_ARGUMENT, tr_visit_argument);
     visitor_on_sentence(v, "CALL", tr_visit_call);
@@ -2961,13 +2983,18 @@ static long tr_bound_val(AstNode *n) {
     return 0;
 }
 
-/* Translator.traverse_const, NUMBER/CONST leaf (translator_visitor.py
- * :177-184) — the scalar-default CONSTEXPR case; corpus leaves are
- * NUMBER/CONST, same shape as var_translator.c's vt_traverse_const. */
+/* TranslatorVisitor.traverse_const (translator_visitor.py:177-245) —
+ * the FULL constant-expression stringifier, ported branch-for-branch.
+ * Previously a NUMBER/CONST-leaf stub; @label / @label+N (p_addr_of_id
+ * CONSTEXPR-wrapped, parser.c) need the UNARY-ADDRESS / LABEL / BINARY
+ * arms so the CONSTEXPR folds to the static label string instead of
+ * the empty-operand runtime `ld hl,`. Mirrors the proven
+ * var_translator.c vt_traverse_const_expr, plus Python's LABEL/FUNCTION
+ * + has_address-ID arms (:233-245). */
 static const char *tr_traverse_const(Translator *tr, AstNode *node) {
     if (!node) return "";
-    if (node->tag == AST_CONSTEXPR && node->child_count > 0)
-        return tr_traverse_const(tr, node->children[0]);
+
+    /* NUMBER -> node.t (str(value)); :179-180 */
     if (node->tag == AST_NUMBER) {
         if (node->t == NULL) {
             double value = node->u.number.value;
@@ -2980,8 +3007,119 @@ static const char *tr_traverse_const(Translator *tr, AstNode *node) {
         }
         return node->t ? node->t : "";
     }
-    if (node->tag == AST_ID) /* CONST entry */
-        return node->t ? node->t : "";
+
+    /* CONSTEXPR -> traverse_const(node.expr); :239-240 */
+    if (node->tag == AST_CONSTEXPR)
+        return node->child_count > 0
+                   ? tr_traverse_const(tr, node->children[0]) : "";
+
+    if (node->tag == AST_UNARY) {
+        const char *mid = node->u.unary.operator;
+        AstNode *operand = node->child_count > 0 ? node->children[0]
+                                                 : NULL;
+        /* MINUS -> " -" + traverse_const(operand); :186-187 */
+        if (mid && strcmp(mid, "MINUS") == 0) {
+            const char *r = tr_traverse_const(tr, operand);
+            size_t rl = strlen(r);
+            char *out = arena_alloc(&tr->cs->arena, rl + 3);
+            out[0] = ' '; out[1] = '-';
+            memcpy(out + 2, r, rl + 1);
+            return out;
+        }
+        /* ADDRESS -> traverse_const(operand) iff operand is global or a
+         * LABEL/FUNCTION (:188-193). The C @-operand is the shared
+         * symbol-table entry (CLASS_label once `<name>:` ran to_label,
+         * or a global scalar). */
+        if (mid && strcmp(mid, "ADDRESS") == 0)
+            return tr_traverse_const(tr, operand);
+        fprintf(stderr, "zxbc: traverse_const invalid unary op '%s'\n",
+                mid ? mid : "");
+        return "";
+    }
+
+    if (node->tag == AST_BINARY) {
+        const char *mid = NULL;
+        const char *op = node->u.binary.operator;
+        if (op) {
+            if      (strcmp(op, "PLUS")  == 0) mid = "+";
+            else if (strcmp(op, "MINUS") == 0) mid = "-";
+            else if (strcmp(op, "MUL")   == 0 ||
+                     strcmp(op, "MULT")  == 0) mid = "*";
+            else if (strcmp(op, "DIV")   == 0) mid = "/";
+            else if (strcmp(op, "MOD")   == 0) mid = "%";
+            else if (strcmp(op, "POW")   == 0) mid = "^";
+            else if (strcmp(op, "SHL")   == 0) mid = ">>";
+            else if (strcmp(op, "SHR")   == 0) mid = "<<";
+        }
+        if (mid == NULL) {
+            fprintf(stderr,
+                    "zxbc: traverse_const invalid binary op '%s'\n",
+                    op ? op : "");
+            return "";
+        }
+        AstNode *l = node->child_count > 0 ? node->children[0] : NULL;
+        AstNode *r = node->child_count > 1 ? node->children[1] : NULL;
+        const char *ls = tr_traverse_const(tr, l);
+        const char *rs = tr_traverse_const(tr, r);
+        size_t need = strlen(ls) + strlen(rs) + strlen(mid) + 8;
+        char *out = arena_alloc(&tr->cs->arena, need);
+        snprintf(out, need, "(%s) %s (%s)", ls, mid, rs);
+        return out;
+    }
+
+    if (node->tag == AST_TYPECAST) {
+        /* :222-232 width masks. Operand is children[0]. */
+        AstNode *operand = node->child_count > 0 ? node->children[0]
+                                                 : NULL;
+        const char *inner = tr_traverse_const(tr, operand);
+        const TypeInfo *ft = node->type_ && node->type_->final_type
+                                 ? node->type_->final_type : node->type_;
+        BasicType bt = ft ? ft->basic_type : TYPE_unknown;
+        char *out;
+        size_t il = strlen(inner);
+        if (bt == TYPE_byte || bt == TYPE_ubyte) {
+            out = arena_alloc(&tr->cs->arena, il + 12);
+            snprintf(out, il + 12, "(%s) & 0xFF", inner);
+        } else if (bt == TYPE_integer || bt == TYPE_uinteger) {
+            out = arena_alloc(&tr->cs->arena, il + 14);
+            snprintf(out, il + 14, "(%s) & 0xFFFF", inner);
+        } else if (bt == TYPE_long || bt == TYPE_ulong) {
+            out = arena_alloc(&tr->cs->arena, il + 18);
+            snprintf(out, il + 18, "(%s) & 0xFFFFFFFF", inner);
+        } else if (bt == TYPE_fixed) {
+            out = arena_alloc(&tr->cs->arena, il + 26);
+            snprintf(out, il + 26, "((%s) & 0xFFFF) << 16", inner);
+        } else {
+            return inner;
+        }
+        return out;
+    }
+
+    if (node->tag == AST_ID) {
+        /* :233-235 CONST/VAR/LABEL/FUNCTION -> node.t.  A CLASS_label
+         * entry's LabelRef.t == parent.mangled == ".LABEL._<name>"
+         * (labelref.py:20,34). The C symbol-table label entry carries
+         * the plain MANGLE_CHR mangled ("_<name>"); compute the
+         * LabelRef-mangled form exactly as visit_GOTO/LABEL do via
+         * tr_label_mangled. */
+        if (node->u.id.class_ == CLASS_label)
+            return tr_label_mangled(tr, node);
+        /* CONST id -> its ConstRef.t (the resolved value string). */
+        if (node->u.id.class_ == CLASS_const)
+            return node->t ? node->t
+                 : (node->u.id.mangled ? node->u.id.mangled : "");
+        if (node->t != NULL)
+            return node->t;
+        /* :243-244 ID/VARARRAY with has_address & global -> mangled. */
+        if (node->u.id.has_address &&
+            node->u.id.scope == SCOPE_global &&
+            node->u.id.mangled)
+            return node->u.id.mangled;
+        if (node->u.id.mangled)
+            return node->u.id.mangled;
+        return node->u.id.name ? node->u.id.name : "";
+    }
+
     return node->t ? node->t : "";
 }
 

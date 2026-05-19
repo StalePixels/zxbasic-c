@@ -230,6 +230,21 @@ struct AstNode {
              * this. NULL until parse_sub_or_func_decl populates it. */
             struct AstNode **local_entries;
             int local_entries_count;
+
+            /* p_addr_of_id (zxbparser.py:2682): `@id` sets
+             * entry.has_address = True. Used by traverse_const's final
+             * ID/VARARRAY branch (translator_visitor.py:244-245). */
+            bool has_address;
+            /* LabelRef.scope_owner (labelref.py:22,38-45): the list of
+             * nested functions textually containing this label, captured
+             * at access_label time as list(gl.FUNCTION_LEVEL)
+             * (symboltable.py:622-623). When the label entry is marked
+             * accessed, every scope_owner function entry is marked
+             * accessed too (labelref.py:51-55) — this is what keeps a
+             * SUB/FUNCTION whose only "use" is a `@label` from being
+             * O>1-pruned. NULL/0 until a label def/access captures it. */
+            struct AstNode **scope_owner;
+            int scope_owner_count;
         } id;
 
         /* AST_BUILTIN */
@@ -470,6 +485,9 @@ bool check_is_number(const AstNode *node);    /* NUMBER or CONST with numeric ty
 bool check_is_const(const AstNode *node);     /* CONST (declared constant) */
 bool check_is_CONST(const AstNode *node);     /* CONSTEXPR (compile-time expression) */
 bool check_is_static(const AstNode *node);    /* CONSTEXPR, NUMBER, or CONST */
+bool check_is_dynamic(const AstNode *entry);  /* check.is_dynamic single-entry */
+void mark_label_accessed(AstNode *label);     /* LabelRef.accessed cascade */
+void label_capture_scope_owner(CompilerState *cs, AstNode *label); /* access_label */
 bool check_is_numeric(const AstNode *a, const AstNode *b); /* both have numeric type */
 bool check_is_string_node(const AstNode *a, const AstNode *b); /* both are STRING constants */
 bool check_is_null(const AstNode *node);      /* NULL, NOP, or empty BLOCK */
@@ -485,6 +503,10 @@ AstNode *make_unary_node(CompilerState *cs, const char *operator, AstNode *opera
                          int lineno);
 
 /* Symbol table access methods — matching Python's symboltable.access_*() */
+AstNode *symboltable_access_id_noexplicit(SymbolTable *st, CompilerState *cs,
+                                          const char *name, int lineno,
+                                          TypeInfo *default_type,
+                                          SymbolClass default_class);
 AstNode *symboltable_access_id(SymbolTable *st, CompilerState *cs,
                                 const char *name, int lineno,
                                 TypeInfo *default_type, SymbolClass default_class);

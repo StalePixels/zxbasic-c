@@ -614,22 +614,67 @@ AstNode *parse_primary(Parser *p) {
         advance(p);
         const char *name = p->previous.sval;
 
-        AstNode *n = ast_new(p->cs, AST_UNARY, lineno);
-        n->u.unary.operator = arena_strdup(&p->cs->arena, "ADDRESS");
-
-        /* Check for array/call access: @name(...) */
-        AstNode *operand;
+        /* Check for array/call access: @name(...) — a DIFFERENT Python
+         * production (`bexpr : ADDRESSOF ID arg_list`, p_addr_of_array_id)
+         * handled by parse_call_or_array; keep the bare UNARY ADDRESS. */
         if (check(p, BTOK_LP)) {
-            /* ADDRESSOF @name(...) — Python's ADDRESSOF ID arg_list
-             * production; addressof_ctx=true selects the
-             * "Undeclared array" diagnostic for an undeclared <name>. */
-            operand = parse_call_or_array(p, name, lineno, true, true);
-        } else {
-            operand = ast_new(p->cs, AST_ID, lineno);
-            operand->u.id.name = arena_strdup(&p->cs->arena, name);
+            AstNode *n = ast_new(p->cs, AST_UNARY, lineno);
+            n->u.unary.operator = arena_strdup(&p->cs->arena, "ADDRESS");
+            /* addressof_ctx=true selects the "Undeclared array"
+             * diagnostic for an undeclared <name>. */
+            AstNode *operand = parse_call_or_array(p, name, lineno,
+                                                   true, true);
+            ast_add_child(p->cs, n, operand);
+            n->type_ = p->cs->symbol_table->basic_types[TYPE_uinteger];
+            return n;
         }
-        ast_add_child(p->cs, n, operand);
-        n->type_ = p->cs->symbol_table->basic_types[TYPE_uinteger];
+
+        /* p_addr_of_id (zxbparser.py:2667-2685, `bexpr : ADDRESSOF
+         * singleid`):
+         *   entry = access_id(name, lineno, ignore_explicit_flag=True)
+         *           # default_class == CLASS.unknown
+         *   entry.has_address = True
+         *   mark_entry_as_accessed(entry)
+         *   result = make_unary("ADDRESS", entry, type_=PTR_TYPE)
+         *   p[0] = result if is_dynamic(entry) else make_constexpr(result)
+         *
+         * access_id shares the symbol-table entry by name, so a later
+         * `<name>:` label definition (symboltable_access_label) converts
+         * this same CLASS_unknown entry to a label (to_label,
+         * _id.py:143) — the UNARY operand IS that shared entry, so its
+         * mangled/.t resolve like the LabelRef at translate time. */
+        AstNode *entry = symboltable_access_id_noexplicit(
+                             p->cs->symbol_table, p->cs, name, lineno,
+                             NULL, CLASS_unknown);
+        if (entry == NULL)
+            return NULL;
+
+        entry->u.id.has_address = true;          /* :2682 */
+        /* mark_entry_as_accessed (zxbparser.py:167-174): in global scope
+         * (or non-FUNCTION token) -> entry.accessed = True. For a label
+         * the LabelRef.accessed setter cascades to scope_owner; model
+         * that via mark_label_accessed. (A label may not yet be class_
+         * == CLASS_label here — the later `<name>:` def's
+         * label_capture_scope_owner re-fires the cascade.) */
+        if (!(p->cs->function_level.len > 0 &&
+              entry->u.id.class_ == CLASS_function))
+            mark_label_accessed(entry);          /* :171 (+ cascade) */
+
+        AstNode *n = make_unary_node(p->cs, "ADDRESS", entry, lineno);
+        if (n)
+            n->type_ = p->cs->symbol_table->basic_types[TYPE_uinteger];
+
+        /* p[0] = result if is_dynamic(entry) else make_constexpr(result).
+         * A global scalar of a basic non-string type (a LABEL's ref
+         * type_ is PTR_TYPE==uinteger, scope global) is NOT dynamic ->
+         * CONSTEXPR-wrap so it folds to the static label at translate
+         * time (no runtime ld/push). */
+        if (n && !check_is_dynamic(entry)) {
+            AstNode *ce = ast_new(p->cs, AST_CONSTEXPR, lineno);
+            ast_add_child(p->cs, ce, n);
+            ce->type_ = n->type_;
+            return ce;
+        }
         return n;
     }
 
@@ -1224,6 +1269,17 @@ static AstNode *parse_statement(Parser *p) {
             }
             label_node->u.id.declared = true;
         }
+        /* symboltable.access_label scope_owner capture
+         * (symboltable.py:621-623): if gl.FUNCTION_LEVEL,
+         * entry.ref.scope_owner = list(gl.FUNCTION_LEVEL). The
+         * LabelRef.scope_owner setter (labelref.py:42-45) refreshes
+         * `accessed` — so a label DEFINED inside a SUB whose address was
+         * already taken (`@label` earlier -> entry.accessed) now
+         * cascades accessed onto the enclosing SUB(s), keeping them from
+         * O>1 prune.  Order-independent: if `@label` comes AFTER the
+         * def, mark_label_accessed there walks this same scope_owner. */
+        if (label_node)
+            label_capture_scope_owner(p->cs, label_node);
         /* S5.8d — make_label's DATA_LABELS write (zxbparser.py:457):
          * EVERY declared label records data_labels[id]=data_ptr_current
          * ("This label points to the current DATA block index"); how
@@ -3479,6 +3535,18 @@ static AstNode *parse_dim_statement(Parser *p) {
             dim_name = dim_stripped;
         }
         AstNode *id_node = symboltable_declare(p->cs->symbol_table, p->cs, dim_name, lineno, CLASS_array);
+        /* declare_array reconciliation (symboltable.py:677-... -> to_vararray,
+         * _id.py:165): a pre-existing CLASS_unknown entry — e.g. one
+         * implicitly created by a forward `@a` (p_addr_of_id's access_id,
+         * default_class=CLASS.unknown) appearing in this DIM's own
+         * initializer `{@a, ...}` — is converted to the array here.
+         * symboltable_declare returns the shared entry as-is; without
+         * this it stays CLASS_unknown and a later `a(i)` access fails
+         * with "neither an array nor a function". (Previously the
+         * @-operand was a detached node so no entry pre-existed; the
+         * faithful shared-entry @-path now requires this Python step.) */
+        if (id_node->u.id.class_ == CLASS_unknown)
+            id_node->u.id.class_ = CLASS_array;
         id_node->type_ = type;
         /* Port C support — the declared bound list is the faithful
          * analogue of Python entry.bounds (symboltable.declare_array),

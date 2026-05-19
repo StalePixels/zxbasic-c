@@ -470,6 +470,59 @@ bool check_is_static(const AstNode *node) {
     return check_is_CONST(node) || check_is_number(node) || check_is_const(node);
 }
 
+/* check.is_dynamic (api/check.py:370-378), single-entry form:
+ *   not (i.scope == SCOPE.global_ and i.is_basic and i.type_ != string)
+ * i.scope/i.is_basic/i.type_ are the symbol-table ENTRY's attributes
+ * (id_/ref VarRef/LabelRef etc.).  A global scalar of a basic non-string
+ * type (incl. a LABEL, whose ref type_ is PTR_TYPE==uinteger and scope
+ * is global) is NOT dynamic -> p_addr_of_id CONSTEXPR-wraps it.  A
+ * dynamic entry (string, array, local/param) stays a bare UNARY. */
+bool check_is_dynamic(const AstNode *entry) {
+    if (!entry || entry->tag != AST_ID)
+        return true;
+    bool nondyn = (entry->u.id.scope == SCOPE_global) &&
+                  type_is_basic(entry->type_) &&
+                  !type_is_string(entry->type_);
+    return !nondyn;
+}
+
+/* LabelRef.accessed setter cascade (labelref.py:48-55) + the
+ * scope_owner.setter "refresh" (labelref.py:42-45): mark the label
+ * entry accessed and propagate to every captured scope_owner function
+ * entry (so a SUB/FUNCTION whose only use is `@label` is not
+ * O>1-pruned). Idempotent. */
+void mark_label_accessed(AstNode *label) {
+    if (!label || label->tag != AST_ID)
+        return;
+    label->u.id.accessed = true;
+    for (int i = 0; i < label->u.id.scope_owner_count; i++) {
+        AstNode *fn = label->u.id.scope_owner[i];
+        if (fn)
+            fn->u.id.accessed = true;
+    }
+}
+
+/* symboltable.access_label scope_owner capture (symboltable.py:621-623):
+ *   if gl.FUNCTION_LEVEL: entry.ref.scope_owner = list(gl.FUNCTION_LEVEL)
+ * Snapshot the current function_level stack onto the label entry; the
+ * setter refreshes accessed if the label was already accessed
+ * (labelref.py:45 -> :48-55). Called at every label def/access site. */
+void label_capture_scope_owner(CompilerState *cs, AstNode *label) {
+    if (!label || label->tag != AST_ID)
+        return;
+    int n = (int)cs->function_level.len;
+    if (n <= 0)
+        return;
+    AstNode **so = arena_alloc(&cs->arena, (size_t)n * sizeof(AstNode *));
+    for (int i = 0; i < n; i++)
+        so[i] = cs->function_level.data[i];
+    label->u.id.scope_owner = so;
+    label->u.id.scope_owner_count = n;
+    /* labelref.py:45 — scope_owner.setter re-fires accessed. */
+    if (label->u.id.accessed)
+        mark_label_accessed(label);
+}
+
 bool check_is_numeric(const AstNode *a, const AstNode *b) {
     /* Python: is_numeric(a, b) — both have numeric type */
     if (!a || !b) return false;
@@ -947,6 +1000,25 @@ AstNode *symboltable_access_id(SymbolTable *st, CompilerState *cs,
     return result;
 }
 
+/* access_id(..., ignore_explicit_flag=True) variant — p_addr_of_id
+ * (zxbparser.py:2670) accesses the @-operand with the explicit-flag
+ * check suppressed (the `@` operator ignores #pragma explicit). Python
+ * threads ignore_explicit_flag through access_id; the C explicit gate
+ * keys off cs->opts.explicit_, so mask it for this single call only and
+ * restore it (faithful net effect: the check_is_declared_explicit call
+ * at symboltable.py:345 is skipped). */
+AstNode *symboltable_access_id_noexplicit(SymbolTable *st, CompilerState *cs,
+                                          const char *name, int lineno,
+                                          TypeInfo *default_type,
+                                          SymbolClass default_class) {
+    bool saved = cs->opts.explicit_;
+    cs->opts.explicit_ = false;
+    AstNode *r = symboltable_access_id(st, cs, name, lineno,
+                                       default_type, default_class);
+    cs->opts.explicit_ = saved;
+    return r;
+}
+
 AstNode *symboltable_access_var(SymbolTable *st, CompilerState *cs,
                                  const char *name, int lineno, TypeInfo *default_type) {
     AstNode *result = symboltable_access_id(st, cs, name, lineno, default_type, CLASS_var);
@@ -1087,6 +1159,47 @@ AstNode *symboltable_access_label(SymbolTable *st, CompilerState *cs,
 
     if (result->u.id.class_ == CLASS_unknown)
         result->u.id.class_ = CLASS_label;
+
+    /* access_label -> move_to_global_scope (symboltable.py:289-305, called
+     * unconditionally at :625). An existing entry implicitly created in a
+     * FUNCTION's local scope by a forward `@label` (p_addr_of_id's
+     * access_id, default_class=CLASS.unknown) must be relocated to the
+     * global scope here — labels are always global. Without this the
+     * entry stays in the (now-popped) function scope and post-parse
+     * check_pending_labels' global symboltable_lookup cannot resolve it
+     * ("Undeclared label"). Mirror: scope=global_, re-key into the
+     * global scope hashmap, drop from the owning local scope. (A label's
+     * mangled is left as-is — Python skips the make_child_namespace
+     * rename for CLASS.label; the LabelRef-mangled `.LABEL._name` is
+     * computed at translate time by tr_label_mangled.) */
+    if (result->u.id.scope != SCOPE_global) {
+        for (Scope_ *s = st->current_scope; s && s != st->global_scope;
+             s = s->parent) {
+            if (hashmap_get(&s->symbols, name) == result) {
+                hashmap_remove(&s->symbols, name);
+                break;
+            }
+        }
+        result->u.id.scope = SCOPE_global;
+        if (hashmap_get(&st->global_scope->symbols, name) == NULL) {
+            hashmap_set(&st->global_scope->symbols, name, result);
+            if (st->global_scope->ordered_count >=
+                st->global_scope->ordered_cap) {
+                int nc = st->global_scope->ordered_cap
+                             ? st->global_scope->ordered_cap * 2 : 16;
+                AstNode **no = arena_alloc(&cs->arena,
+                                           (size_t)nc * sizeof(AstNode *));
+                if (st->global_scope->ordered_count > 0)
+                    memcpy(no, st->global_scope->ordered,
+                           (size_t)st->global_scope->ordered_count *
+                               sizeof(AstNode *));
+                st->global_scope->ordered = no;
+                st->global_scope->ordered_cap = nc;
+            }
+            st->global_scope->ordered[
+                st->global_scope->ordered_count++] = result;
+        }
+    }
 
     return result;
 }
