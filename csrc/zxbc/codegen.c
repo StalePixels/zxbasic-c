@@ -711,15 +711,9 @@ int codegen_emit(CompilerState *cs, AstNode *ast) {
 
     /* output(asm_output, ...) then optional assemble  (zxbc.py:212-228) */
     int rc = 0;
-    if (strcmp(cs->opts.output_file_type, "bin") == 0) {
-        /* zxbc.py:215-228: render asm_output to text, assemble it, then
-         * generate_binary; gl.has_errors -> return 5. */
-        const char *asm_text = emit_output_str(final, a);
-        if (zxbc_asm_to_bin(asm_text, cs->opts.output_filename) != 0)
-            rc = 5;
-    } else {
-        /* "asm" (zxbc.py:212-214) and all not-yet-ported formats
-         * (tap/tzx/sna/z80, S6.3-S6.6): unchanged write-asm-to-file. */
+    if (strcmp(cs->opts.output_file_type, "asm") == 0) {
+        /* zxbc.py:212-214: output_file_type == FileType.ASM -> write the
+         * rendered asm text straight to the output file. */
         FILE *of = fopen(cs->opts.output_filename, "wb");
         if (!of) {
             zxbc_error(cs, 0, "cannot open output file '%s'",
@@ -729,6 +723,18 @@ int codegen_emit(CompilerState *cs, AstNode *ast) {
             emit_output(of, final, a);
             fclose(of);
         }
+    } else {
+        /* zxbc.py:215-228 (every other output_file_type — bin/tap/tzx/
+         * sna/z80): render asm_output to text, assemble it, then
+         * generate_binary with the requested format passed through
+         * verbatim; gl.has_errors -> return 5. codegen_emit is only
+         * reached when not parse_only (main.c:143-148 short-circuits
+         * parse_only before calling here), mirroring Python's
+         * `elif not options.parse_only`. */
+        const char *asm_text = emit_output_str(final, a);
+        if (zxbc_asm_to_binary(asm_text, cs->opts.output_filename,
+                               cs->opts.output_file_type) != 0)
+            rc = 5;
     }
 
     vec_free(prologue); vec_free(epilogue); vec_free(asm_lines);

@@ -6,16 +6,22 @@
  * codegen.c never has to include zxbasm.h. Only asm_bridge.c pulls in
  * the assembler types.
  *
- * Faithful to zxbc.py:215-228 (the `.bin` output path): assemble the
- * rendered asm text, then generate the binary file.
+ * Faithful to zxbc.py:215-228 (every non-asm output path): assemble the
+ * rendered asm text, then generate the output file in the requested
+ * container format.
  */
 #ifndef ZXBC_ASM_BRIDGE_H
 #define ZXBC_ASM_BRIDGE_H
 
-/* Assemble `asm_text` and write the binary to `out_filename`.
- * Returns 0 on success, nonzero if the assembler or binary dump
- * reported any error (caller maps nonzero -> zxbc rc 5, matching
- * Python's `if gl.has_errors: return 5`). */
-int zxbc_asm_to_bin(const char *asm_text, const char *out_filename);
+/* Assemble `asm_text` and write the output to `out_filename` in the
+ * container format `format` (bin/tap/tzx/sna/z80), mirroring Python's
+ *   asmparse.generate_binary(OPTIONS.output_filename,
+ *                            OPTIONS.output_file_type, ...)
+ * (the format is passed through, never hardcoded). Returns 0 on
+ * success, nonzero if the assembler or binary dump reported any error
+ * (caller maps nonzero -> zxbc rc 5, matching Python's
+ * `if gl.has_errors: return 5`). */
+int zxbc_asm_to_binary(const char *asm_text, const char *out_filename,
+                       const char *format);
 
 #endif /* ZXBC_ASM_BRIDGE_H */
