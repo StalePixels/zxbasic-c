@@ -811,6 +811,19 @@ static AstNode *parse_call_or_array(Parser *p, const char *name, int lineno, boo
             id_node->u.id.name = arena_strdup(&p->cs->arena, name);
             id_node->type_ = p->cs->symbol_table->basic_types[TYPE_string];
         }
+        /* p_expr_id_substr (zxbparser.py:2567-2579): the non-CONST
+         * `string : ID substr` READ production does access_var +
+         * mark_entry_as_accessed(entry); the CONST-string fast path
+         * (entry.token=="CONST") does NOT mark. The substring-LVALUE
+         * target (`a$(i TO j) = x`) is a DIFFERENT Python production
+         * (p_let_substr) that does NOT go through p_expr_id_substr and
+         * does NOT mark accessed — so gate on expr_context exactly like
+         * the CLASS_array branch below (expr_context is false only on
+         * the LET lvalue target path). Without this `a$ = a$(x TO)`
+         * leaves a$ unaccessed and O>1 DCE drops the program. */
+        if (expr_context && id_node->tag == AST_ID &&
+            id_node->u.id.class_ != CLASS_const)
+            id_node->u.id.accessed = true;
         ast_add_child(p->cs, n, id_node);
         for (int i = 0; i < arglist->child_count; i++)
             ast_add_child(p->cs, n, arglist->children[i]);
