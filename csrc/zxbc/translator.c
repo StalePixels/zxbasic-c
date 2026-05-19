@@ -1417,6 +1417,95 @@ static AstNode *tr_visit_beep(Visitor *v, AstNode *node) {
     return node;
 }
 
+/* ====================================================================
+ * Drawing primitives — faithful ports of
+ * src/arch/z80/visitor/translator.py:
+ *   visit_PLOT  :754-762   visit_DRAW  :765-773
+ *   visit_DRAW3 :776-787   visit_CIRCLE :789-800
+ *
+ * Common pattern (N = #positional children: PLOT/DRAW=2, DRAW3/CIRCLE=3):
+ *   self.norm_attr()                       # runtime_call(COPY_ATTR,0)
+ *   TMP_HAS_ATTR = self.check_attr(node,N) # children[N] iff len>N else None
+ *   yield TMP_HAS_ATTR                     # visit attr_list block (NULL-safe)
+ *   yield children[0]; ic_param (c0.type_, c0.t)
+ *   ...
+ *   yield children[N-1]; ic_fparam(cLast.type_, cLast.t)
+ *   self.runtime_call(PLOT|DRAW|DRAW3|CIRCLE, 0)
+ *   self.HAS_ATTR = TMP_HAS_ATTR is not None   # write-only in Python;
+ *                                              # no output effect -> omit
+ * norm_attr  == translator_visitor.py:172 (runtime_call COPY_ATTR,0).
+ * check_attr == translator_visitor.py:251 (children[n] iff child_count>n).
+ * ic_param / ic_fparam use the CHILD's OWN type_ — the parser already
+ * make_typecast'd each positional (PLOT->ubyte, DRAW->integer/float,
+ * CIRCLE->byte_). The attr_list child (when present) is the LAST child;
+ * visiting it routes BLOCK->each "<NAME>_TMP" or the lone "<NAME>_TMP"
+ * SENTENCE to tr_visit_attr_tmp, emitting the same attr IC as Python. */
+static AstNode *tr_visit_plot(Visitor *v, AstNode *node) {
+    Translator *tr = v->ctx;
+    tr_runtime_call(tr, ".core.COPY_ATTR", 0);          /* norm_attr() */
+    AstNode *attr = node->child_count > 2 ? node->children[2] : NULL;
+    visitor_visit(v, attr);                             /* yield TMP_HAS_ATTR */
+    AstNode *c0 = node->child_count > 0 ? node->children[0] : NULL;
+    AstNode *c1 = node->child_count > 1 ? node->children[1] : NULL;
+    if (c0) visitor_visit(v, c0);
+    tr_ic_param(tr, c0 ? c0->type_ : NULL, (c0 && c0->t) ? c0->t : "0");
+    if (c1) visitor_visit(v, c1);
+    tr_ic_fparam(tr, c1 ? c1->type_ : NULL, (c1 && c1->t) ? c1->t : "0");
+    tr_runtime_call(tr, ".core.PLOT", 0);
+    return node;
+}
+
+static AstNode *tr_visit_draw(Visitor *v, AstNode *node) {
+    Translator *tr = v->ctx;
+    tr_runtime_call(tr, ".core.COPY_ATTR", 0);          /* norm_attr() */
+    AstNode *attr = node->child_count > 2 ? node->children[2] : NULL;
+    visitor_visit(v, attr);                             /* yield TMP_HAS_ATTR */
+    AstNode *c0 = node->child_count > 0 ? node->children[0] : NULL;
+    AstNode *c1 = node->child_count > 1 ? node->children[1] : NULL;
+    if (c0) visitor_visit(v, c0);
+    tr_ic_param(tr, c0 ? c0->type_ : NULL, (c0 && c0->t) ? c0->t : "0");
+    if (c1) visitor_visit(v, c1);
+    tr_ic_fparam(tr, c1 ? c1->type_ : NULL, (c1 && c1->t) ? c1->t : "0");
+    tr_runtime_call(tr, ".core.DRAW", 0);
+    return node;
+}
+
+static AstNode *tr_visit_draw3(Visitor *v, AstNode *node) {
+    Translator *tr = v->ctx;
+    tr_runtime_call(tr, ".core.COPY_ATTR", 0);          /* norm_attr() */
+    AstNode *attr = node->child_count > 3 ? node->children[3] : NULL;
+    visitor_visit(v, attr);                             /* yield TMP_HAS_ATTR */
+    AstNode *c0 = node->child_count > 0 ? node->children[0] : NULL;
+    AstNode *c1 = node->child_count > 1 ? node->children[1] : NULL;
+    AstNode *c2 = node->child_count > 2 ? node->children[2] : NULL;
+    if (c0) visitor_visit(v, c0);
+    tr_ic_param(tr, c0 ? c0->type_ : NULL, (c0 && c0->t) ? c0->t : "0");
+    if (c1) visitor_visit(v, c1);
+    tr_ic_param(tr, c1 ? c1->type_ : NULL, (c1 && c1->t) ? c1->t : "0");
+    if (c2) visitor_visit(v, c2);
+    tr_ic_fparam(tr, c2 ? c2->type_ : NULL, (c2 && c2->t) ? c2->t : "0");
+    tr_runtime_call(tr, ".core.DRAW3", 0);
+    return node;
+}
+
+static AstNode *tr_visit_circle(Visitor *v, AstNode *node) {
+    Translator *tr = v->ctx;
+    tr_runtime_call(tr, ".core.COPY_ATTR", 0);          /* norm_attr() */
+    AstNode *attr = node->child_count > 3 ? node->children[3] : NULL;
+    visitor_visit(v, attr);                             /* yield TMP_HAS_ATTR */
+    AstNode *c0 = node->child_count > 0 ? node->children[0] : NULL;
+    AstNode *c1 = node->child_count > 1 ? node->children[1] : NULL;
+    AstNode *c2 = node->child_count > 2 ? node->children[2] : NULL;
+    if (c0) visitor_visit(v, c0);
+    tr_ic_param(tr, c0 ? c0->type_ : NULL, (c0 && c0->t) ? c0->t : "0");
+    if (c1) visitor_visit(v, c1);
+    tr_ic_param(tr, c1 ? c1->type_ : NULL, (c1 && c1->t) ? c1->t : "0");
+    if (c2) visitor_visit(v, c2);
+    tr_ic_fparam(tr, c2 ? c2->type_ : NULL, (c2 && c2->t) ? c2->t : "0");
+    tr_runtime_call(tr, ".core.CIRCLE", 0);
+    return node;
+}
+
 /* visit_ASM (translator.py:963-967):
  *   ic_inline(f'#line {node.lineno} "{node.filename}"')
  *   ic_inline(node.asm)
@@ -3500,6 +3589,11 @@ static void tr_register_handlers(Visitor *v) {
     visitor_on_sentence(v, "ITALIC", tr_visit_attr_sentence);
     /* visit_BEEP (translator.py:891-902). */
     visitor_on_sentence(v, "BEEP", tr_visit_beep);
+    /* Drawing primitives (translator.py:754-800). */
+    visitor_on_sentence(v, "PLOT", tr_visit_plot);
+    visitor_on_sentence(v, "DRAW", tr_visit_draw);
+    visitor_on_sentence(v, "DRAW3", tr_visit_draw3);
+    visitor_on_sentence(v, "CIRCLE", tr_visit_circle);
     /* visit_OUT (translator.py:808-811). */
     visitor_on_sentence(v, "OUT", tr_visit_out);
     /* visit_LOAD/visit_SAVE/visit_VERIFY (translator.py:862-880).

@@ -447,6 +447,13 @@ static int s_log2(long x) { int n = 0; while (x > 1) { x >>= 1; n++; } return n;
  * double-underscore; PAUSE does (misc.py:14 -> .core.__PAUSE). */
 #define RL_CLS         ZXBC_NAMESPACE ".CLS"
 #define RL_BORDER      ZXBC_NAMESPACE ".BORDER"
+
+/* Drawing-primitive RuntimeLabels, VERBATIM from io.py:37-40. NAMESPACE
+ * == .core; NO double-underscore mangle (same convention as CLS/BORDER). */
+#define RL_CIRCLE      ZXBC_NAMESPACE ".CIRCLE"
+#define RL_DRAW        ZXBC_NAMESPACE ".DRAW"
+#define RL_DRAW3       ZXBC_NAMESPACE ".DRAW3"
+#define RL_PLOT        ZXBC_NAMESPACE ".PLOT"
 /* SAVE/LOAD/VERIFY RuntimeLabels (io.py:62-63). NAMESPACE == .core; NO
  * double-underscore mangle (same convention as CLS/BORDER). */
 #define RL_LOAD_CODE   ZXBC_NAMESPACE ".LOAD_CODE"
@@ -670,6 +677,11 @@ static const char *s_required_module(const char *label) {
     /* Simple statements (io.py:71,89 / misc.py:23 / random.py:16). */
     if (strcmp(label, RL_CLS)        == 0) return "cls.asm";
     if (strcmp(label, RL_BORDER)     == 0) return "border.asm";
+    /* Drawing primitives (io.py:90-93 REQUIRED_MODULES, verbatim). */
+    if (strcmp(label, RL_CIRCLE)     == 0) return "circle.asm";
+    if (strcmp(label, RL_DRAW)       == 0) return "draw.asm";
+    if (strcmp(label, RL_DRAW3)      == 0) return "draw3.asm";
+    if (strcmp(label, RL_PLOT)       == 0) return "plot.asm";
     /* SAVE/LOAD/VERIFY (io.py:95-96 REQUIRED_MODULES). */
     if (strcmp(label, RL_LOAD_CODE)  == 0) return "load.asm";
     if (strcmp(label, RL_SAVE_CODE)  == 0) return "save.asm";

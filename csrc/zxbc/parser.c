@@ -1259,10 +1259,31 @@ static AstNode *parse_dim_statement(Parser *p);
 static AstNode *parse_print_statement(Parser *p);
 static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function, bool is_declare);
 
-/* Graphics attributes for PLOT/DRAW/CIRCLE: INK/PAPER/BRIGHT/FLASH/OVER/INVERSE expr ;
- * Python grammar: attr_list : attr SC | attr_list attr SC
- * Note: BOLD/ITALIC are NOT valid here (only in PRINT). */
-static void parse_gfx_attributes(Parser *p, AstNode *parent) {
+/* Graphics attributes for PLOT/DRAW/CIRCLE — faithful port of
+ * zxbparser.py p_attr_list / p_attr (:2006-2027):
+ *
+ *   attr      : (OVER|INVERSE|INK|PAPER|BRIGHT|FLASH) expr
+ *               -> make_sentence(ln, p[1]+"_TMP",
+ *                                 make_typecast(TYPE.ubyte, p[2], ln))
+ *   attr_list : attr SC                 -> p[0] = p[1]   (the lone attr)
+ *             | attr_list attr SC       -> p[0] = make_block(p[1], p[2])
+ *
+ * make_block == SymbolBLOCK.make_node (block.py:20-23): builds a BLOCK and
+ * append()s; append() FLATTENS nested BLOCKs (block.py:43-51). So the
+ * attr_list node is:
+ *   - 1 attr  -> the single "<NAME>_TMP" SENTENCE node itself
+ *   - N>=2    -> a flat BLOCK whose children are the N "<NAME>_TMP"
+ *               SENTENCEs in source order
+ * Returned as the SINGLE last child of PLOT/DRAW/DRAW3/CIRCLE so the
+ * translator's `yield TMP_HAS_ATTR` visits it (BLOCK->each child, or the
+ * lone SENTENCE) -> tr_visit_attr_tmp emits the same attr IC as Python.
+ * BOLD/ITALIC are NOT in p_attr (only in PRINT) so they are not matched
+ * here — `DRAW BOLD 1;...` correctly fails as a syntax error.
+ *
+ * Returns NULL when no attr is present (Python: production simply absent;
+ * make_sentence then has no attr child -> check_attr returns None). */
+static AstNode *parse_gfx_attributes(Parser *p) {
+    AstNode *attr_list = NULL;   /* p[0] of attr_list */
     for (;;) {
         const char *attr_name = NULL;
         if (match(p, BTOK_INK))          attr_name = "INK_TMP";
@@ -1272,12 +1293,31 @@ static void parse_gfx_attributes(Parser *p, AstNode *parent) {
         else if (match(p, BTOK_OVER))    attr_name = "OVER_TMP";
         else if (match(p, BTOK_INVERSE)) attr_name = "INVERSE_TMP";
         if (!attr_name) break;
+        int attr_ln = p->previous.lineno;
         AstNode *val = parse_expression(p, PREC_NONE + 1);
-        AstNode *attr_sent = make_sentence_node(p, attr_name, p->previous.lineno);
+        /* p_attr: make_typecast(TYPE.ubyte, p[2], ln) */
+        val = make_typecast(p->cs,
+                            p->cs->symbol_table->basic_types[TYPE_ubyte],
+                            val, attr_ln);
+        AstNode *attr_sent = make_sentence_node(p, attr_name, attr_ln);
         if (val) ast_add_child(p->cs, attr_sent, val);
-        ast_add_child(p->cs, parent, attr_sent);
         consume(p, BTOK_SC, "Expected ';' after graphics attribute");
+
+        if (attr_list == NULL) {
+            /* attr_list : attr SC  ->  p[0] = p[1] */
+            attr_list = attr_sent;
+        } else {
+            /* attr_list : attr_list attr SC  ->  make_block(p[1], p[2]),
+             * flattening a pre-existing BLOCK (block.py append). */
+            if (attr_list->tag != AST_BLOCK) {
+                AstNode *b = make_block_node(p, attr_list->lineno);
+                ast_add_child(p->cs, b, attr_list);
+                attr_list = b;
+            }
+            ast_add_child(p->cs, attr_list, attr_sent);
+        }
     }
+    return attr_list;
 }
 
 /* Parse a single statement */
@@ -1745,50 +1785,89 @@ static AstNode *parse_statement(Parser *p) {
         return s;
     }
 
-    /* PLOT [attributes;] x, y */
+    /* PLOT [attr_list] expr COMMA expr
+     * zxbparser.py p_statement_plot / p_statement_plot_attr (:949-967):
+     *   make_sentence(ln,"PLOT", make_typecast(ubyte,x,ln),
+     *                            make_typecast(ubyte,y,ln) [, attr_list])
+     * Child order: x, y, then attr_list LAST (single node). */
     if (match(p, BTOK_PLOT)) {
         int ln = p->previous.lineno;
         AstNode *s = make_sentence_node(p, "PLOT", ln);
-        parse_gfx_attributes(p, s);
+        TypeInfo *ubyte = p->cs->symbol_table->basic_types[TYPE_ubyte];
+        AstNode *attr_list = parse_gfx_attributes(p);
         AstNode *x = parse_expression(p, PREC_NONE + 1);
         consume(p, BTOK_COMMA, "Expected ',' after PLOT x");
         AstNode *y = parse_expression(p, PREC_NONE + 1);
+        x = make_typecast(p->cs, ubyte, x, ln);
+        y = make_typecast(p->cs, ubyte, y, ln);
         if (x) ast_add_child(p->cs, s, x);
         if (y) ast_add_child(p->cs, s, y);
+        if (attr_list) ast_add_child(p->cs, s, attr_list);
         return s;
     }
 
-    /* DRAW [attributes;] x, y [, z] */
+    /* DRAW [attr_list] expr COMMA expr [COMMA expr]
+     * zxbparser.py p_statement_draw / _draw_attr / _draw3 / _draw3_attr
+     * (:970-1012):
+     *   DRAW  -> make_sentence(ln,"DRAW", make_typecast(integer,x,ln),
+     *                                     make_typecast(integer,y,ln)
+     *                                     [, attr_list])
+     *   DRAW3 -> make_sentence(ln,"DRAW3", make_typecast(integer,x,ln),
+     *                                      make_typecast(integer,y,ln),
+     *                                      make_typecast(float_,z,ln)
+     *                                      [, attr_list])
+     * (a 3rd expr promotes DRAW -> DRAW3). attr_list is LAST. */
     if (match(p, BTOK_DRAW)) {
         int ln = p->previous.lineno;
         AstNode *s = make_sentence_node(p, "DRAW", ln);
-        parse_gfx_attributes(p, s);
+        TypeInfo *integer = p->cs->symbol_table->basic_types[TYPE_integer];
+        TypeInfo *float_  = p->cs->symbol_table->basic_types[TYPE_float];
+        AstNode *attr_list = parse_gfx_attributes(p);
         AstNode *x = parse_expression(p, PREC_NONE + 1);
         consume(p, BTOK_COMMA, "Expected ',' after DRAW x");
         AstNode *y = parse_expression(p, PREC_NONE + 1);
-        if (x) ast_add_child(p->cs, s, x);
-        if (y) ast_add_child(p->cs, s, y);
+        AstNode *z = NULL;
+        bool is_draw3 = false;
         if (match(p, BTOK_COMMA)) {
-            AstNode *z = parse_expression(p, PREC_NONE + 1);
-            if (z) ast_add_child(p->cs, s, z);
+            z = parse_expression(p, PREC_NONE + 1);
+            is_draw3 = true;
             s->u.sentence.kind = arena_strdup(&p->cs->arena, "DRAW3");
         }
+        x = make_typecast(p->cs, integer, x, ln);
+        y = make_typecast(p->cs, integer, y, ln);
+        if (x) ast_add_child(p->cs, s, x);
+        if (y) ast_add_child(p->cs, s, y);
+        if (is_draw3) {
+            z = make_typecast(p->cs, float_, z, ln);
+            if (z) ast_add_child(p->cs, s, z);
+        }
+        if (attr_list) ast_add_child(p->cs, s, attr_list);
         return s;
     }
 
-    /* CIRCLE [attributes;] x, y, r */
+    /* CIRCLE [attr_list] expr COMMA expr COMMA expr
+     * zxbparser.py p_statement_circle / _circle_attr (:1014-1032):
+     *   make_sentence(ln,"CIRCLE", make_typecast(byte_,x,ln),
+     *                              make_typecast(byte_,y,ln),
+     *                              make_typecast(byte_,r,ln) [, attr_list])
+     * NB: CIRCLE casts ALL THREE positionals to TYPE.byte_ (signed). */
     if (match(p, BTOK_CIRCLE)) {
         int ln = p->previous.lineno;
         AstNode *s = make_sentence_node(p, "CIRCLE", ln);
-        parse_gfx_attributes(p, s);
+        TypeInfo *byte_ = p->cs->symbol_table->basic_types[TYPE_byte];
+        AstNode *attr_list = parse_gfx_attributes(p);
         AstNode *x = parse_expression(p, PREC_NONE + 1);
         consume(p, BTOK_COMMA, "Expected ',' in CIRCLE");
         AstNode *y = parse_expression(p, PREC_NONE + 1);
         consume(p, BTOK_COMMA, "Expected ',' in CIRCLE");
         AstNode *r = parse_expression(p, PREC_NONE + 1);
+        x = make_typecast(p->cs, byte_, x, ln);
+        y = make_typecast(p->cs, byte_, y, ln);
+        r = make_typecast(p->cs, byte_, r, ln);
         if (x) ast_add_child(p->cs, s, x);
         if (y) ast_add_child(p->cs, s, y);
         if (r) ast_add_child(p->cs, s, r);
+        if (attr_list) ast_add_child(p->cs, s, attr_list);
         return s;
     }
 
