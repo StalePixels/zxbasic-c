@@ -103,6 +103,19 @@ int main(int argc, char *argv[])
         input_file = argv[optind];
     }
 
+    /* --arch validation — faithful port of src/zxbpp/zxbpp.py:1033-1034:
+     *   if options.arch not in arch.AVAILABLE_ARCHITECTURES:
+     *       parser.error(f"Invalid architecture '{options.arch}'")
+     * AVAILABLE_ARCHITECTURES = ("zx48k","zxnext") (arch/__init__.py:12-18).
+     * argparse parser.error -> stderr + exit 2. The C parser.error-
+     * analogue convention (zxbasm/main.c:138, the S7.2d-i zxbc gates)
+     * is fprintf(stderr,"error: <msg>") + exit 2; the argparse usage:
+     * preamble is the carried user-adjudication, not reproduced. */
+    if (strcmp(arch, "zx48k") != 0 && strcmp(arch, "zxnext") != 0) {
+        fprintf(stderr, "error: Invalid architecture '%s'\n", arch);
+        return 2;
+    }
+
     /* Set up preprocessor state */
     PreprocState pp;
     preproc_init(&pp);
