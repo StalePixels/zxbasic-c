@@ -563,7 +563,17 @@ static AstNode *opt_visit_let(Visitor *v, AstNode *node) {
 static AstNode *opt_visit_letarray(Visitor *v, AstNode *node) {
     AstNode *acc = node->child_count > 0 ? node->children[0] : NULL;
     AstNode *lvalue = (acc && acc->child_count > 0) ? acc->children[0] : NULL;
+    /* Python's node.args[0].entry is ALWAYS a SymbolID (arrayaccess.py:40
+     * asserts token=="VARARRAY"). The C parser, lacking Python's distinct
+     * LETSUBSTR/LETARRAYSUBSTR productions for a postfix `a$(i)(j)`,
+     * builds a single LETARRAY whose ARRAYACCESS child[0] is a NESTED
+     * ARRAYACCESS (not an AST_ID) — reading u.id.* off that is a wild
+     * type-pun. The entry-not-accessed prune only applies to a direct
+     * array ID; for the nested shape fall through to generic recurse
+     * (the faithful default — no prune, exactly Python's effect since
+     * Python never reaches this branch for that grammar). */
     if (v->cs->opts.optimization_level > 1 && lvalue &&
+        lvalue->tag == AST_ID &&
         !lvalue->u.id.accessed) {
         warn_not_used(v->cs, lvalue->lineno,
                       lvalue->u.id.name ? lvalue->u.id.name : "",

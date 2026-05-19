@@ -333,6 +333,12 @@ static bool is_right_assoc(BTokenType type) {
 static AstNode *parse_call_or_array(Parser *p, const char *name, int lineno, bool expr_context, bool addressof_ctx);
 static AstNode *parse_arglist(Parser *p);
 
+/* Forward decls used by the SymbolARRAYACCESS.offset port (computed at
+ * ARRAYACCESS-node construction, defined alongside the BOUND helpers). */
+static bool zxbc_eval_to_num(const AstNode *n, double *out);
+static void compute_arrayaccess_offset(Parser *p, AstNode *acc,
+                                       AstNode *entry, AstNode *arglist);
+
 /* Parse builtin function: ABS, SIN, COS, etc. */
 static AstNode *parse_builtin_func(Parser *p, const char *fname, BTokenType kw) {
     int lineno = p->previous.lineno;
@@ -1023,6 +1029,16 @@ static AstNode *parse_call_or_array(Parser *p, const char *name, int lineno, boo
         for (int i = 0; i < arglist->child_count; i++)
             ast_add_child(p->cs, n, arglist->children[i]);
         n->type_ = entry->type_;
+
+        /* SymbolARRAYACCESS.offset (symbols/arrayaccess.py:68-91) — the
+         * constant byte offset when EVERY subscript is compile-time
+         * constant. Computed here once (the C analogue of the
+         * cached_property; make_call appends the folded NUMBER child for
+         * the read path at zxbparser.py:388-392, but the offset itself is
+         * intrinsic to the node and also read by visit_LETARRAY for the
+         * write target via make_array_access). arglist still holds the
+         * BOUND_TYPE-typecast'd index exprs (loop above). */
+        compute_arrayaccess_offset(p, n, entry, arglist);
         return n;
     }
 
@@ -3320,6 +3336,76 @@ static bool zxbc_eval_to_num(const AstNode *n, double *out) {
          * eval() raises NameError/SyntaxError/ValueError -> None. */
         return false;
     }
+}
+
+/* Faithful port of SymbolARRAYACCESS.offset (symbols/arrayaccess.py
+ * :68-91) — the constant byte offset of an array element from the start
+ * of the array DATA region when EVERY subscript is a compile-time
+ * constant; otherwise "not constant" (Python returns None).
+ *
+ *   if self.scope == SCOPE.parameter: return None          (:77-78)
+ *   offset = 0
+ *   for i, b in zip(self.arglist, self.entry.bounds):       (:83)
+ *       tmp = i.children[0]                                  (:84)
+ *       if is_number(tmp) or is_const(tmp):                  (:85)
+ *           offset = offset * b.count + (tmp.value - b.lower)(:86)
+ *       else: return None                                    (:88)
+ *   offset *= self.type_.size                                (:90)
+ *
+ * `i` is the C AST_ARGUMENT wrapping the (already BOUND_TYPE-typecast'd)
+ * subscript expr at child[0]; `b` is the matching AST_BOUND
+ * (child[0]=lower, child[1]=upper; .count == upper-lower+1, .lower==
+ * lower — bound.py:33-38), read from entry.ref.bounds == the array ID's
+ * arr_boundlist. is_number(tmp)/is_const(tmp) (check.py:293,312): a
+ * NUMBER or a CLASS_const id of numeric type — tmp.value resolves via
+ * zxbc_eval_to_num (handles NUMBER, named CONST via default_value_expr,
+ * and CONSTEXPR-folded forms exactly as the BOUND path does). Python's
+ * zip() stops at the shorter sequence (a byref-param array has empty
+ * bounds → no iterations → offset stays 0 → const 0); but the
+ * SCOPE.parameter early-return already covers that, mirrored here. */
+static void compute_arrayaccess_offset(Parser *p, AstNode *acc,
+                                       AstNode *entry, AstNode *arglist) {
+    (void)p;
+    acc->u.arrayaccess.offset = 0;
+    acc->u.arrayaccess.is_const = false;
+
+    /* :77-78 — a parameter array is never constant-foldable. */
+    if (!entry || entry->u.id.scope == SCOPE_parameter)
+        return;
+
+    AstNode *boundlist = entry->u.id.arr_boundlist;
+    int ndims = boundlist ? boundlist->child_count : 0;
+    int nargs = arglist ? arglist->child_count : 0;
+    int n = ndims < nargs ? ndims : nargs;   /* Python zip() shortest */
+
+    long offset = 0;
+    for (int k = 0; k < n; k++) {
+        AstNode *arg = arglist->children[k];
+        AstNode *tmp = (arg && arg->tag == AST_ARGUMENT && arg->child_count > 0)
+                           ? arg->children[0]
+                           : arg;          /* i.children[0] */
+        AstNode *bd = boundlist->children[k];
+        if (!tmp || !bd || bd->child_count < 2)
+            return;                        /* defensive — treat as dynamic */
+
+        /* is_number(tmp) or is_const(tmp) (check.py:293,312). */
+        if (!(check_is_number(tmp) || check_is_const(tmp)))
+            return;                        /* :88 — not constant */
+
+        double tv, lo, up;
+        if (!zxbc_eval_to_num(tmp, &tv))           return;
+        if (!zxbc_eval_to_num(bd->children[0], &lo)) return;
+        if (!zxbc_eval_to_num(bd->children[1], &up)) return;
+
+        long count = (long)up - (long)lo + 1;      /* BOUND.count */
+        offset = offset * count + ((long)tv - (long)lo);
+    }
+
+    /* :90 — offset *= self.type_.size (element size; acc->type_ is the
+     * array element type, set to entry->type_ by the caller). */
+    offset *= type_size(acc->type_);
+    acc->u.arrayaccess.offset = offset;
+    acc->u.arrayaccess.is_const = true;
 }
 
 /* Port A: faithful src/symbols/bound.py SymbolBOUND.make_node.

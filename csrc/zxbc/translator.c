@@ -2314,6 +2314,72 @@ static void tr_letsubstr_emit(Visitor *v, AstNode *node, AstNode *str_var,
     tr_runtime_call(tr, ".core.__LETSUBSTR", 0);
 }
 
+/* ArrayRef.data_label (id_/ref/arrayref.py:62-63):
+ *   f"{parent.mangled}.{gl.ARRAY_DATA_PREFIX}"  (ARRAY_DATA_PREFIX ==
+ *   "__DATA__", global_.py:173). For a GLOBAL array this is also
+ *   ArrayRef.t (arrayref.py:69-78: parent.scope == global_ → data_label).
+ *   Same string the data-image emitter builds (var_translator.c:467-468). */
+static const char *tr_array_data_label(Translator *tr, AstNode *entry) {
+    const char *mangled = (entry && entry->u.id.mangled)
+                              ? entry->u.id.mangled : "";
+    size_t ml = strlen(mangled);
+    char *buf = arena_alloc(&tr->cs->arena, ml + 10);
+    snprintf(buf, ml + 10, "%s.__DATA__", mangled);
+    return buf;
+}
+
+/* visit_ARRAYLOAD (translator.py:265-289) — array-element value READ.
+ * The C parser builds AST_ARRAYACCESS for every array access (read AND
+ * write target; it never mints a distinct AST_ARRAYLOAD). When the node
+ * is VISITED AS A VALUE (POKE value, expression operand) it is Python's
+ * ARRAYLOAD — make_call builds ARRAYLOAD for p_arr_access_expr
+ * (zxbparser.py:388-392); the LETARRAY write target is handled in
+ * tr_visit_letarray, which does not descend here for the cases it owns.
+ *
+ * SCOPED SUBSET (faithful, regression-free): only the CONSTANT-offset
+ * GLOBAL branch (translator.py:277-280) is ported here —
+ *   offset = node.offset
+ *   if scope == global_:
+ *       ic_load(type_, entry.t, "%s + %i" % (entry.t, offset))
+ * with entry.t == ArrayRef.t == data_label for a global array. The
+ * dynamic (`offset is None`) path and the parameter/local const paths
+ * pull the __ARRAY runtime / IX-relative pload sequences not yet ported;
+ * for those this handler reproduces the pre-existing default behaviour
+ * (visitor_generic recurses the index children) so nothing regresses —
+ * those cluster members stay DIVERGE exactly as before. */
+static AstNode *tr_visit_arrayaccess(Visitor *v, AstNode *node) {
+    Translator *tr = v->ctx;
+    AstNode *entry = node->child_count > 0 ? node->children[0] : NULL;
+
+    bool is_const = node->u.arrayaccess.is_const;
+    bool global = entry && entry->tag == AST_ID &&
+                  entry->u.id.scope == SCOPE_global;
+
+    if (is_const && global && entry) {
+        /* translator.py:278-280 (const, global):
+         *   ic_load(node.type_, node.entry.t, "%s + %i" % (entry.t, off))
+         * entry.t == data_label for a global array (arrayref.py:69-72).
+         * %i is decimal. _load8/_load16 read ins[2] (the "_x.__DATA__ +
+         * N" label) → "ld a,(...)" / "ld hl,(...)" and push the result;
+         * the consumer reads node.t (Symbol.t lazy optemps.new_t(),
+         * symbol_.py:72-76), independent of the ic_load t1. */
+        const char *dlabel = tr_array_data_label(tr, entry);
+        size_t need = strlen(dlabel) + 32;
+        char *t2 = arena_alloc(&tr->cs->arena, need);
+        snprintf(t2, need, "%s + %ld", dlabel, node->u.arrayaccess.offset);
+        tr_ic_load(tr, node->type_, dlabel, t2);
+        if (node->t == NULL)
+            node->t = compiler_new_temp(tr->cs);
+        return node;
+    }
+
+    /* Out-of-subset (dynamic / param / local) — preserve the pre-existing
+     * default: recurse the index children exactly as the unregistered
+     * tag would have. No new bytes, no regression. */
+    visitor_generic(v, node);
+    return node;
+}
+
 /* visit_LETARRAY (translator.py:329-364): real array-element store.
  * arr = node.children[0] (ARRAYACCESS); the index path / scope store
  * is the array codegen — out of S5.8bc's string scope (no array-elem
@@ -2392,11 +2458,40 @@ static AstNode *tr_visit_letarray(Visitor *v, AstNode *node) {
         return node;
     }
 
-    /* Non-string array element — faithful `yield (yield
-     * generic_visit(node))`: visit children so the RHS/index codegen
-     * (and the array store its own visitors own) runs. The dedicated
-     * array-store IC is out of S5.8bc scope; the existing array
-     * sprints own ARRAYACCESS. */
+    /* Non-string array element — visit_LETARRAY (translator.py:329-364).
+     * arr = node.children[0] (the ARRAYACCESS lvalue), scope = arr.scope.
+     *
+     * SCOPED SUBSET (faithful, regression-free): only the CONSTANT-offset
+     * GLOBAL store branch (translator.py:347-351) is ported:
+     *   name = arr.entry.data_label
+     *   if scope == global_:
+     *       yield node.children[1]                 # RHS
+     *       ic_store(arr.type_, "%s + %i" % (name, arr.offset), rhs.t)
+     * Note Python does NOT yield `arr` here (no index/aaddr codegen for
+     * the const path) — only the RHS is visited, then a direct store to
+     * "_x.__DATA__ + N". The dynamic / parameter / local store paths
+     * (ic_astore / ic_pastore / runtime) are not yet ported; for those
+     * the pre-existing default (visitor_generic) is preserved so nothing
+     * regresses. */
+    if (acc && acc->tag == AST_ARRAYACCESS && acc->u.arrayaccess.is_const) {
+        AstNode *aent = acc->child_count > 0 ? acc->children[0] : NULL;
+        if (aent && aent->tag == AST_ID &&
+            aent->u.id.scope == SCOPE_global) {
+            const char *name = tr_array_data_label(tr, aent);
+            size_t need = strlen(name) + 32;
+            char *addr = arena_alloc(&tr->cs->arena, need);
+            snprintf(addr, need, "%s + %ld", name,
+                     acc->u.arrayaccess.offset);
+            if (rhs) visitor_visit(v, rhs);          /* yield RHS */
+            tr_ic_store(tr, acc->type_, addr,
+                        (rhs && rhs->t) ? rhs->t : "");
+            return node;
+        }
+    }
+
+    /* Out-of-subset — faithful `yield (yield generic_visit(node))`:
+     * preserve the pre-existing default so the dynamic/param/local
+     * array-store cluster members stay DIVERGE exactly as before. */
     visitor_generic(v, node);
     return node;
 }
@@ -2837,6 +2932,12 @@ static void tr_register_handlers(Visitor *v) {
      * GATE (the llc fix) and routes the string case to LETSUBSTR
      * semantics. STRSLICE is a tag node. ACTIVE. */
     visitor_on_sentence(v, "LETARRAY", tr_visit_letarray);
+    /* visit_ARRAYLOAD / visit_ARRAYACCESS (translator.py:265-289,448-449).
+     * The C parser builds AST_ARRAYACCESS for every array access; this
+     * handler ports the constant-offset GLOBAL value-read branch and
+     * preserves the prior default for the out-of-subset (dynamic/param/
+     * local) paths. The const-offset GLOBAL store is in tr_visit_letarray. */
+    visitor_on_tag(v, AST_ARRAYACCESS, tr_visit_arrayaccess);
     visitor_on_tag(v, AST_STRSLICE, tr_visit_strslice);
     visitor_on_sentence(v, "END", tr_visit_end);
     /* S5.5 control-flow sentence handlers. */

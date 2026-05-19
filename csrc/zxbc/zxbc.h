@@ -311,7 +311,22 @@ struct AstNode {
         } call;
         /* AST_VARDECL: child[0] = ID, child[1] = initializer (or NULL) */
         /* AST_ARRAYDECL: child[0] = ID, child[1] = BOUNDLIST */
-        /* AST_ARRAYACCESS/ARRAYLOAD: child[0] = array ID, child[1..n] = indices */
+        /* AST_ARRAYACCESS/ARRAYLOAD: child[0] = array ID, child[1..n] = indices.
+         * `offset` is the faithful analogue of SymbolARRAYACCESS.offset
+         * (symbols/arrayaccess.py:68-91): the constant byte offset from the
+         * start of the array DATA region when EVERY subscript is a compile-
+         * time constant, else "not constant" (Python returns None). Computed
+         * once at ARRAYACCESS-node construction in the parser (the C analogue
+         * of the cached_property + make_call's `arr.offset is not None ->
+         * append the folded NUMBER child`, zxbparser.py:388-392). `is_const`
+         * distinguishes a real 0-byte offset from "dynamic / not foldable"
+         * (Python's `offset is None`). ARRAYACCESS/ARRAYLOAD tag nodes are
+         * children-only otherwise (no other `u.*` member is read by their
+         * visitors), so this dedicated struct cannot alias. */
+        struct {
+            long offset;       /* byte offset (valid iff is_const) */
+            bool is_const;     /* all subscripts constant (offset valid) */
+        } arrayaccess;
 
         /* AST_ARGUMENT */
         struct {
