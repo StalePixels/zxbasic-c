@@ -123,6 +123,15 @@ typedef struct CompilerOptions {
     /* Parse-only mode (no output generated) */
     bool parse_only;
 
+    /* --save-config FILE (Python args_parser.py:213
+     * parser.add_argument("--save-config", type=str) -> options.save_config
+     * is a filename string or None). When set AND the compile had no
+     * errors, zxbc.py:71-73 save_config() writes the [zxbc] config INI
+     * via src.api.config.save_config_into_file (config.py:143-186).
+     * Raw ya_optarg pointer (NULL = not given), same convention as the
+     * other char* filename opts (memory_map, stderr_filename). */
+    char *save_config;
+
     /* Bitmask of options explicitly set on the command line.
      * Used to implement Python's "ignore None" semantics: config file values
      * are only applied for fields NOT set on the cmdline. */

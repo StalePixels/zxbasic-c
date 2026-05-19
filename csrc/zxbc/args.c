@@ -319,7 +319,12 @@ int zxbc_parse_args(int argc, char **argv, CompilerOptions *opts) {
                 opts->project_filename = ya_optarg;
                 break;
             case LOPT_SAVE_CONFIG:
-                /* save config — not yet implemented */
+                /* Python args_parser.py:213 --save-config type=str ->
+                 * options.save_config. Raw ya_optarg pointer, NULL =
+                 * not given (mirrors -e/-M). The actual write happens
+                 * after compilation in main.c, faithful to zxbc.py:235
+                 * save_config(options). */
+                opts->save_config = ya_optarg;
                 break;
             case LOPT_VERSION:
                 return -1;
