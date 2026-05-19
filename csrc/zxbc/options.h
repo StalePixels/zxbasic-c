@@ -57,6 +57,22 @@ typedef struct CompilerOptions {
     bool opt_seen_asm;
     bool opt_seen_emit_backend;
 
+    /* S7.2d-i — faithful port of the args_parser.py:64-99
+     * add_mutually_exclusive_group() {-T/--tzx, -t/--tap, -A/--asm,
+     * -E/--emit-backend, --parse-only, -f/--output-format}. argparse
+     * rejects when >=2 group members are given, reporting
+     *   "argument <second-seen>: not allowed with argument <first-seen>"
+     * using each action's canonical '/'-joined option_strings, in the
+     * left-to-right order the members were seen. We record the
+     * first-seen and second-seen member as a small enum + the
+     * canonical argparse spelling, populated in the getopt loop (which
+     * processes tokens left-to-right; ya_getopt splits combined short
+     * opts like -tT into successive returns, so the loop sees the true
+     * order). 0 = none seen yet. */
+    int mutex_seen_count;            /* how many distinct group members seen */
+    const char *mutex_first_optstr;  /* canonical argparse spelling, 1st seen */
+    const char *mutex_second_optstr; /* canonical argparse spelling, 2nd seen */
+
     /* Output control */
     char *memory_map;        /* filename for memory map, or NULL */
     bool use_basic_loader;

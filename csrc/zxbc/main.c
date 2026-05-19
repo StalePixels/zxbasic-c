@@ -31,31 +31,61 @@ int main(int argc, char *argv[]) {
         return rc < 0 ? 0 : rc;  /* -1 = --help/--version (success) */
     }
 
-    /* Format-gate — faithful port of args_config.py:151-152:
-     *
-     *   if options.append_binary and OPTIONS.output_file_type not in
-     *       {FileType.TAP, FileType.TZX}:
-     *       parser.error("Option --append-binary needs either tap or
-     *                     tzx output format")
-     *
-     * ONLY options.append_binary gates (NOT append_headless_binary —
-     * Python only checks append_binary). parser.error prints to stderr
-     * and exits 2. The C parser.error-analogue convention (see
-     * zxbasm/main.c:138, the args_config.py:158-159 "No such file or
-     * directory" parser.error port) is: fprintf(stderr, "error: <msg>")
-     * then exit 2. Fires after args are parsed and output_file_type is
-     * resolved (last-wins in args.c), before any compilation/output.
-     * Scope: this gate emits exit-2 + the one error: line ONLY — the
-     * argparse usage: preamble is S7.2d, deliberately not reproduced
-     * here. */
-    if (cs.opts.append_binary_count > 0
-        && !(cs.opts.output_file_type
-             && (strcmp(cs.opts.output_file_type, "tap") == 0
-                 || strcmp(cs.opts.output_file_type, "tzx") == 0))) {
-        fprintf(stderr,
-            "error: Option --append-binary needs either tap or tzx output format\n");
-        compiler_destroy(&cs);
-        return 2;
+    /* S7.2d-i (a) — invalid --arch. Faithful port of
+     * args_config.py:62-63:
+     *   if options.arch not in arch.AVAILABLE_ARCHITECTURES:
+     *       parser.error(f"Invalid architecture '{options.arch}'")
+     * AVAILABLE_ARCHITECTURES == ("zx48k", "zxnext")
+     * (src/arch/__init__.py:13-18). This is the FIRST parser.error in
+     * parse_options() (line 62) — before the enable/disable-warning
+     * duplicate check (line 70), the deprecation block (107-132), the
+     * --BASIC/--autorun guards (137-149) and the append-binary
+     * format-gate (151). It must therefore fire before all of those;
+     * placed here, immediately after zxbc_parse_args, ahead of the
+     * append-binary gate. parser.error -> stderr + exit 2; the
+     * argparse usage: preamble is the carried adjudication and is
+     * deliberately NOT reproduced. options.arch defaults to "zx48k"
+     * and is always a string, so a NULL architecture means default
+     * (valid) — guard for NULL and treat it as zx48k. */
+    {
+        const char *a = cs.opts.architecture;
+        if (a && strcmp(a, "zx48k") != 0 && strcmp(a, "zxnext") != 0) {
+            fprintf(stderr, "error: Invalid architecture '%s'\n", a);
+            compiler_destroy(&cs);
+            return 2;
+        }
+    }
+
+    /* S7.2d-i (c) — a warning code both enabled (+W) and disabled
+     * (-W). Faithful port of args_config.py:68-73:
+     *   enabled  = set(options.enable_warning  or [])
+     *   disabled = set(options.disable_warning or [])
+     *   dup = [f"W{x}" for x in enabled.intersection(disabled)]
+     *   if dup:
+     *       parser.error(f"Warning(s) {', '.join(dup)} cannot be "
+     *                    "enabled and disabled simultaneously")
+     * This is the SECOND parser.error in parse_options() (line 70) —
+     * after the arch check (62), before deprecation/(e)/append-binary.
+     * Placed right after (a). Python builds `dup` from a set
+     * intersection; for the single-element case (the only one in the
+     * S7.2d-i fixture set) iteration order is unambiguous. For the
+     * multi-element case the order is Python set-iteration order,
+     * which for these short numeric-string codes is NOT insertion
+     * order and is not reproducible from the C lists alone — see the
+     * report's residual note; the single-element contract (W<code>)
+     * is exact. parser.error -> stderr + exit 2; usage: preamble
+     * deliberately not reproduced. */
+    for (int i = 0; i < cs.opts.enabled_warning_count; i++) {
+        const char *ec = cs.opts.enabled_warnings[i];
+        for (int j = 0; j < cs.opts.disabled_warning_count; j++) {
+            if (strcmp(ec, cs.opts.disabled_warnings[j]) == 0) {
+                fprintf(stderr,
+                    "error: Warning(s) W%s cannot be enabled and "
+                    "disabled simultaneously\n", ec);
+                compiler_destroy(&cs);
+                return 2;
+            }
+        }
     }
 
     cs.current_file = cs.opts.input_filename;
@@ -97,6 +127,89 @@ int main(int argc, char *argv[]) {
         cs.opts.strict_bool = false;
         zxbc_warning_command_line_flag_deprecation(
             &cs, "--strict-bool is deprecated (no longer needed)");
+    }
+
+    /* S7.2d-i (e) — --BASIC / --autorun output-format guards.
+     * Faithful port of args_config.py:137-149, evaluated AFTER
+     * output_file_type is resolved (last-wins in args.c) and AFTER
+     * the deprecation block (107-132) — hence placed here, right
+     * after the deprecation/strict-bool emission and before the -e
+     * error-file open:
+     *
+     *   if (options.basic or options.autorun) and
+     *       OPTIONS.output_file_type not in {TAP,TZX,SNA,Z80}:
+     *       parser.error("Options --BASIC and --autorun require one "
+     *                    "of sna, tzx, tap or z80 output format")
+     *
+     *   if not (options.basic and options.autorun) and
+     *       OPTIONS.output_file_type in {SNA,Z80}:
+     *       parser.error("Options --BASIC and --autorun are both "
+     *                    "required for snapshot formats")
+     *
+     * options.basic/options.autorun are tri-state in Python
+     * (store_true, default=None); `(basic or autorun)` is true if
+     * EITHER was given, `not (basic and autorun)` is true unless BOTH
+     * given. The C use_basic_loader/autorun bools carry exactly that
+     * truthiness for these CLI runs. Both checks are independent
+     * parser.error()s in source order (137 then 145) — the first
+     * that matches wins. parser.error -> stderr + exit 2; the
+     * argparse usage: preamble is the carried adjudication and is
+     * deliberately NOT reproduced. Python evaluates these at
+     * args_config.py:137-149, BEFORE the append-binary format-gate
+     * at :151, so the append-binary gate is emitted AFTER this block
+     * (below) — matching Python's order exactly, so a command line
+     * that would trigger BOTH reports the (e) message, as Python does. */
+    {
+        const char *oft = cs.opts.output_file_type
+                              ? cs.opts.output_file_type : "bin";
+        bool is_tap_tzx_sna_z80 =
+            strcmp(oft, "tap") == 0 || strcmp(oft, "tzx") == 0 ||
+            strcmp(oft, "sna") == 0 || strcmp(oft, "z80") == 0;
+        bool is_sna_z80 =
+            strcmp(oft, "sna") == 0 || strcmp(oft, "z80") == 0;
+
+        if ((cs.opts.use_basic_loader || cs.opts.autorun)
+            && !is_tap_tzx_sna_z80) {
+            fprintf(stderr,
+                "error: Options --BASIC and --autorun require one of "
+                "sna, tzx, tap or z80 output format\n");
+            compiler_destroy(&cs);
+            return 2;
+        }
+
+        if (!(cs.opts.use_basic_loader && cs.opts.autorun)
+            && is_sna_z80) {
+            fprintf(stderr,
+                "error: Options --BASIC and --autorun are both "
+                "required for snapshot formats\n");
+            compiler_destroy(&cs);
+            return 2;
+        }
+    }
+
+    /* --append-binary format-gate — faithful port of args_config.py:
+     *   if options.append_binary and OPTIONS.output_file_type not in
+     *       {FileType.TAP, FileType.TZX}:
+     *       parser.error("Option --append-binary needs either tap or
+     *                     tzx output format")
+     *
+     * ONLY options.append_binary gates (NOT append_headless_binary).
+     * Python evaluates this at args_config.py:151-152, AFTER the
+     * --BASIC/--autorun guards (:137-149) above and the deprecation
+     * block (:107-132) — so it is emitted here, last of the post-parse
+     * validation cluster, matching Python's order exactly (a command
+     * line tripping both an (e) error and this gate reports the (e)
+     * message, as Python does). parser.error -> stderr + exit 2; the
+     * argparse usage: preamble is the carried adjudication, not
+     * reproduced. */
+    if (cs.opts.append_binary_count > 0
+        && !(cs.opts.output_file_type
+             && (strcmp(cs.opts.output_file_type, "tap") == 0
+                 || strcmp(cs.opts.output_file_type, "tzx") == 0))) {
+        fprintf(stderr,
+            "error: Option --append-binary needs either tap or tzx output format\n");
+        compiler_destroy(&cs);
+        return 2;
     }
 
     /* Open error file if specified */

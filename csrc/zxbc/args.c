@@ -22,6 +22,68 @@
 #define ZXBASIC_C_VERSION "dev"
 #endif
 
+/* S7.2d-i (b) — faithful port of src/zxbc/args_parser.py:30-34
+ * parse_warning_option(code): is_valid_warning_code(code) is
+ * `code in global_.ENABLED_WARNINGS`, whose registered keys are
+ * exactly the 12 @register_warning(...) codes in
+ * src/api/errmsg.py:117-187. The argparse `type=parse_warning_option`
+ * conversion raises ArgumentTypeError("Invalid warning option
+ * 'W<code>'") DURING parse_args(); argparse wraps that as
+ *   <prog>: error: argument <optstring>: Invalid warning option
+ *           'W<code>'
+ * and sys.exit(2). <optstring> is the action's canonical
+ * '/'-joined option_strings: "-W/--disable-warning" for -W, and
+ * "+W/--enable-warning" for +W. */
+static const char *const ZXBC_VALID_WARNING_CODES[] = {
+    "100", "110", "120", "130", "140", "150",
+    "160", "170", "180", "190", "200", "300",
+};
+
+static bool zxbc_is_valid_warning_code(const char *code) {
+    if (!code)
+        return false;
+    for (size_t i = 0;
+         i < sizeof(ZXBC_VALID_WARNING_CODES) / sizeof(ZXBC_VALID_WARNING_CODES[0]);
+         i++) {
+        if (strcmp(code, ZXBC_VALID_WARNING_CODES[i]) == 0)
+            return true;
+    }
+    return false;
+}
+
+/* Emit the argparse-faithful error: line for an invalid warning code
+ * and return 2 (the exit code argparse uses; main.c maps a positive
+ * zxbc_parse_args return straight through). `optstr` is the canonical
+ * '/'-joined option_strings argparse would print. The argparse usage:
+ * preamble is deliberately NOT reproduced (carried adjudication). */
+static int zxbc_emit_invalid_warning(const char *optstr, const char *code) {
+    fprintf(stderr,
+            "error: argument %s: Invalid warning option 'W%s'\n",
+            optstr, code ? code : "");
+    return 2;
+}
+
+/* S7.2d-i (d) — record a mutually-exclusive output-group member as it
+ * is seen, in left-to-right order, faithful to the
+ * args_parser.py:64-99 add_mutually_exclusive_group(). argparse stores
+ * the FIRST group member it sees, then on the SECOND distinct member
+ * raises "argument <second>: not allowed with argument <first>" using
+ * each action's canonical '/'-joined option_strings and sys.exit(2).
+ * `optstr` is that canonical spelling for the member just seen. The
+ * getopt loop calls this for each of the six members in token order
+ * (ya_getopt splits combined short opts, e.g. -tT, into successive
+ * returns, preserving the true order). We only capture the first two;
+ * argparse reports on the second, so further members are irrelevant. */
+static void zxbc_mutex_note(CompilerOptions *opts, const char *optstr) {
+    if (opts->mutex_seen_count == 0) {
+        opts->mutex_first_optstr = optstr;
+        opts->mutex_seen_count = 1;
+    } else if (opts->mutex_seen_count == 1) {
+        opts->mutex_second_optstr = optstr;
+        opts->mutex_seen_count = 2;
+    }
+}
+
 /* Long option IDs (values > 255 to avoid collision with short opts) */
 enum {
     LOPT_ARRAY_BASE = 256,
@@ -146,6 +208,15 @@ int zxbc_parse_args(int argc, char **argv, CompilerOptions *opts) {
             if (i > 0 && argv[i][0] == '+' && argv[i][1] == 'W') {
                 const char *code = argv[i] + 2;
                 if (!code[0] && i + 1 < argc) code = argv[++i];
+                /* S7.2d-i (b): +W / --enable-warning code validation,
+                 * faithful to args_parser.py:30-34's parse_warning_option
+                 * argparse type-conversion. argparse reports the FIRST
+                 * invalid code it encounters scanning left-to-right;
+                 * +W is pre-scanned here before the getopt loop, so a
+                 * +W code is validated at this point. Canonical
+                 * option-string spelling: "+W/--enable-warning". */
+                if (!zxbc_is_valid_warning_code(code))
+                    return zxbc_emit_invalid_warning("+W/--enable-warning", code);
                 opts->enabled_warnings = realloc(opts->enabled_warnings,
                     sizeof(char *) * (opts->enabled_warning_count + 1));
                 opts->enabled_warnings[opts->enabled_warning_count++] = (char *)code;
@@ -174,32 +245,48 @@ int zxbc_parse_args(int argc, char **argv, CompilerOptions *opts) {
                 opts->output_filename = ya_optarg;
                 break;
             case 'f':
+                /* S7.2d-i (d): note this mutex-group member ONLY the
+                 * first time the -f/--output-format action is seen
+                 * (argparse: repeating the SAME action is not a
+                 * violation; only >=2 distinct members are). */
+                if (!opts->opt_seen_output_format)
+                    zxbc_mutex_note(opts, "-f/--output-format");
                 opts->output_file_type = ya_optarg;
                 opts->opt_seen_output_format = true;
                 opts->cmdline_set |= OPT_SET_OUTPUT_TYPE;
                 break;
             case 'T':
+                if (!opts->opt_seen_tzx)
+                    zxbc_mutex_note(opts, "-T/--tzx");
                 opts->output_file_type = "tzx";
                 opts->opt_seen_tzx = true;
                 opts->cmdline_set |= OPT_SET_OUTPUT_TYPE;
                 break;
             case 't':
+                if (!opts->opt_seen_tap)
+                    zxbc_mutex_note(opts, "-t/--tap");
                 opts->output_file_type = "tap";
                 opts->opt_seen_tap = true;
                 opts->cmdline_set |= OPT_SET_OUTPUT_TYPE;
                 break;
             case 'A':
+                if (!opts->opt_seen_asm)
+                    zxbc_mutex_note(opts, "-A/--asm");
                 opts->output_file_type = "asm";
                 opts->opt_seen_asm = true;
                 opts->cmdline_set |= OPT_SET_OUTPUT_TYPE;
                 break;
             case 'E':
+                if (!opts->opt_seen_emit_backend)
+                    zxbc_mutex_note(opts, "-E/--emit-backend");
                 opts->emit_backend = true;
                 opts->output_file_type = "ir";
                 opts->opt_seen_emit_backend = true;
                 opts->cmdline_set |= OPT_SET_OUTPUT_TYPE;
                 break;
             case LOPT_PARSE_ONLY:
+                if (!opts->parse_only)
+                    zxbc_mutex_note(opts, "--parse-only");
                 opts->parse_only = true;
                 break;
             case 'B':
@@ -330,6 +417,12 @@ int zxbc_parse_args(int argc, char **argv, CompilerOptions *opts) {
                 return -1;
             case 'W':
             case LOPT_DISABLE_WARNING:
+                /* S7.2d-i (b): -W / --disable-warning code validation,
+                 * faithful to args_parser.py:30-34 parse_warning_option
+                 * argparse type-conversion. Canonical option-string
+                 * spelling: "-W/--disable-warning". */
+                if (!zxbc_is_valid_warning_code(ya_optarg))
+                    return zxbc_emit_invalid_warning("-W/--disable-warning", ya_optarg);
                 opts->disabled_warnings = realloc(opts->disabled_warnings,
                     sizeof(char *) * (opts->disabled_warning_count + 1));
                 opts->disabled_warnings[opts->disabled_warning_count++] = ya_optarg;
@@ -348,6 +441,28 @@ int zxbc_parse_args(int argc, char **argv, CompilerOptions *opts) {
             default:
                 break;
         }
+    }
+
+    /* S7.2d-i (d): mutually-exclusive output-format group.
+     * Faithful port of args_parser.py:64-99
+     * add_mutually_exclusive_group({-T/--tzx, -t/--tap, -A/--asm,
+     * -E/--emit-backend, --parse-only, -f/--output-format}). argparse
+     * enforces this DURING parse_args() — BEFORE the positional
+     * PROGRAM is resolved and BEFORE parse_options()'s arch/dup/basic
+     * checks — so it is emitted here, immediately after the option
+     * loop and before the "no input file" / positional handling and
+     * config load. When >=2 distinct group members were given,
+     * argparse prints
+     *   <prog>: error: argument <second-seen>: not allowed with
+     *           argument <first-seen>
+     * (canonical '/'-joined option_strings, in left-to-right
+     * encounter order) and sys.exit(2). The usage: preamble is
+     * deliberately NOT reproduced (carried adjudication). */
+    if (opts->mutex_seen_count >= 2) {
+        fprintf(stderr,
+                "error: argument %s: not allowed with argument %s\n",
+                opts->mutex_second_optstr, opts->mutex_first_optstr);
+        return 2;
     }
 
     /* Remaining argument is the input file */
