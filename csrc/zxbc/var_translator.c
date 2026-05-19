@@ -441,11 +441,21 @@ static void vt_visit_arraydecl(Translator *tr, AstNode *node) {
                                                          : NULL);
         if (lo != 0) { is_zero_based = false; break; }
     }
-    /* is_dynamically_accessed / lbound_used / ubound_used: not modelled
-     * in the C ID yet (S5.7+). OPTIONS.array_check defaults off. */
-    bool is_dynamically_accessed = false;
-    bool lbound_used = false;
-    bool ubound_used = false;
+    /* is_dynamically_accessed / lbound_used / ubound_used (arrayref.py
+     * :23/24/29): read off the shared array ID entry (node->children[0],
+     * the same symbol-table node every array access / LBOUND / UBOUND
+     * site mutates — symboltable_declare stores one node, access_array /
+     * access_id return it). Set by SymbolARRAYACCESS.__init__
+     * (arrayaccess.py:37 -> parser.c array-access success path) and
+     * p_expr_lbound_expr (zxbparser.py:3374/3376 -> parser.c
+     * parse_builtin_func LBOUND/UBOUND gate). These are exactly the gates
+     * VarTranslator.visit_ARRAYDECL (var_translator.py:58/61) ORs to
+     * decide the descriptor's __LBOUND__ / __UBOUND__ ptr slot + the
+     * trailing bound table for a non-zero-based global array.
+     * OPTIONS.array_check defaults off (config.py). */
+    bool is_dynamically_accessed = entry->u.id.is_dynamically_accessed;
+    bool lbound_used = entry->u.id.lbound_used;
+    bool ubound_used = entry->u.id.ubound_used;
     bool array_check = false;
 
     char *bound_ptrs[2] = { "0", "0" };

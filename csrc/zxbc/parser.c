@@ -395,6 +395,61 @@ static AstNode *parse_builtin_func(Parser *p, const char *fname, BTokenType kw) 
         consume(p, BTOK_RP, "Expected ')' after builtin argument");
     }
 
+    /* p_expr_lbound_expr (zxbparser.py:3335-3378) — LBOUND/UBOUND with an
+     * explicit dimension: `LBOUND(arr, expr)` / `UBOUND(arr, expr)`. The C
+     * grammar funnels these through this generic builtin builder, so the
+     * production's array-descriptor side effect must be reproduced here.
+     *
+     * Python: num = make_typecast(uinteger, expr). If is_number(num) and
+     * the array scope is local/global, the dimension constant-propagates
+     * (val==0 -> #dims; LBOUND -> bounds[val-1].lower; UBOUND -> .upper)
+     * and NO flag is set. Otherwise (a non-constant dimension) it sets
+     *     entry.ref.lbound_used = True   (LBOUND)
+     *     entry.ref.ubound_used = True   (UBOUND)
+     * which is exactly the gate VarTranslator.visit_ARRAYDECL
+     * (var_translator.py:58/61) reads to emit the
+     * `<mangled>.__LBOUND__` / `.__UBOUND__` descriptor slot + trailing
+     * bound table for a non-zero-based global array (var_translator.c
+     * :452-455 / :539-562 already consume these flags).
+     *
+     * Faithful narrow port: only the flag side effect is reproduced. The
+     * constant-propagation fold of the result value (the LBOUND/UBOUND
+     * runtime builtin itself) is a separate, not-yet-ported subsystem
+     * (translator.c:1479); the C corpus's const-dim fixtures
+     * (lbound0/1/3, bound00/01) reach byte-identical output through the
+     * unused-LET DCE path and must stay untouched — so the flag is set
+     * ONLY on the non-number dimension, exactly Python's else-branch. The
+     * typecast is applied (as Python does) so check_is_number sees the
+     * folded numeric form for a literal dimension. child[0] is the shared
+     * array ID entry (parse_primary resolves a bare ARRAY_ID to the
+     * symbol-table node — the same node the ARRAYDECL carries). */
+    if ((kw == BTOK_LBOUND || kw == BTOK_UBOUND) && n->child_count >= 2) {
+        AstNode *arr = n->children[0];
+        if (arr && arr->tag == AST_ID &&
+            arr->u.id.class_ == CLASS_array) {
+            AstNode *dim = n->children[1];
+            AstNode *num = make_typecast(
+                p->cs,
+                p->cs->symbol_table->basic_types[TYPE_uinteger],
+                dim, lineno);
+            if (num) n->children[1] = num;
+            /* Python's const-prop branch additionally requires the array
+             * scope to be local/global; a parameter-scope array always
+             * takes the flag-setting else-branch. SCOPE_global / _local
+             * arrays with a constant dimension fold (no flag). */
+            bool const_dim =
+                num && (arr->u.id.scope == SCOPE_global ||
+                        arr->u.id.scope == SCOPE_local) &&
+                check_is_number(num);
+            if (!const_dim) {
+                if (kw == BTOK_LBOUND)
+                    arr->u.id.lbound_used = true;
+                else
+                    arr->u.id.ubound_used = true;
+            }
+        }
+    }
+
     /* p_abs (zxbparser.py:3545-3552): ABS of an unsigned value is the
      * value itself (redundant); ABS of a numeric constant folds via
      * make_builtin/make_node (builtin.py:74-77). Only the BUILTIN-node
@@ -889,6 +944,22 @@ static AstNode *parse_call_or_array(Parser *p, const char *name, int lineno, boo
                 return NULL;
             }
         }
+
+        /* SymbolARRAYACCESS.__init__ (arrayaccess.py:34-37) sets
+         * self.entry.ref.is_dynamically_accessed = True unconditionally
+         * for EVERY successfully constructed array access — read
+         * (p_arr_access_expr) AND write target (p_let_arr ->
+         * make_array_access, zxbparser.py:1207). It is independent of the
+         * subscript being constant (score(1) still flips it) and of
+         * read/write context, so it is set here — after the dim-count
+         * gate (the Python `return None` paths above never reach the
+         * constructor) and unconditionally (no expr_context gate, unlike
+         * `accessed`). VarTranslator.visit_ARRAYDECL (var_translator.py
+         * :58) reads this OR-ed with lbound_used to decide the
+         * `<mangled>.__LBOUND__` descriptor slot + bound table for a
+         * non-zero-based global array (einar01: score(1 TO 2) accessed
+         * by score(1)/score(2) -> _score.__LBOUND__). */
+        entry->u.id.is_dynamically_accessed = true;
 
         ast_add_child(p->cs, n, entry);
         for (int i = 0; i < arglist->child_count; i++)
