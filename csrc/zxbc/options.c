@@ -48,4 +48,24 @@ void compiler_options_init(CompilerOptions *opts) {
 
     opts->opt_strategy = OPT_STRATEGY_AUTO;
     opts->parse_only = false;
+
+    /* defines / defines_count rely on the memset above (NULL/0), exactly
+     * like disabled_warnings / disabled_warning_count. */
+}
+
+void compiler_split_define(const char *raw, char *scratch,
+                           const char **name_out, const char **val_out) {
+    /* Python: macro = list(i.split("=", 1)); name = macro[0];
+     *         val  = "".join(macro[1:])
+     * i.e. split on the FIRST '=' only; no '=' => val "". */
+    strcpy(scratch, raw);
+    char *eq = strchr(scratch, '=');
+    if (eq) {
+        *eq = '\0';
+        *name_out = scratch;
+        *val_out = eq + 1;
+    } else {
+        *name_out = scratch;
+        *val_out = "";
+    }
 }

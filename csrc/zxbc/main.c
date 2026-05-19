@@ -98,6 +98,27 @@ int main(int argc, char *argv[]) {
         }
     }
 
+    /* User -D/--define defines seeded into the BASIC first pass.
+     * Python: args_config.py:91-96 populates OPTIONS.__DEFINES, which
+     * zxbpp's reset_id_table() (zxbpp.py:106-113) seeds into ID_TABLE
+     * for the first (BASIC) pass. Split on the FIRST '=' (i.split("=",1)).
+     * Byte-critical: gates BASIC-side #ifdef/#ifndef. */
+    for (int di = 0; di < cs.opts.defines_count; di++) {
+        const char *raw = cs.opts.defines[di];
+        /* Heap scratch sized to the arg: Python puts no length cap on
+         * -D, so neither do we (a fixed buffer would silently drop a
+         * long define — the silent-divergence footgun). preproc_define
+         * arena_strdup's name+body, so scratch need only live across
+         * the call. */
+        char *scratch = malloc(strlen(raw) + 1);
+        const char *dname, *dval;
+        if (scratch) {
+            compiler_split_define(raw, scratch, &dname, &dval);
+            preproc_define(&pp, dname, dval, 0, NULL);
+            free(scratch);
+        }
+    }
+
     int pp_rc = preproc_file(&pp, cs.opts.input_filename);
     if (pp_rc != 0 || pp.error_count > 0) {
         /* Python prints no extra trailer on preprocess failure — the

@@ -255,7 +255,14 @@ int zxbc_parse_args(int argc, char **argv, CompilerOptions *opts) {
                 opts->explicit_ = true;
                 break;
             case 'D':
-                /* preprocessor define — will be passed to zxbpp */
+                /* preprocessor define (Python args_parser.py:143-150
+                 * dest=defines action=append): accumulate the raw arg,
+                 * split on first '=' at seed time. Mirrors the
+                 * disable-warning idiom below (raw ya_optarg pointer,
+                 * realloc-grown array). */
+                opts->defines = realloc(opts->defines,
+                    sizeof(char *) * (opts->defines_count + 1));
+                opts->defines[opts->defines_count++] = ya_optarg;
                 break;
             case 'M':
                 opts->memory_map = ya_optarg;

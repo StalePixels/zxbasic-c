@@ -18,6 +18,7 @@
 #include "utils.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* Python str.split("\n"): empty segments preserved; "a\n" -> ["a",""]. */
@@ -635,6 +636,25 @@ int codegen_emit(CompilerState *cs, AstNode *ast) {
     }
     if (cs->print_is_used)
         preproc_define(&ppf, "___PRINT_IS_USED___", "1", 0, NULL);
+
+    /* User -D/--define defines re-seeded for the ASM filter_ pass too.
+     * Python's OPTIONS.__DEFINES (populated by args_config.py:91-96) is
+     * PERSISTENT, so reset_id_table() (zxbpp.py:106-113) re-seeds these
+     * into the cleared ID_TABLE for the ASM pass exactly as for the
+     * BASIC pass. Identical split-on-first-'=' semantics to main.c
+     * (compiler_split_define = Python i.split("=", 1)). */
+    for (int di = 0; di < cs->opts.defines_count; di++) {
+        const char *raw = cs->opts.defines[di];
+        /* Heap scratch sized to the arg (see main.c): Python has no
+         * length cap on -D, so neither do we. */
+        char *scratch = malloc(strlen(raw) + 1);
+        const char *dname, *dval;
+        if (scratch) {
+            compiler_split_define(raw, scratch, &dname, &dval);
+            preproc_define(&ppf, dname, dval, 0, NULL);
+            free(scratch);
+        }
+    }
 
     (void)preproc_string(&ppf, rejoined, cs->opts.input_filename);
 

@@ -84,6 +84,12 @@ typedef struct CompilerOptions {
     char **enabled_warnings;     /* +W codes to enable */
     int enabled_warning_count;
 
+    /* Preprocessor -D/--define raw strings, in order, one per -D
+     * (Python args_parser.py:143-150 dest=defines action=append). Split
+     * on first '=' at seed time, faithful to args_config.py:91-96. */
+    char **defines;
+    int defines_count;
+
     /* Optimization */
     OptStrategy opt_strategy;
 
@@ -113,6 +119,20 @@ typedef struct CompilerOptions {
 
 /* Initialize options with defaults matching Python's config.init() */
 void compiler_options_init(CompilerOptions *opts);
+
+/* Split a raw -D string on the FIRST '=' exactly like Python's
+ * args_config.py:91-96  macro = list(i.split("=", 1));
+ * name = macro[0]; val = "".join(macro[1:]).
+ *
+ *   "FOO"          -> name "FOO",     val ""
+ *   "FOO=BAR=BAZ"  -> name "FOO",     val "BAR=BAZ"
+ *   "=X"           -> name "",        val "X"     (reproduced faithfully)
+ *
+ * `raw` is copied into caller-provided `scratch` (>= strlen(raw)+1) so
+ * the returned `*name_out`/`*val_out` point into `scratch` and remain
+ * valid for the caller's lifetime. */
+void compiler_split_define(const char *raw, char *scratch,
+                           const char **name_out, const char **val_out);
 
 /* ----------------------------------------------------------------
  * Default values (from api/global_.py)
