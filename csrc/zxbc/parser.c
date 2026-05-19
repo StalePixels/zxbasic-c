@@ -6,7 +6,9 @@
  */
 #include "parser.h"
 #include "errmsg.h"
+#include "utils.h"      /* parse_int — same int coercion as the 'org' config arm (args.c:103) */
 
+#include <ctype.h>      /* tolower — Python bool-coercion uses value.lower() (options.py:131) */
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1837,37 +1839,218 @@ static AstNode *parse_statement(Parser *p) {
         return make_nop(p);
     }
     if (match(p, BTOK__PRAGMA)) {
-        /* #pragma NAME = VALUE — set compiler option (matching Python setattr(OPTIONS, name, value))
-         * #pragma push(NAME) / #pragma pop(NAME) — save/restore option */
+        /* #pragma NAME = VALUE — set compiler option.
+         *
+         * Faithful port of zxbparser.py:3237-3245 p_preproc_line_pragma_option:
+         *     try: setattr(OPTIONS, p[2], p[4])
+         *     except UndefinedOptionError:
+         *         errmsg.warning_ignoring_unknown_pragma(p.lineno(2), p[2])
+         *
+         * Semantics established by reading the Python (NOT guessed):
+         *  - The value token is ALWAYS a Python `str`: zxblex.py:505
+         *    t_preproc_INTEGER does NOT int()-convert (regex [0-9]+, raw
+         *    str), t_preproc_STRING strips quotes -> str, the ID arm is a
+         *    str.  So p[4] is a str in every grammar alternative.
+         *  - setattr -> Options.__setattr__ -> __setitem__ (options.py
+         *    :216-239): if NAME is not a registered option key ->
+         *    UndefinedOptionError -> caught -> W300 warning.  NAME match is
+         *    the dict-key match, i.e. CASE-SENSITIVE (verified empirically:
+         *    `#pragma EXPLICIT=true` and `#pragma Org=0` both emit W300).
+         *  - Otherwise Option.value setter (options.py:114-144) coerces the
+         *    str by the option's registered type_:
+         *      * bool option: str -> dict {"false":F,"true":T,"off":F,
+         *        "on":T,"-":F,"+":T,"no":F,"yes":T}[value.lower()].  A
+         *        KeyError (e.g. value "0"/"1") is caught, value stays str,
+         *        then `not isinstance(value,bool)` -> InvalidValueError
+         *        (UNCAUGHT in p_preproc_line_pragma_option -> Python exits 1
+         *        with a traceback; verified: `#pragma explicit=0`).
+         *      * int option: int(value).  ValueError (non-numeric) caught,
+         *        value stays str -> InvalidValueError (uncaught, exit 1).
+         *        The INTEGER token regex is [0-9]+ so only decimal digits.
+         *      * str option: str(value) == value.
+         *  - The registered pragma-settable option set + types is the
+         *    Options registry: src/api/config.py:194-251 (init) plus
+         *    src/arch/z80/backend/main.py:621-633 (org/heap_size/
+         *    heap_address/heap_*_label/headerless, ADD_IF_NOT_DEFINED).
+         *    Names below use the EXACT Python-registered option names.
+         *
+         * InvalidValueError (a known option given a value its registered
+         * type_ rejects) is uncaught in Python -> process exits 1 with a
+         * Python traceback.  A traceback cannot be byte-reproduced in C and
+         * is not the fidelity target (asm / diagnostics / line numbers are);
+         * the observable contract for that path is the non-zero exit.  No
+         * owned fixture exercises it (verified: no `explicit=0`-style
+         * fixture), so emitting a clean parse error here (exit 1, like
+         * Python) is FALSE_POS-safe by construction and matches Python's
+         * exit behaviour for the spec's `explicit=0` probe.
+         *
+         * #pragma push(NAME) / #pragma pop(NAME) keep their prior
+         * behaviour (handled by the trailing line-skip), unchanged. */
+        /* `#pragma push(NAME)` / `pop(NAME)` lex `push`/`pop` as
+         * BTOK__PUSH / BTOK__POP (lexer.c:152-154), never BTOK_ID, so the
+         * BTOK_ID gate selects only the NAME=VALUE form; push/pop fall to
+         * the trailing line-skip exactly as before. */
         if (check(p, BTOK_ID)) {
             const char *opt_name = p->current.sval;
-            advance(p);
+            int name_lineno = p->current.lineno;
+            advance(p);            /* consume NAME (ID) */
             if (match(p, BTOK_EQ)) {
-                /* Parse value: True/False (ID), integer, or string */
-                bool bool_val = false;
-                bool is_bool = false;
-                if (check(p, BTOK_ID)) {
-                    const char *val = p->current.sval;
-                    advance(p);
-                    if (strcasecmp(val, "true") == 0) { bool_val = true; is_bool = true; }
-                    else if (strcasecmp(val, "false") == 0) { bool_val = false; is_bool = true; }
-                } else if (check(p, BTOK_NUMBER)) {
-                    bool_val = (p->current.numval != 0);
-                    is_bool = true;
-                    advance(p);
+            /* The value: INTEGER -> BTOK_NUMBER (sval = raw digits),
+             * STRING -> BTOK_STRC (sval), ID -> BTOK_ID (sval).  In every
+             * case the Python value is a str; mirror with the token's text. */
+            const char *raw = NULL;
+            if (check(p, BTOK_NUMBER) || check(p, BTOK_STRC) || check(p, BTOK_ID)) {
+                raw = p->current.sval;   /* lexer sets sval for all three (lexer.c:778/789/801) */
+                advance(p);
+            }
+
+            if (raw != NULL) {
+                /* --- Type tables: EXACT Python-registered names --------- *
+                 * bool options: config.py EXPLICIT/STRICT/STRICT_BOOL/
+                 *   CHECK_MEMORY/CHECK_ARRAYS/ENABLE_BREAK/CASE_INS/
+                 *   DEFAULT_BYREF/USE_BASIC_LOADER/AUTORUN/FORCE_ASM_BRACKET/
+                 *   ASM_ZXNEXT/EMIT_BACKEND/HIDE_WARNING_CODES, "sinclair";
+                 *   backend "headerless".
+                 * int options: config.py DEBUG(debug_level)/O_LEVEL/
+                 *   ARRAY_BASE/STR_BASE/MAX_SYN_ERRORS/EXPECTED_WARNINGS;
+                 *   backend org/heap_size/heap_address.
+                 * str options: config.py MEMORY_MAP/OUTPUT_FILE_TYPE/
+                 *   INCLUDE_PATH/ARCH/OUTPUT_FILENAME/INPUT_FILENAME/
+                 *   STDERR_FILENAME/PROJECT_FILENAME.
+                 * Registered-but-no-C-field (heap_*_label str, opt_strategy,
+                 * stdin/out/err, __DEFINES dict): still KNOWN to Python, so
+                 * NOT an unknown pragma — accept without warning; no owned
+                 * fixture sets them so there is no observable asm effect. */
+                #define NAME_IS(s) (strcmp(opt_name, (s)) == 0)
+
+                /* Python bool coercion of a str (options.py:121-131),
+                 * value.lower() keyed. Returns 1/0, or -1 if not a key
+                 * (KeyError -> InvalidValueError path). */
+                int bcoerce = -1;
+                {
+                    char lo[16]; size_t i = 0;
+                    for (; raw[i] && i < sizeof(lo) - 1; i++)
+                        lo[i] = (char)tolower((unsigned char)raw[i]);
+                    lo[i] = '\0';
+                    if (!raw[i]) {  /* only short tokens can match a key */
+                        if (!strcmp(lo, "true") || !strcmp(lo, "on") ||
+                            !strcmp(lo, "+")    || !strcmp(lo, "yes")) bcoerce = 1;
+                        else if (!strcmp(lo, "false") || !strcmp(lo, "off") ||
+                                 !strcmp(lo, "-")     || !strcmp(lo, "no")) bcoerce = 0;
+                    }
                 }
-                /* Apply known options */
-                if (is_bool) {
-                    if (strcasecmp(opt_name, "explicit") == 0) p->cs->opts.explicit_ = bool_val;
-                    else if (strcasecmp(opt_name, "strict") == 0) p->cs->opts.strict = bool_val;
-                    else if (strcasecmp(opt_name, "strict_bool") == 0) p->cs->opts.strict_bool = bool_val;
-                    else if (strcasecmp(opt_name, "array_check") == 0) p->cs->opts.array_check = bool_val;
-                    else if (strcasecmp(opt_name, "memory_check") == 0) p->cs->opts.memory_check = bool_val;
-                    else if (strcasecmp(opt_name, "sinclair") == 0) p->cs->opts.sinclair = bool_val;
+
+                bool is_bool_opt = false, is_int_opt = false, is_str_opt = false;
+                bool known = true;
+
+                if      (NAME_IS("explicit"))           { is_bool_opt = true; }
+                else if (NAME_IS("strict"))             { is_bool_opt = true; }
+                else if (NAME_IS("strict_bool"))        { is_bool_opt = true; }
+                else if (NAME_IS("memory_check"))       { is_bool_opt = true; }
+                else if (NAME_IS("array_check"))        { is_bool_opt = true; }
+                else if (NAME_IS("enable_break"))       { is_bool_opt = true; }
+                else if (NAME_IS("case_insensitive"))   { is_bool_opt = true; }
+                else if (NAME_IS("default_byref"))      { is_bool_opt = true; }
+                else if (NAME_IS("use_basic_loader"))   { is_bool_opt = true; }
+                else if (NAME_IS("autorun"))            { is_bool_opt = true; }
+                else if (NAME_IS("force_asm_brackets")) { is_bool_opt = true; }
+                else if (NAME_IS("zxnext"))             { is_bool_opt = true; }
+                else if (NAME_IS("emit_backend"))       { is_bool_opt = true; }
+                else if (NAME_IS("hide_warning_codes")) { is_bool_opt = true; }
+                else if (NAME_IS("sinclair"))           { is_bool_opt = true; }
+                else if (NAME_IS("headerless"))         { is_bool_opt = true; }
+                else if (NAME_IS("debug_level"))        { is_int_opt = true; }
+                else if (NAME_IS("optimization_level")) { is_int_opt = true; }
+                else if (NAME_IS("array_base"))         { is_int_opt = true; }
+                else if (NAME_IS("string_base"))        { is_int_opt = true; }
+                else if (NAME_IS("max_syntax_errors"))  { is_int_opt = true; }
+                else if (NAME_IS("expected_warnings"))  { is_int_opt = true; }
+                else if (NAME_IS("org"))                { is_int_opt = true; }
+                else if (NAME_IS("heap_size"))          { is_int_opt = true; }
+                else if (NAME_IS("heap_address"))       { is_int_opt = true; }
+                else if (NAME_IS("memory_map"))         { is_str_opt = true; }
+                else if (NAME_IS("output_file_type"))   { is_str_opt = true; }
+                else if (NAME_IS("include_path"))       { is_str_opt = true; }
+                else if (NAME_IS("architecture"))       { is_str_opt = true; }
+                else if (NAME_IS("output_filename"))    { is_str_opt = true; }
+                else if (NAME_IS("input_filename"))     { is_str_opt = true; }
+                else if (NAME_IS("stderr_filename"))    { is_str_opt = true; }
+                else if (NAME_IS("project_filename"))   { is_str_opt = true; }
+                /* Registered, known to Python, but no observable C field:
+                 * accept silently (NOT an unknown pragma). */
+                else if (NAME_IS("heap_start_label") || NAME_IS("heap_size_label") ||
+                         NAME_IS("opt_strategy") || NAME_IS("stdin") ||
+                         NAME_IS("stdout") || NAME_IS("stderr")) { /* no-op */ }
+                else { known = false; }
+
+                if (!known) {
+                    /* Python: UndefinedOptionError -> warning_ignoring_unknown_pragma
+                     * (errmsg.py:188) at p.lineno(2) (the NAME token line). */
+                    warn_unknown_pragma(p->cs, name_lineno, opt_name);
+                } else if (is_bool_opt) {
+                    if (bcoerce < 0) {
+                        /* Python InvalidValueError (uncaught -> exit 1). */
+                        zxbc_error(p->cs, name_lineno,
+                                   "Invalid value '%s' for option '%s'. Value type must be '<class 'bool'>'",
+                                   raw, opt_name);
+                    } else {
+                        bool b = (bcoerce == 1);
+                        if      (NAME_IS("explicit"))           p->cs->opts.explicit_ = b;
+                        else if (NAME_IS("strict"))             p->cs->opts.strict = b;
+                        else if (NAME_IS("strict_bool"))        p->cs->opts.strict_bool = b;
+                        else if (NAME_IS("memory_check"))       p->cs->opts.memory_check = b;
+                        else if (NAME_IS("array_check"))        p->cs->opts.array_check = b;
+                        else if (NAME_IS("enable_break"))       p->cs->opts.enable_break = b;
+                        else if (NAME_IS("case_insensitive"))   p->cs->opts.case_insensitive = b;
+                        else if (NAME_IS("default_byref"))      p->cs->opts.default_byref = b;
+                        else if (NAME_IS("use_basic_loader"))   p->cs->opts.use_basic_loader = b;
+                        else if (NAME_IS("autorun"))            p->cs->opts.autorun = b;
+                        else if (NAME_IS("force_asm_brackets")) p->cs->opts.force_asm_brackets = b;
+                        else if (NAME_IS("zxnext"))             p->cs->opts.zxnext = b;
+                        else if (NAME_IS("emit_backend"))       p->cs->opts.emit_backend = b;
+                        else if (NAME_IS("hide_warning_codes")) p->cs->opts.hide_warning_codes = b;
+                        else if (NAME_IS("sinclair"))           p->cs->opts.sinclair = b;
+                        else if (NAME_IS("headerless"))         p->cs->opts.headerless = b;
+                    }
+                } else if (is_int_opt) {
+                    /* Python int(str): all-decimal-digits per the INTEGER
+                     * regex; a non-numeric str -> ValueError -> uncaught
+                     * InvalidValueError -> exit 1.  parse_int mirrors the
+                     * 'org' config arm (args.c:103). */
+                    int iv = 0;
+                    if (!parse_int(raw, &iv)) {
+                        zxbc_error(p->cs, name_lineno,
+                                   "Invalid value '%s' for option '%s'. Value type must be '<class 'int'>'",
+                                   raw, opt_name);
+                    } else {
+                        if      (NAME_IS("debug_level"))        p->cs->opts.debug_level = iv;
+                        else if (NAME_IS("optimization_level")) p->cs->opts.optimization_level = iv;
+                        else if (NAME_IS("array_base"))         p->cs->opts.array_base = iv;
+                        else if (NAME_IS("string_base"))        p->cs->opts.string_base = iv;
+                        else if (NAME_IS("max_syntax_errors"))  p->cs->opts.max_syntax_errors = iv;
+                        else if (NAME_IS("expected_warnings"))  p->cs->opts.expected_warnings = iv;
+                        else if (NAME_IS("org"))                p->cs->opts.org = iv;
+                        else if (NAME_IS("heap_size"))          p->cs->opts.heap_size = iv;
+                        else if (NAME_IS("heap_address"))       p->cs->opts.heap_address = iv;
+                    }
+                } else if (is_str_opt) {
+                    char *sv = arena_strdup(&p->cs->arena, raw);
+                    if      (NAME_IS("memory_map"))       p->cs->opts.memory_map = sv;
+                    else if (NAME_IS("output_file_type")) p->cs->opts.output_file_type = sv;
+                    else if (NAME_IS("include_path"))     p->cs->opts.include_path = sv;
+                    else if (NAME_IS("architecture"))     p->cs->opts.architecture = sv;
+                    else if (NAME_IS("output_filename"))  p->cs->opts.output_filename = sv;
+                    else if (NAME_IS("input_filename"))   p->cs->opts.input_filename = sv;
+                    else if (NAME_IS("stderr_filename"))  p->cs->opts.stderr_filename = sv;
+                    else if (NAME_IS("project_filename")) p->cs->opts.project_filename = sv;
                 }
+
+                #undef NAME_IS
+            }
             }
         }
-        /* Skip any remaining tokens on this line */
+        /* Skip any remaining tokens on this line (also covers
+         * #pragma push(NAME) / #pragma pop(NAME), unchanged). */
         while (!check(p, BTOK_NEWLINE) && !check(p, BTOK_EOF)) advance(p);
         return make_nop(p);
     }
