@@ -318,7 +318,11 @@ static int s_log2(long x) { int n = 0; while (x > 1) { x >>= 1; n++; } return n;
 #define RL_PLOADF     ZXBC_NAMESPACE ".__PLOADF"  /* core.py:104 */
 #define RL_PISTORE16  ZXBC_NAMESPACE ".__PISTORE16" /* core.py:99 */
 #define RL_PISTORE32  ZXBC_NAMESPACE ".__PISTORE32" /* core.py:100 */
+#define RL_PISTORE_STR  ZXBC_NAMESPACE ".__PISTORE_STR"  /* core.py:102 */
+#define RL_PISTORE_STR2 ZXBC_NAMESPACE ".__PISTORE_STR2" /* core.py:103 */
 #define RL_PSTORE32   ZXBC_NAMESPACE ".__PSTORE32"  /* core.py:107 */
+#define RL_PSTORE_STR  ZXBC_NAMESPACE ".__PSTORE_STR"   /* core.py:108 */
+#define RL_PSTORE_STR2 ZXBC_NAMESPACE ".__PSTORE_STR2"  /* core.py:109 */
 #define RL_ILOAD32    ZXBC_NAMESPACE ".__ILOAD32"
 #define RL_STORE32    ZXBC_NAMESPACE ".__STORE32"
 #define RL_ISTORE32   ZXBC_NAMESPACE ".__ISTORE32"
@@ -577,7 +581,11 @@ static const char *s_required_module(const char *label) {
     if (strcmp(label, RL_PLOADF)     == 0) return "ploadf.asm"; /* core.py:233 */
     if (strcmp(label, RL_PISTORE16)  == 0) return "istore16.asm"; /* core.py:228 */
     if (strcmp(label, RL_PISTORE32)  == 0) return "pistore32.asm"; /* core.py:229 */
+    if (strcmp(label, RL_PISTORE_STR)  == 0) return "storestr.asm";  /* core.py:231 */
+    if (strcmp(label, RL_PISTORE_STR2) == 0) return "storestr2.asm"; /* core.py:232 */
     if (strcmp(label, RL_PSTORE32)   == 0) return "pstore32.asm"; /* core.py:236 */
+    if (strcmp(label, RL_PSTORE_STR)  == 0) return "pstorestr.asm";  /* core.py:237 */
+    if (strcmp(label, RL_PSTORE_STR2) == 0) return "pstorestr2.asm"; /* core.py:238 */
     if (strcmp(label, RL_ILOAD32)    == 0) return "iload32.asm";
     if (strcmp(label, RL_STORE32)    == 0) return "store32.asm";
     if (strcmp(label, RL_ISTORE32)   == 0) return "store32.asm";
@@ -2813,6 +2821,49 @@ static StrVec emit_pstore32(Backend *b, Quad *q) {
     return out;
 }
 
+/* _pstorestr (_pload.py:416-475): verbatim port. Stores a STRING value
+ * (2nd operand) into a local/param string slot at offset (1st operand).
+ * Note: STRINGS are 16-bit pointers, but the heap-aware copy is dispatched
+ * via PSTORE_STR / PSTORE_STR2 (immediate / from-heap value) and their
+ * indirect (PISTORE_STR / PISTORE_STR2) twins when the offset is '*'. */
+static StrVec emit_pstorestr(Backend *b, Quad *q) {
+    StrVec out = sv_new();
+    /* 2nd operand first (must go into DE / onto stack-pop). */
+    const char *value = q_ins(q, 2);
+    bool v_indirect = (value[0] == '*');
+    if (v_indirect) value++;
+    bool temporal = false;
+    if (value[0] == '_') {
+        sv_pushf(b, &out, "ld de, (%s)", value);
+        if (v_indirect)
+            sv_push(b, &out, s_runtime_call(b, RL_LOAD_DE_DE));
+    } else if (value[0] == '#') {
+        sv_pushf(b, &out, "ld de, %s", value + 1);
+    } else {
+        sv_push(b, &out, "pop de");
+        temporal = (value[0] != '$');
+        if (v_indirect)
+            sv_push(b, &out, s_runtime_call(b, RL_LOAD_DE_DE));
+    }
+
+    /* 1st operand: offset, possibly '*' indirect. */
+    const char *offset = q_ins(q, 1);
+    bool indirect = (offset[0] == '*');
+    if (indirect) offset++;
+    long i = s_int_val(offset);
+    if (i >= 0) i += 4;  /* Return Address + "push IX" */
+    sv_pushf(b, &out, "ld bc, %ld", i);
+
+    if (!temporal) {
+        sv_push(b, &out, s_runtime_call(b,
+            indirect ? RL_PISTORE_STR : RL_PSTORE_STR));
+    } else {
+        sv_push(b, &out, s_runtime_call(b,
+            indirect ? RL_PISTORE_STR2 : RL_PSTORE_STR2));
+    }
+    return out;
+}
+
 /* ====================================================================
  * Array element access — _array.py / _parray.py.
  * __ARRAY computes the element address (HL) from the array base (in HL)
@@ -3185,6 +3236,55 @@ static StrVec emit_pastore32(Backend *b, Quad *q) {
         sv_push(b, &out, "pop de");
     }
     sv_push(b, &out, s_runtime_call(b, RL_STORE32));
+    return out;
+}
+
+/* _pastorestr (_parray.py:285-332): verbatim port. Stores a STRING value
+ * (2nd operand) into the array element at the IX-relative array offset
+ * (1st operand). Uses __ARRAY/__ARRAY_PTR to compute the element address
+ * (in HL), then __STORE_STR / __STORE_STR2 (heap-aware) to copy the
+ * string. Allows immediate-string ('#') as the 2nd operand. */
+static StrVec emit_pastorestr(Backend *b, Quad *q) {
+    StrVec out = sv_new();
+    s_parray_addr(b, &out, q_ins(q, 1));
+
+    const char *value = q_ins(q, 2);
+    bool v_indirect = (value[0] == '*');
+    if (v_indirect) value++;
+    bool immediate = (value[0] == '#');
+    if (immediate) value++;
+    bool temporal = !immediate && (value[0] != '$');
+    if (temporal) value++;
+
+    if (value[0] == '_') {
+        if (v_indirect) {
+            if (immediate)
+                sv_pushf(b, &out, "ld de, (%s)", value);
+            else {
+                sv_pushf(b, &out, "ld de, (%s)", value);
+                sv_push(b, &out, s_runtime_call(b, RL_LOAD_DE_DE));
+            }
+        } else {
+            if (immediate)
+                sv_pushf(b, &out, "ld de, %s", value);
+            else
+                sv_pushf(b, &out, "ld de, (%s)", value);
+        }
+    } else {
+        if (immediate)
+            sv_pushf(b, &out, "ld de, %s", value);
+        else
+            sv_push(b, &out, "pop de");
+
+        if (v_indirect)
+            sv_push(b, &out, s_runtime_call(b, RL_LOAD_DE_DE));
+    }
+
+    if (!temporal)
+        sv_push(b, &out, s_runtime_call(b, RL_STORE_STR));
+    else
+        sv_push(b, &out, s_runtime_call(b, RL_STORE_STR2));
+
     return out;
 }
 
@@ -5440,6 +5540,8 @@ static StrVec quad_emit(Backend *b, Quad *q) {
     if (strcmp(I, "pstorei8")  == 0 || strcmp(I, "pstoreu8")  == 0) return emit_pstore8(b, q);
     if (strcmp(I, "pstorei16") == 0 || strcmp(I, "pstoreu16") == 0) return emit_pstore16(b, q);
     if (strcmp(I, "pstorei32") == 0 || strcmp(I, "pstoreu32") == 0) return emit_pstore32(b, q);
+    if (strcmp(I, "pstorestr") == 0) return emit_pstorestr(b, q);
+    if (strcmp(I, "pastorestr")== 0) return emit_pastorestr(b, q);
 
     /* Array element access (main.py:430-478,504-528,585 ICInfo). f16
      * array load maps to _aload32 (main.py:476); astore/pastore f16 use
