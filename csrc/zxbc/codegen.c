@@ -767,7 +767,9 @@ int codegen_emit(CompilerState *cs, AstNode *ast) {
          * `elif not options.parse_only`. */
         const char *asm_text = emit_output_str(final, a);
         if (zxbc_asm_to_binary(asm_text, cs->opts.output_filename,
-                               cs->opts.output_file_type) != 0)
+                               cs->opts.output_file_type,
+                               cs->opts.use_basic_loader,
+                               cs->opts.autorun) != 0)
             rc = 5;
     }
 
