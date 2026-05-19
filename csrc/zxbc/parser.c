@@ -456,6 +456,16 @@ static AstNode *parse_builtin_func(Parser *p, const char *fname, BTokenType kw) 
         }
     }
 
+    /* p_expr_int (zxbparser.py:3540-3542): INT is NOT a builtin — it is
+     * exactly make_typecast(TYPE.long_, p[2], lineno). Build the
+     * TYPECAST so codegen runs the faithful long conversion (the
+     * BUILTIN-node path would mis-emit, e.g. cast_i32tou32/ltee8). */
+    if (kw == BTOK_INT) {
+        return make_typecast(p->cs,
+                             p->cs->symbol_table->basic_types[TYPE_long],
+                             arg, lineno);
+    }
+
     /* p_abs (zxbparser.py:3545-3552): ABS of an unsigned value is the
      * value itself (redundant); ABS of a numeric constant folds via
      * make_builtin/make_node (builtin.py:74-77). Only the BUILTIN-node
