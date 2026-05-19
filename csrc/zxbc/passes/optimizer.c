@@ -511,9 +511,9 @@ static void collect_side_effects(CompilerState *cs, AstNode *node,
         const char *fn = node->u.builtin.fname;
         if (fn && (strcmp(fn, "IN") == 0 || strcmp(fn, "RND") == 0 ||
                    strcmp(fn, "USR") == 0)) {
-            /* node_.discard_result = True — no discard_result field on
-             * AST_BUILTIN in the C AST (codegen-only, Phase 5;
-             * meter-neutral here). Keep the node. */
+            /* node_.discard_result = True (optimize.py:335) — consumed
+             * by visit_BUILTIN (translator.py:154-155). */
+            node->u.builtin.discard_result = true;
             vec_push(*out, node);
         }
     }

@@ -236,6 +236,12 @@ struct AstNode {
         struct {
             char *fname;      /* builtin function name (e.g. "ABS", "LEN") */
             char *func;       /* backend function name */
+            /* SymbolBUILTIN.discard_result (builtin.py:25). Set True by
+             * the optimizer's visit_LET side-effect extraction for
+             * IN/RND/USR whose result is unused (optimize.py:335);
+             * visit_BUILTIN then ic_fparam's the discarded result
+             * (translator.py:154-155). */
+            bool discard_result;
         } builtin;
 
         /* AST_FUNCDECL: child[0]=ID, child[1]=PARAMLIST, child[2]=body.

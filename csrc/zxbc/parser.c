@@ -1467,13 +1467,24 @@ static AstNode *parse_statement(Parser *p) {
         return s;
     }
 
-    /* OUT port, val */
+    /* OUT port, val  (zxbparser.py:2211-2216):
+     *   make_sentence(ln,"OUT",
+     *     make_typecast(TYPE.uinteger,p[2],p.lineno(3)),
+     *     make_typecast(TYPE.ubyte,p[4],p.lineno(4))) */
     if (match(p, BTOK_OUT)) {
         int ln = p->previous.lineno;
         AstNode *s = make_sentence_node(p, "OUT", ln);
         AstNode *port = parse_expression(p, PREC_NONE + 1);
         consume(p, BTOK_COMMA, "Expected ',' after OUT port");
+        int comma_ln = p->previous.lineno;
         AstNode *val = parse_expression(p, PREC_NONE + 1);
+        int val_ln = p->previous.lineno;
+        port = make_typecast(p->cs,
+                             p->cs->symbol_table->basic_types[TYPE_uinteger],
+                             port, comma_ln);
+        val = make_typecast(p->cs,
+                            p->cs->symbol_table->basic_types[TYPE_ubyte],
+                            val, val_ln);
         if (port) ast_add_child(p->cs, s, port);
         if (val) ast_add_child(p->cs, s, val);
         return s;

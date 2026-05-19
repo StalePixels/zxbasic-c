@@ -437,6 +437,29 @@ static int s_log2(long x) { int n = 0; while (x > 1) { x >>= 1; n++; } return n;
 #define RL_BEEP     ZXBC_NAMESPACE ".BEEP"
 #define RL_BEEPER   ZXBC_NAMESPACE ".__BEEPER"
 
+/* Math-function RuntimeLabels (math.py:12-29). Note ACS/ASN/SQR map to
+ * ACOS/ASIN/SQRT label spellings; SGN* carry the double-underscore. */
+#define RL_ACS    ZXBC_NAMESPACE ".ACOS"
+#define RL_ASN    ZXBC_NAMESPACE ".ASIN"
+#define RL_ATN    ZXBC_NAMESPACE ".ATAN"
+#define RL_COS    ZXBC_NAMESPACE ".COS"
+#define RL_SIN    ZXBC_NAMESPACE ".SIN"
+#define RL_TAN    ZXBC_NAMESPACE ".TAN"
+#define RL_EXP    ZXBC_NAMESPACE ".EXP"
+#define RL_LN     ZXBC_NAMESPACE ".LN"
+#define RL_SQR    ZXBC_NAMESPACE ".SQRT"
+#define RL_SGNI8  ZXBC_NAMESPACE ".__SGNI8"
+#define RL_SGNU8  ZXBC_NAMESPACE ".__SGNU8"
+#define RL_SGNI16 ZXBC_NAMESPACE ".__SGNI16"
+#define RL_SGNU16 ZXBC_NAMESPACE ".__SGNU16"
+#define RL_SGNI32 ZXBC_NAMESPACE ".__SGNI32"
+#define RL_SGNU32 ZXBC_NAMESPACE ".__SGNU32"
+#define RL_SGNF16 ZXBC_NAMESPACE ".__SGNF16"
+#define RL_SGNF   ZXBC_NAMESPACE ".__SGNF"
+
+/* INKEY (io.py:43,94). */
+#define RL_INKEY  ZXBC_NAMESPACE ".INKEY"
+
 /* runtime_call (common.py:156-161): REQUIRES.add(LABEL_REQUIRED_MODULES
  * [label]) if present; returns "call {label}". The label->module map is
  * runtime/core.py:160-225 (only the S5.3-reachable labels). */
@@ -590,6 +613,25 @@ static const char *s_required_module(const char *label) {
     /* BEEP (io.py:111-112). */
     if (strcmp(label, RL_BEEP)       == 0) return "io/sound/beep.asm";
     if (strcmp(label, RL_BEEPER)     == 0) return "io/sound/beeper.asm";
+    /* Math functions (math.py:33-50). */
+    if (strcmp(label, RL_ACS)        == 0) return "math/acos.asm";
+    if (strcmp(label, RL_ASN)        == 0) return "math/asin.asm";
+    if (strcmp(label, RL_ATN)        == 0) return "math/atan.asm";
+    if (strcmp(label, RL_COS)        == 0) return "math/cos.asm";
+    if (strcmp(label, RL_SIN)        == 0) return "math/sin.asm";
+    if (strcmp(label, RL_TAN)        == 0) return "math/tan.asm";
+    if (strcmp(label, RL_EXP)        == 0) return "math/exp.asm";
+    if (strcmp(label, RL_LN)         == 0) return "math/logn.asm";
+    if (strcmp(label, RL_SQR)        == 0) return "math/sqrt.asm";
+    if (strcmp(label, RL_SGNI8)      == 0) return "sgni8.asm";
+    if (strcmp(label, RL_SGNU8)      == 0) return "sgnu8.asm";
+    if (strcmp(label, RL_SGNI16)     == 0) return "sgni16.asm";
+    if (strcmp(label, RL_SGNU16)     == 0) return "sgnu16.asm";
+    if (strcmp(label, RL_SGNI32)     == 0) return "sgni32.asm";
+    if (strcmp(label, RL_SGNU32)     == 0) return "sgnu32.asm";
+    if (strcmp(label, RL_SGNF16)     == 0) return "sgnf16.asm";
+    if (strcmp(label, RL_SGNF)       == 0) return "sgnf.asm";
+    if (strcmp(label, RL_INKEY)      == 0) return "io/keyboard/inkey.asm";
     return NULL;
 }
 
@@ -2120,6 +2162,10 @@ static StrVec emit_paramf16(Backend *b, Quad *q) {
     sv_push(b, &out, "push hl");
     return out;
 }
+/* Fixed16.fparamf16 (_f16.py:511-518): get_oper only (no push). */
+static StrVec emit_fparamf16(Backend *b, Quad *q) {
+    return fixed16_get_oper(b, q_ins(q, 1), NULL, false, false);
+}
 static StrVec emit_retf16(Backend *b, Quad *q) {
     StrVec out = fixed16_get_oper(b, q_ins(q, 1), NULL, false, false);
     sv_push(b, &out, "#pragma opt require hl,de");
@@ -2360,6 +2406,35 @@ static StrVec emit_storef(Backend *b, Quad *q) {
 static StrVec emit_paramf(Backend *b, Quad *q) {
     StrVec out = float_get_oper(b, q_ins(q, 1), NULL);
     float_fpush(b, &out);
+    return out;
+}
+/* Float.fparamf (_float.py:450-457): get_oper only — a __FASTCALL__
+ * float param is loaded into A/ED/CB, not pushed. */
+static StrVec emit_fparamf(Backend *b, Quad *q) {
+    return float_get_oper(b, q_ins(q, 1), NULL);
+}
+
+/* _in (generic.py:328-335): Bits16.get_oper(ins[1]); ld b,h; ld c,l;
+ * in a,(c); push af. */
+static StrVec emit_in(Backend *b, Quad *q) {
+    StrVec out = bits16_get_oper(b, q_ins(q, 1), NULL, false);
+    sv_push(b, &out, "ld b, h");
+    sv_push(b, &out, "ld c, l");
+    sv_push(b, &out, "in a, (c)");
+    sv_push(b, &out, "push af");
+    return out;
+}
+
+/* _out (generic.py:317-325): Bits8.get_oper(ins[2]); extend
+ * Bits16.get_oper(ins[1]); ld b,h; ld c,l; out (c),a. */
+static StrVec emit_out(Backend *b, Quad *q) {
+    StrVec out = bits8_get_oper(b, q_ins(q, 2), NULL, false);
+    StrVec p = bits16_get_oper(b, q_ins(q, 1), NULL, false);
+    for (int i = 0; i < p.len; i++) vec_push(out, p.data[i]);
+    vec_free(p);
+    sv_push(b, &out, "ld b, h");
+    sv_push(b, &out, "ld c, l");
+    sv_push(b, &out, "out (c), a");
     return out;
 }
 static StrVec emit_retf(Backend *b, Quad *q) {
@@ -3921,6 +3996,10 @@ static StrVec quad_emit(Backend *b, Quad *q) {
     if (strcmp(I, "fparami8")  == 0 || strcmp(I, "fparamu8")  == 0) return emit_fparam8(b, q);
     if (strcmp(I, "fparami16") == 0 || strcmp(I, "fparamu16") == 0) return emit_fparam16(b, q);
     if (strcmp(I, "fparami32") == 0 || strcmp(I, "fparamu32") == 0) return emit_fparam32(b, q);
+    if (strcmp(I, "fparamf16") == 0) return emit_fparamf16(b, q);
+    if (strcmp(I, "fparamf")   == 0) return emit_fparamf(b, q);
+    if (strcmp(I, "in")        == 0) return emit_in(b, q);
+    if (strcmp(I, "out")       == 0) return emit_out(b, q);
     if (strcmp(I, "reti8")    == 0 || strcmp(I, "retu8")    == 0) return emit_ret8(b, q);
     if (strcmp(I, "reti16")   == 0 || strcmp(I, "retu16")   == 0) return emit_ret16(b, q);
     if (strcmp(I, "reti32")   == 0 || strcmp(I, "retu32")   == 0) return emit_ret32(b, q);

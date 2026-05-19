@@ -499,6 +499,16 @@ static void tr_ic_load(Translator *tr, const TypeInfo *type_,
     const char *args[2] = { t1, t2 };
     tr_emit_quad(tr, base, 2, args);
 }
+/* ic_in (translator_inst_visitor.py:127-128): emit("in", t). */
+static void tr_ic_in(Translator *tr, const char *t) {
+    const char *args[1] = { t };
+    tr_emit_quad(tr, "in", 1, args);
+}
+/* ic_out (translator_inst_visitor.py:196-197): emit("out", t1, t2). */
+static void tr_ic_out(Translator *tr, const char *t1, const char *t2) {
+    const char *args[2] = { t1, t2 };
+    tr_emit_quad(tr, "out", 2, args);
+}
 /* S5.7d — ic_paddr / ic_pload / ic_pstore (translator_inst_visitor.py
  * :201-202, :214-215, :218-219). The inside-function parameter/local
  * IX-relative address+load+store surface. Now landed with their first
@@ -1102,6 +1112,103 @@ static AstNode *tr_visit_beep(Visitor *v, AstNode *node) {
     if (c0) visitor_visit(v, c0);
     tr_ic_fparam(tr, float_t, (c0 && c0->t) ? c0->t : "0");
     tr_runtime_call(tr, ".core.BEEP", 0);
+    return node;
+}
+
+/* visit_OUT (translator.py:808-811): yield child[0]; yield child[1];
+ * ic_out(child[0].t, child[1].t). Parser make_typecast'd port->uinteger,
+ * val->ubyte (zxbparser.py:2210-2216). */
+static AstNode *tr_visit_out(Visitor *v, AstNode *node) {
+    Translator *tr = v->ctx;
+    AstNode *port = node->child_count > 0 ? node->children[0] : NULL;
+    AstNode *val  = node->child_count > 1 ? node->children[1] : NULL;
+    if (port) visitor_visit(v, port);
+    if (val)  visitor_visit(v, val);
+    tr_ic_out(tr, (port && port->t) ? port->t : "0",
+                  (val && val->t) ? val->t : "0");
+    return node;
+}
+
+/* BuiltinTranslator math family (builtin_translator.py:72-119): each is
+ * ic_fparam(operand.type_, operand.t); runtime_call(LABEL, node.size).
+ * SGN (builtin_translator.py:104-117) keys the label by the operand's
+ * TSUFFIX. Returns 1 if fname handled, 0 if not (caller falls through to
+ * the not-yet-ported set, mirroring "no IC" rather than Python's raise —
+ * incremental-port discipline; the remaining builtins land in 4b+). */
+static int tr_builtin_dispatch(Visitor *v, AstNode *node) {
+    Translator *tr = v->ctx;
+    const char *fn = node->u.builtin.fname;
+    AstNode *op = node->child_count > 0 ? node->children[0] : NULL;
+    int nsz = node->type_ ? type_size(node->type_) : 0;
+    const char *ot = (op && op->t) ? op->t : "0";
+
+    /* RND (builtin_translator.py:60-61): zeroary; runtime_call(RND,
+     * Type.float_.size). */
+    if (strcmp(fn, "RND") == 0) {
+        tr_runtime_call(tr, ".core.RND",
+                        type_size(tr->cs->symbol_table->basic_types[TYPE_float]));
+        return 1;
+    }
+
+    /* SIN/COS/TAN/ASN/ACS/ATN/EXP/LN/SQR (builtin_translator.py:72-119). */
+    struct { const char *fn, *lbl; } M[] = {
+        {"SIN",".core.SIN"}, {"COS",".core.COS"}, {"TAN",".core.TAN"},
+        {"ASN",".core.ASIN"}, {"ACS",".core.ACOS"}, {"ATN",".core.ATAN"},
+        {"EXP",".core.EXP"}, {"LN",".core.LN"}, {"SQR",".core.SQRT"},
+    };
+    for (size_t i = 0; i < sizeof(M)/sizeof(M[0]); i++) {
+        if (strcmp(fn, M[i].fn) == 0) {
+            tr_ic_fparam(tr, op ? op->type_ : NULL, ot);
+            tr_runtime_call(tr, M[i].lbl, nsz);
+            return 1;
+        }
+    }
+
+    /* SGN (builtin_translator.py:104-117): label keyed by operand TSUFFIX. */
+    if (strcmp(fn, "SGN") == 0) {
+        const char *s = tr_tsuffix(op ? op->type_ : NULL);
+        tr_ic_fparam(tr, op ? op->type_ : NULL, ot);
+        const char *lbl =
+            strcmp(s,"i8")==0  ? ".core.__SGNI8"  :
+            strcmp(s,"u8")==0  ? ".core.__SGNU8"  :
+            strcmp(s,"i16")==0 ? ".core.__SGNI16" :
+            strcmp(s,"u16")==0 ? ".core.__SGNU16" :
+            strcmp(s,"i32")==0 ? ".core.__SGNI32" :
+            strcmp(s,"u32")==0 ? ".core.__SGNU32" :
+            strcmp(s,"f16")==0 ? ".core.__SGNF16" :
+                                 ".core.__SGNF";
+        tr_runtime_call(tr, lbl, nsz);
+        return 1;
+    }
+
+    /* IN (builtin_translator.py:26-27): ic_in(children[0].t). */
+    if (strcmp(fn, "IN") == 0) {
+        tr_ic_in(tr, ot);
+        return 1;
+    }
+
+    /* INKEY (builtin_translator.py:23-24): zeroary; runtime_call(INKEY,
+     * Type.string.size). */
+    if (strcmp(fn, "INKEY") == 0) {
+        tr_runtime_call(tr, ".core.INKEY",
+                        type_size(tr->cs->symbol_table->basic_types[TYPE_string]));
+        return 1;
+    }
+
+    (void)v;
+    return 0;  /* not-yet-ported builtin — see 4c+ */
+}
+
+/* visit_BUILTIN (translator.py:150-158): yield node.operand; dispatch to
+ * visit_<fname>; if discard_result -> ic_fparam(node.type_, new_t()). */
+static AstNode *tr_visit_builtin(Visitor *v, AstNode *node) {
+    Translator *tr = v->ctx;
+    AstNode *op = node->child_count > 0 ? node->children[0] : NULL;
+    if (op) visitor_visit(v, op);          /* yield node.operand */
+    if (tr_builtin_dispatch(v, node)) {
+        if (node->u.builtin.discard_result)
+            tr_ic_fparam(tr, node->type_, compiler_new_temp(tr->cs));
+    }
     return node;
 }
 
@@ -2327,6 +2434,8 @@ static void tr_register_handlers(Visitor *v) {
      * tag nodes. */
     visitor_on_tag(v, AST_CALL, tr_visit_call);
     visitor_on_tag(v, AST_FUNCCALL, tr_visit_funccall);
+    /* visit_BUILTIN (translator.py:150-158). */
+    visitor_on_tag(v, AST_BUILTIN, tr_visit_builtin);
     visitor_on_tag(v, AST_ARGLIST, tr_visit_arglist);
     visitor_on_tag(v, AST_ARGUMENT, tr_visit_argument);
     visitor_on_sentence(v, "CALL", tr_visit_call);
@@ -2375,6 +2484,8 @@ static void tr_register_handlers(Visitor *v) {
     visitor_on_sentence(v, "ITALIC", tr_visit_attr_sentence);
     /* visit_BEEP (translator.py:891-902). */
     visitor_on_sentence(v, "BEEP", tr_visit_beep);
+    /* visit_OUT (translator.py:808-811). */
+    visitor_on_sentence(v, "OUT", tr_visit_out);
     visitor_on_sentence(v, "EXIT_DO", tr_visit_exit_do);
     visitor_on_sentence(v, "EXIT_WHILE", tr_visit_exit_while);
     visitor_on_sentence(v, "EXIT_FOR", tr_visit_exit_for);
