@@ -434,6 +434,10 @@ static int s_log2(long x) { int n = 0; while (x > 1) { x >>= 1; n++; } return n;
  * double-underscore; PAUSE does (misc.py:14 -> .core.__PAUSE). */
 #define RL_CLS         ZXBC_NAMESPACE ".CLS"
 #define RL_BORDER      ZXBC_NAMESPACE ".BORDER"
+/* SAVE/LOAD/VERIFY RuntimeLabels (io.py:62-63). NAMESPACE == .core; NO
+ * double-underscore mangle (same convention as CLS/BORDER). */
+#define RL_LOAD_CODE   ZXBC_NAMESPACE ".LOAD_CODE"
+#define RL_SAVE_CODE   ZXBC_NAMESPACE ".SAVE_CODE"
 #define RL_PAUSE       ZXBC_NAMESPACE ".__PAUSE"
 #define RL_RANDOMIZE   ZXBC_NAMESPACE ".RANDOMIZE"
 #define RL_RND         ZXBC_NAMESPACE ".RND"
@@ -633,6 +637,9 @@ static const char *s_required_module(const char *label) {
     /* Simple statements (io.py:71,89 / misc.py:23 / random.py:16). */
     if (strcmp(label, RL_CLS)        == 0) return "cls.asm";
     if (strcmp(label, RL_BORDER)     == 0) return "border.asm";
+    /* SAVE/LOAD/VERIFY (io.py:95-96 REQUIRED_MODULES). */
+    if (strcmp(label, RL_LOAD_CODE)  == 0) return "load.asm";
+    if (strcmp(label, RL_SAVE_CODE)  == 0) return "save.asm";
     if (strcmp(label, RL_PAUSE)      == 0) return "pause.asm";
     if (strcmp(label, RL_RANDOMIZE)  == 0) return "random.asm";
     if (strcmp(label, RL_RND)        == 0) return "random.asm";

@@ -1201,6 +1201,62 @@ static AstNode *tr_visit_out(Visitor *v, AstNode *node) {
     return node;
 }
 
+/* visit_LOAD (translator.py:862-870) — also VERIFY (visit_VERIFY:880
+ * `return self.visit_LOAD(node)`):
+ *   yield c0; ic_param(TYPE.string, c0.t)
+ *   yield c1; ic_param(gl.PTR_TYPE, c1.t)        # PTR_TYPE == uinteger
+ *   yield c2; ic_param(gl.PTR_TYPE, c2.t)
+ *   ic_param(TYPE.ubyte, int(node.token == "LOAD"))
+ *   runtime_call(RuntimeLabel.LOAD_CODE, 0)
+ * The ubyte flag is 1 for LOAD, 0 for VERIFY (keyed off the sentence
+ * kind, the C analogue of node.token). LOAD_CODE == ".core.LOAD_CODE"
+ * (io.py:62, NAMESPACE == .core). */
+static AstNode *tr_visit_load(Visitor *v, AstNode *node) {
+    Translator *tr = v->ctx;
+    const TypeInfo *str_t  = tr->cs->symbol_table->basic_types[TYPE_string];
+    const TypeInfo *ptr_t  = tr->cs->symbol_table->basic_types[TYPE_uinteger];
+    const TypeInfo *ubyte  = tr->cs->symbol_table->basic_types[TYPE_ubyte];
+    AstNode *c0 = node->child_count > 0 ? node->children[0] : NULL;
+    AstNode *c1 = node->child_count > 1 ? node->children[1] : NULL;
+    AstNode *c2 = node->child_count > 2 ? node->children[2] : NULL;
+
+    if (c0) visitor_visit(v, c0);
+    tr_ic_param(tr, str_t, (c0 && c0->t) ? c0->t : "");
+    if (c1) visitor_visit(v, c1);
+    tr_ic_param(tr, ptr_t, (c1 && c1->t) ? c1->t : "");
+    if (c2) visitor_visit(v, c2);
+    tr_ic_param(tr, ptr_t, (c2 && c2->t) ? c2->t : "");
+
+    const char *flag =
+        (node->u.sentence.kind &&
+         strcmp(node->u.sentence.kind, "LOAD") == 0) ? "1" : "0";
+    tr_ic_param(tr, ubyte, flag);
+    tr_runtime_call(tr, ".core.LOAD_CODE", 0);
+    return node;
+}
+
+/* visit_SAVE (translator.py:872-879): same first 3 params as LOAD but
+ * NO ubyte flag, then runtime_call(RuntimeLabel.SAVE_CODE, 0).
+ * SAVE_CODE == ".core.SAVE_CODE" (io.py:63). */
+static AstNode *tr_visit_save(Visitor *v, AstNode *node) {
+    Translator *tr = v->ctx;
+    const TypeInfo *str_t = tr->cs->symbol_table->basic_types[TYPE_string];
+    const TypeInfo *ptr_t = tr->cs->symbol_table->basic_types[TYPE_uinteger];
+    AstNode *c0 = node->child_count > 0 ? node->children[0] : NULL;
+    AstNode *c1 = node->child_count > 1 ? node->children[1] : NULL;
+    AstNode *c2 = node->child_count > 2 ? node->children[2] : NULL;
+
+    if (c0) visitor_visit(v, c0);
+    tr_ic_param(tr, str_t, (c0 && c0->t) ? c0->t : "");
+    if (c1) visitor_visit(v, c1);
+    tr_ic_param(tr, ptr_t, (c1 && c1->t) ? c1->t : "");
+    if (c2) visitor_visit(v, c2);
+    tr_ic_param(tr, ptr_t, (c2 && c2->t) ? c2->t : "");
+
+    tr_runtime_call(tr, ".core.SAVE_CODE", 0);
+    return node;
+}
+
 /* BuiltinTranslator math family (builtin_translator.py:72-119): each is
  * ic_fparam(operand.type_, operand.t); runtime_call(LABEL, node.size).
  * SGN (builtin_translator.py:104-117) keys the label by the operand's
@@ -2654,6 +2710,11 @@ static void tr_register_handlers(Visitor *v) {
     visitor_on_sentence(v, "BEEP", tr_visit_beep);
     /* visit_OUT (translator.py:808-811). */
     visitor_on_sentence(v, "OUT", tr_visit_out);
+    /* visit_LOAD/visit_SAVE/visit_VERIFY (translator.py:862-880).
+     * VERIFY routes to the LOAD handler (visit_VERIFY:880). */
+    visitor_on_sentence(v, "LOAD", tr_visit_load);
+    visitor_on_sentence(v, "VERIFY", tr_visit_load);
+    visitor_on_sentence(v, "SAVE", tr_visit_save);
     /* visit_POKE (translator.py:90-99). */
     visitor_on_sentence(v, "POKE", tr_visit_poke);
     visitor_on_sentence(v, "EXIT_DO", tr_visit_exit_do);

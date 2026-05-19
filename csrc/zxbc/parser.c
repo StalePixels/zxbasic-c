@@ -113,6 +113,19 @@ static void parser_error(Parser *p, const char *msg) {
     zxbc_error(p->cs, p->current.lineno, "%s", msg);
 }
 
+/* Case-insensitive string equality (Python's str.upper() == ... idiom,
+ * used by p_save_code / p_load_code for the SCREEN$/CODE ID text test).
+ * Avoids a strcasecmp/strings.h dependency — parser.c only has ctype.h. */
+static int ci_eq(const char *a, const char *b) {
+    if (!a || !b) return 0;
+    while (*a && *b) {
+        if (tolower((unsigned char)*a) != tolower((unsigned char)*b))
+            return 0;
+        a++; b++;
+    }
+    return *a == '\0' && *b == '\0';
+}
+
 /* ----------------------------------------------------------------
  * AST helper constructors
  * ---------------------------------------------------------------- */
@@ -1851,13 +1864,213 @@ static AstNode *parse_statement(Parser *p) {
         return s;
     }
 
-    /* SAVE/LOAD/VERIFY — just skip arguments for now */
+    /* SAVE / LOAD / VERIFY — faithful port of zxbparser.py:
+     *   p_save_code (~2233), p_save_data (~2257),
+     *   p_load_or_verify (~2289), p_load_code (~2296),
+     *   p_load_data (~2326).
+     *
+     * Each rule builds make_sentence(lineno, p[1], expr, start, length)
+     * with EXACTLY 3 children: the string expr, a `start` (uinteger),
+     * a `length` (uinteger). p[1] is the literal keyword text
+     * ("SAVE"/"LOAD"/"VERIFY") which becomes the sentence kind. */
     if (match(p, BTOK_SAVE) || match(p, BTOK_LOAD) || match(p, BTOK_VERIFY)) {
-        const char *kind = btok_name(p->previous.type);
+        BTokenType kw = p->previous.type;
+        const char *kind = (kw == BTOK_SAVE)   ? "SAVE"
+                         : (kw == BTOK_LOAD)   ? "LOAD"
+                                               : "VERIFY";
         int ln = p->previous.lineno;
-        AstNode *s = make_sentence_node(p, kind, ln);
-        while (!check(p, BTOK_NEWLINE) && !check(p, BTOK_EOF) && !check(p, BTOK_CO))
+        TypeInfo *uint_t = p->cs->symbol_table->basic_types[TYPE_uinteger];
+
+        AstNode *expr = parse_expression(p, PREC_NONE + 1);
+
+        /* if expr.type_ != TYPE.string: syntax_error_expected_string */
+        if (expr && expr->type_ &&
+            !type_equal(expr->type_,
+                        p->cs->symbol_table->basic_types[TYPE_string])) {
+            err_expected_string(p->cs, ln,
+                                expr->type_->name ? expr->type_->name : "");
+        }
+
+        AstNode *start = NULL;
+        AstNode *length = NULL;
+
+        if (match(p, BTOK_DATA)) {
+            /* p_save_data / p_load_data:
+             *   {SAVE|LOAD|VERIFY} expr DATA
+             *   {SAVE|LOAD|VERIFY} expr DATA ID
+             *   {SAVE|LOAD|VERIFY} expr DATA ID LP RP
+             * len(p)==4 is the no-id form (DATA with no ID). */
+            if (check(p, BTOK_ID) || check(p, BTOK_ARRAY_ID)) {
+                advance(p);
+                const char *idname = p->previous.sval;
+                int id_ln = p->previous.lineno;
+                /* optional "( )" */
+                if (match(p, BTOK_LP))
+                    consume(p, BTOK_RP, "Expected ')' after '('");
+
+                AstNode *entry = symboltable_access_id(p->cs->symbol_table,
+                                                       p->cs, idname, id_ln,
+                                                       NULL, CLASS_var);
+                if (entry == NULL) {
+                    /* p[0] = None; return — drop the statement */
+                    return make_sentence_node(p, kind, ln);
+                }
+                entry->u.id.accessed = true;  /* mark_entry_as_accessed */
+
+                start = make_unary_node(p->cs, "ADDRESS", entry, id_ln);
+                if (start) start->type_ = uint_t;
+
+                if (entry->u.id.class_ == CLASS_array) {
+                    /* length = make_number(entry.memsize) */
+                    int memsize = (entry->type_ ? type_size(entry->type_) : 0);
+                    if (entry->u.id.arr_boundlist) {
+                        AstNode *bl = entry->u.id.arr_boundlist;
+                        for (int bi = 0; bi < bl->child_count; bi++) {
+                            AstNode *b = bl->children[bi];
+                            if (b && b->child_count >= 2 &&
+                                b->children[0]->tag == AST_NUMBER &&
+                                b->children[1]->tag == AST_NUMBER) {
+                                int lo = (int)b->children[0]->u.number.value;
+                                int hi = (int)b->children[1]->u.number.value;
+                                memsize *= (hi - lo + 1);
+                            }
+                        }
+                    }
+                    length = make_number(p, memsize, id_ln, NULL);
+                } else {
+                    /* length = make_number(entry.type_.size) */
+                    length = make_number(p,
+                        entry->type_ ? type_size(entry->type_) : 0,
+                        id_ln, NULL);
+                }
+            } else {
+                /* No-id form (len(p)==4): the gl.ZXBASIC_USER_DATA /
+                 * ZXBASIC_USER_DATA_LEN root-global labels.
+                 * Python: SYMBOL_TABLE.access_label(gl.ZXBASIC_USER_DATA,
+                 *   p.lineno(3), SYMBOL_TABLE.global_scope) — declare_label
+                 * for a name starting with NAMESPACE_SEPARATOR ('.') keeps
+                 * entry.mangled = id_ verbatim, sets type_ = PTR_TYPE
+                 * (== uinteger) and declared = True (symboltable.py:464 /
+                 * declare_label). LabelRef.t == parent.mangled, so the
+                 * operand's .t is the literal label name; the ADDRESS
+                 * scalar-global path then emits `ld hl, <label>`.
+                 *
+                 * symboltable_access_label declares the label (global)
+                 * with mangled="_<name>"/declared=false; patch the entry
+                 * to the '.'-prefix declare_label outcome so it is a
+                 * resolved, declared label (check_pending_labels) and the
+                 * translator reads the verbatim mangled name. */
+                int d_ln = p->previous.lineno;  /* p.lineno(3) == DATA */
+
+                AstNode *lbl_s = symboltable_access_label(p->cs->symbol_table,
+                    p->cs, ".core.ZXBASIC_USER_DATA", d_ln);
+                if (lbl_s) {
+                    char *m = arena_strdup(&p->cs->arena,
+                        ".core.ZXBASIC_USER_DATA");
+                    lbl_s->u.id.mangled = m;
+                    /* LabelRef.t == parent.mangled (labelref.py:34). The
+                     * ADDRESS scalar-global path reads operand->t without
+                     * visiting it, so stamp .t here (== mangled). */
+                    lbl_s->t = m;
+                    lbl_s->u.id.class_ = CLASS_label;
+                    lbl_s->u.id.scope = SCOPE_global;
+                    lbl_s->u.id.declared = true;
+                    lbl_s->u.id.accessed = true;
+                    lbl_s->type_ = uint_t;
+                }
+                start = make_unary_node(p->cs, "ADDRESS", lbl_s, d_ln);
+                if (start) start->type_ = uint_t;
+
+                AstNode *lbl_l = symboltable_access_label(p->cs->symbol_table,
+                    p->cs, ".core.ZXBASIC_USER_DATA_LEN", d_ln);
+                if (lbl_l) {
+                    char *ml = arena_strdup(&p->cs->arena,
+                        ".core.ZXBASIC_USER_DATA_LEN");
+                    lbl_l->u.id.mangled = ml;
+                    lbl_l->t = ml;  /* LabelRef.t == parent.mangled */
+                    lbl_l->u.id.class_ = CLASS_label;
+                    lbl_l->u.id.scope = SCOPE_global;
+                    lbl_l->u.id.declared = true;
+                    lbl_l->u.id.accessed = true;
+                    lbl_l->type_ = uint_t;
+                }
+                length = make_unary_node(p->cs, "ADDRESS", lbl_l, d_ln);
+                if (length) length->type_ = uint_t;
+            }
+        } else if (match(p, BTOK_CODE)) {
+            /* CODE form:
+             *   SAVE expr CODE expr COMMA expr
+             *   {LOAD|VERIFY} expr CODE
+             *   {LOAD|VERIFY} expr CODE expr
+             *   {LOAD|VERIFY} expr CODE expr COMMA expr
+             * SAVE requires `CODE expr COMMA expr`; LOAD/VERIFY allow the
+             * bare-CODE (start=0,length=0) and one/two-expr variants. */
+            int code_ln = p->previous.lineno;
+            if (check(p, BTOK_NEWLINE) || check(p, BTOK_EOF) ||
+                check(p, BTOK_CO)) {
+                /* bare CODE — only valid for LOAD/VERIFY (p_load_code
+                 * "load_or_verify expr ID" with ID.upper()=="CODE":
+                 * start=0,length=0). */
+                start = make_number(p, 0, code_ln, NULL);
+                length = make_number(p, 0, code_ln, NULL);
+            } else {
+                AstNode *e1 = parse_expression(p, PREC_NONE + 1);
+                start = make_typecast(p->cs, uint_t, e1, code_ln);
+                if (match(p, BTOK_COMMA)) {
+                    int comma_ln = p->previous.lineno;
+                    AstNode *e2 = parse_expression(p, PREC_NONE + 1);
+                    length = make_typecast(p->cs, uint_t, e2, comma_ln);
+                } else {
+                    /* {LOAD|VERIFY} expr CODE expr -> length = 0 */
+                    length = make_number(p, 0, code_ln, NULL);
+                }
+            }
+        } else if (check(p, BTOK_ID) || check(p, BTOK_ARRAY_ID)) {
+            /* {SAVE expr ID|ARRAY_ID} / {LOAD|VERIFY expr ID}:
+             * the ID text upper() must be SCREEN / SCREEN$
+             * (LOAD/VERIFY also accept "CODE"). */
             advance(p);
+            const char *idtxt = p->previous.sval ? p->previous.sval : "";
+            int id_ln = p->previous.lineno;
+            int is_screen = (ci_eq(idtxt, "SCREEN") ||
+                             ci_eq(idtxt, "SCREEN$"));
+            int is_code = ci_eq(idtxt, "CODE");
+
+            if (kw == BTOK_SAVE) {
+                if (!is_screen) {
+                    zxbc_error(p->cs, id_ln,
+                        "Unexpected \"%s\" ID. Expected \"SCREEN$\" instead",
+                        idtxt);
+                    return NULL;
+                }
+                start = make_number(p, 16384, ln, NULL);
+                length = make_number(p, 6912, ln, NULL);
+            } else {
+                /* LOAD / VERIFY */
+                if (!is_screen && !is_code) {
+                    zxbc_error(p->cs, id_ln,
+                        "Unexpected \"%s\" ID. Expected \"SCREEN$\" instead",
+                        idtxt);
+                    return NULL;
+                }
+                if (is_code) {
+                    start = make_number(p, 0, id_ln, NULL);
+                    length = make_number(p, 0, id_ln, NULL);
+                } else {
+                    start = make_number(p, 16384, id_ln, NULL);
+                    length = make_number(p, 6912, id_ln, NULL);
+                }
+            }
+        } else {
+            parser_error(p, "Expected CODE, DATA or SCREEN$ after "
+                            "SAVE/LOAD/VERIFY string");
+            return NULL;
+        }
+
+        AstNode *s = make_sentence_node(p, kind, ln);
+        if (expr)   ast_add_child(p->cs, s, expr);
+        if (start)  ast_add_child(p->cs, s, start);
+        if (length) ast_add_child(p->cs, s, length);
         return s;
     }
 
