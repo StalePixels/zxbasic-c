@@ -49,6 +49,11 @@ static void sv_pushf(Backend *b, StrVec *v, const char *fmt, ...) {
     sv_push(b, v, buf);
 }
 
+/* Forward decl: tmp_labels.tmp_label() (src/api/tmp_labels.py:16-25).
+ * Defined further down; the 8/16-bit shift/and8 emitters need it before
+ * its definition point. */
+static char *s_tmp_label(Backend *b);
+
 /* ---- Bits16.get_oper (_16bit.py:26-116) ------------------------------ */
 /*
  * Faithful op1 (+op2) pop/load sequence. The S5.2 calibration only ever
@@ -261,6 +266,18 @@ static int s_log2(long x) { int n = 0; while (x > 1) { x >>= 1; n++; } return n;
 #define RL_DIVI8_FAST ZXBC_NAMESPACE ".__DIVI8_FAST"
 #define RL_DIVU16     ZXBC_NAMESPACE ".__DIVU16"
 #define RL_DIVI16     ZXBC_NAMESPACE ".__DIVI16"
+/* S7.x — 8/16-bit mod + bitwise/logical runtime helpers
+ * (runtime/core.py CoreLabels; values + REQUIRED_MODULES verified). */
+#define RL_MODU8_FAST ZXBC_NAMESPACE ".__MODU8_FAST"
+#define RL_MODI8_FAST ZXBC_NAMESPACE ".__MODI8_FAST"
+#define RL_MODU16     ZXBC_NAMESPACE ".__MODU16"
+#define RL_MODI16     ZXBC_NAMESPACE ".__MODI16"
+#define RL_XOR8       ZXBC_NAMESPACE ".__XOR8"
+#define RL_XOR16      ZXBC_NAMESPACE ".__XOR16"
+#define RL_BOR16      ZXBC_NAMESPACE ".__BOR16"
+#define RL_BXOR16     ZXBC_NAMESPACE ".__BXOR16"
+#define RL_AND16      ZXBC_NAMESPACE ".__AND16"
+#define RL_BAND16     ZXBC_NAMESPACE ".__BAND16"
 #define RL_NEGHL      ZXBC_NAMESPACE ".__NEGHL"
 #define RL_LOAD_DE_DE ZXBC_NAMESPACE ".__LOAD_DE_DE"
 
@@ -476,6 +493,18 @@ static const char *s_required_module(const char *label) {
     if (strcmp(label, RL_DIVI8_FAST) == 0) return "arith/div8.asm";
     if (strcmp(label, RL_DIVU16)     == 0) return "arith/div16.asm";
     if (strcmp(label, RL_DIVI16)     == 0) return "arith/div16.asm";
+    /* S7.x — 8/16-bit mod + bitwise/logical modules (core.py:206-211,
+     * 150,156,160,162,263-264 LABEL_REQUIRED_MODULES; verbatim). */
+    if (strcmp(label, RL_MODU8_FAST) == 0) return "arith/div8.asm";
+    if (strcmp(label, RL_MODI8_FAST) == 0) return "arith/div8.asm";
+    if (strcmp(label, RL_MODU16)     == 0) return "arith/div16.asm";
+    if (strcmp(label, RL_MODI16)     == 0) return "arith/div16.asm";
+    if (strcmp(label, RL_XOR8)       == 0) return "bool/xor8.asm";
+    if (strcmp(label, RL_XOR16)      == 0) return "bool/xor16.asm";
+    if (strcmp(label, RL_AND16)      == 0) return "bool/and16.asm";
+    if (strcmp(label, RL_BOR16)      == 0) return "bitwise/bor16.asm";
+    if (strcmp(label, RL_BXOR16)     == 0) return "bitwise/bxor16.asm";
+    if (strcmp(label, RL_BAND16)     == 0) return "bitwise/band16.asm";
     if (strcmp(label, RL_NEGHL)      == 0) return "neg16.asm";
     if (strcmp(label, RL_LOAD_DE_DE) == 0) return "lddede.asm";
     /* S5.4 wide/float module map (LABEL_REQUIRED_MODULES, live-verified). */
@@ -880,6 +909,344 @@ static StrVec emit_divi8(Backend *b, Quad *q) {
     return out;
 }
 
+/* ---- Bits8.modu8 (_8bit.py:388-435) ---------------------------------- */
+static StrVec emit_modu8(Backend *b, Quad *q) {
+    const char *op1 = q->args[1], *op2 = q->args[2]; /* ins[2],ins[3] */
+    StrVec out;
+    if (s_is_int(op2)) {
+        int o2 = s_int8(s_int_val(op2));
+        out = bits8_get_oper(b, op1, NULL, false);
+        if (o2 == 1) {
+            if (op1[0] == '_') { vec_free(out); out = sv_new(); }
+            sv_push(b, &out, "xor a");
+            sv_push(b, &out, "push af");
+            return out;
+        }
+        if (s_is_2n(o2)) {
+            sv_pushf(b, &out, "and %d", o2 - 1);
+            sv_push(b, &out, "push af");
+            return out;
+        }
+        sv_pushf(b, &out, "ld h, %d", s_int8(o2));
+    } else {
+        bool rev;
+        if (op2[0] == '_') {
+            if (s_is_int(op1) && s_int_val(op1) == 0) {
+                out = sv_new();
+                sv_push(b, &out, "xor a");
+                sv_push(b, &out, "push af");
+                return out;
+            }
+            rev = true; const char *t = op1; op1 = op2; op2 = t;
+        } else {
+            rev = false;
+        }
+        out = bits8_get_oper(b, op1, op2, rev);
+    }
+    sv_push(b, &out, s_runtime_call(b, RL_MODU8_FAST));
+    sv_push(b, &out, "push af");
+    return out;
+}
+
+/* ---- Bits8.modi8 (_8bit.py:437-484) ---------------------------------- */
+static StrVec emit_modi8(Backend *b, Quad *q) {
+    const char *op1 = q->args[1], *op2 = q->args[2]; /* ins[2],ins[3] */
+    StrVec out;
+    if (s_is_int(op2)) {
+        int o2 = s_int8(s_int_val(op2));
+        out = bits8_get_oper(b, op1, NULL, false);
+        if (o2 == 1) {
+            if (op1[0] == '_') { vec_free(out); out = sv_new(); }
+            sv_push(b, &out, "xor a");
+            sv_push(b, &out, "push af");
+            return out;
+        }
+        if (s_is_2n(o2)) {
+            sv_pushf(b, &out, "and %d", o2 - 1);
+            sv_push(b, &out, "push af");
+            return out;
+        }
+        sv_pushf(b, &out, "ld h, %d", s_int8(o2));
+    } else {
+        bool rev;
+        if (op2[0] == '_') {
+            if (s_is_int(op1) && s_int_val(op1) == 0) {
+                out = sv_new();
+                sv_push(b, &out, "xor a");
+                sv_push(b, &out, "push af");
+                return out;
+            }
+            rev = true; const char *t = op1; op1 = op2; op2 = t;
+        } else {
+            rev = false;
+        }
+        out = bits8_get_oper(b, op1, op2, rev);
+    }
+    sv_push(b, &out, s_runtime_call(b, RL_MODI8_FAST));
+    sv_push(b, &out, "push af");
+    return out;
+}
+
+/* ---- Bits8.or8 (_8bit.py:664-690) ------------------------------------ */
+static StrVec emit_or8(Backend *b, Quad *q) {
+    const char *op1 = q->args[1], *op2 = q->args[2]; /* ins[2],ins[3] */
+    const char *other; long iv;
+    if (s_int_ops(op1, op2, &other, &iv)) {
+        StrVec out = bits8_get_oper(b, other, NULL, false);
+        if (iv == 0) {  /* X or False = X */
+            sv_push(b, &out, "push af");
+            return out;
+        }
+        sv_push(b, &out, "ld a, 1");  /* X or True = True */
+        sv_push(b, &out, "push af");
+        return out;
+    }
+    StrVec out = bits8_get_oper(b, op1, op2, false);
+    sv_push(b, &out, "or h");
+    sv_push(b, &out, "push af");
+    return out;
+}
+
+/* ---- Bits8.bor8 (_8bit.py:692-720) ----------------------------------- */
+static StrVec emit_bor8(Backend *b, Quad *q) {
+    const char *op1 = q->args[1], *op2 = q->args[2]; /* ins[2],ins[3] */
+    const char *other; long iv;
+    if (s_int_ops(op1, op2, &other, &iv)) {
+        StrVec out = bits8_get_oper(b, other, NULL, false);
+        if (iv == 0) {  /* X | 0 = X */
+            sv_push(b, &out, "push af");
+            return out;
+        }
+        if (iv == 0xFF) {  /* X | 0xFF = 0xFF */
+            sv_push(b, &out, "ld a, 0FFh");
+            sv_push(b, &out, "push af");
+            return out;
+        }
+        vec_free(out);
+        op1 = q->args[1]; op2 = q->args[2];  /* op1, op2 = tuple(ins[2:]) */
+    }
+    StrVec out = bits8_get_oper(b, op1, op2, false);
+    sv_push(b, &out, "or h");
+    sv_push(b, &out, "push af");
+    return out;
+}
+
+/* ---- Bits8.and8 (_8bit.py:722-753) ----------------------------------- */
+static StrVec emit_and8(Backend *b, Quad *q) {
+    const char *op1 = q->args[1], *op2 = q->args[2]; /* ins[2],ins[3] */
+    const char *other; long iv;
+    if (s_int_ops(op1, op2, &other, &iv)) {
+        StrVec out = bits8_get_oper(b, other, NULL, false);
+        if (iv != 0) {  /* X and True = X */
+            sv_push(b, &out, "push af");
+            return out;
+        }
+        sv_push(b, &out, "xor a");  /* False and X = False */
+        sv_push(b, &out, "push af");
+        return out;
+    }
+    StrVec out = bits8_get_oper(b, op1, op2, false);
+    char *lbl = s_tmp_label(b);
+    sv_push(b, &out, "or a");
+    sv_pushf(b, &out, "jr z, %s", lbl);
+    sv_push(b, &out, "ld a, h");
+    sv_pushf(b, &out, "%s:", lbl);
+    sv_push(b, &out, "push af");
+    return out;
+}
+
+/* ---- Bits8.band8 (_8bit.py:755-783) ---------------------------------- */
+static StrVec emit_band8(Backend *b, Quad *q) {
+    const char *op1 = q->args[1], *op2 = q->args[2]; /* ins[2],ins[3] */
+    const char *other; long iv;
+    if (s_int_ops(op1, op2, &other, &iv)) {
+        StrVec out = bits8_get_oper(b, other, NULL, false);
+        if (iv == 0xFF) {  /* X & 0xFF = X */
+            sv_push(b, &out, "push af");
+            return out;
+        }
+        if (iv == 0) {  /* X and 0 = 0 */
+            sv_push(b, &out, "xor a");
+            sv_push(b, &out, "push af");
+            return out;
+        }
+        vec_free(out);
+        op1 = q->args[1]; op2 = q->args[2];  /* op1, op2 = tuple(ins[2:]) */
+    }
+    StrVec out = bits8_get_oper(b, op1, op2, false);
+    sv_push(b, &out, "and h");
+    sv_push(b, &out, "push af");
+    return out;
+}
+
+/* ---- Bits8.xor8 (_8bit.py:785-811) ----------------------------------- */
+static StrVec emit_xor8(Backend *b, Quad *q) {
+    const char *op1 = q->args[1], *op2 = q->args[2]; /* ins[2],ins[3] */
+    const char *other; long iv;
+    if (s_int_ops(op1, op2, &other, &iv)) {
+        StrVec out = bits8_get_oper(b, other, NULL, false);
+        if (iv == 0) {  /* False xor X = X */
+            sv_push(b, &out, "push af");
+            return out;
+        }
+        sv_push(b, &out, "sub 1");
+        sv_push(b, &out, "sbc a, a");
+        sv_push(b, &out, "push af");
+        return out;
+    }
+    StrVec out = bits8_get_oper(b, op1, op2, false);
+    sv_push(b, &out, s_runtime_call(b, RL_XOR8));
+    sv_push(b, &out, "push af");
+    return out;
+}
+
+/* ---- Bits8.bxor8 (_8bit.py:813-841) ---------------------------------- */
+static StrVec emit_bxor8(Backend *b, Quad *q) {
+    const char *op1 = q->args[1], *op2 = q->args[2]; /* ins[2],ins[3] */
+    const char *other; long iv;
+    if (s_int_ops(op1, op2, &other, &iv)) {
+        StrVec out = bits8_get_oper(b, other, NULL, false);
+        if (iv == 0) {  /* 0 xor X = X */
+            sv_push(b, &out, "push af");
+            return out;
+        }
+        if (iv == 0xFF) {  /* X xor 0xFF = ~X */
+            sv_push(b, &out, "cpl");
+            sv_push(b, &out, "push af");
+            return out;
+        }
+        vec_free(out);
+        op1 = q->args[1]; op2 = q->args[2];  /* op1, op2 = tuple(ins[2:]) */
+    }
+    StrVec out = bits8_get_oper(b, op1, op2, false);
+    sv_push(b, &out, "xor h");
+    sv_push(b, &out, "push af");
+    return out;
+}
+
+/* ---- Bits8.shru8 (_8bit.py:879-931) ---------------------------------- */
+static StrVec emit_shru8(Backend *b, Quad *q) {
+    const char *op1 = q->args[1], *op2 = q->args[2]; /* ins[2],ins[3] */
+    if (s_is_int(op2)) {
+        int o2 = s_int8(s_int_val(op2));
+        StrVec out = bits8_get_oper(b, op1, NULL, false);
+        if (o2 == 0) { sv_push(b, &out, "push af"); return out; }
+        if (o2 < 4) {
+            for (int i = 0; i < o2; i++) sv_push(b, &out, "srl a");
+            sv_push(b, &out, "push af");
+            return out;
+        }
+        char *label = s_tmp_label(b);
+        sv_pushf(b, &out, "ld b, %d", s_int8(o2));
+        sv_pushf(b, &out, "%s:", label);
+        sv_push(b, &out, "srl a");
+        sv_pushf(b, &out, "djnz %s", label);
+        sv_push(b, &out, "push af");
+        return out;
+    }
+    if (s_is_int(op1) && s_int_val(op1) == 0) {
+        StrVec out = bits8_get_oper(b, op2, NULL, false);
+        sv_push(b, &out, "xor a");
+        sv_push(b, &out, "push af");
+        return out;
+    }
+    StrVec out = bits8_get_oper(b, op1, op2, true);
+    char *label = s_tmp_label(b);
+    char *label2 = s_tmp_label(b);
+    sv_push(b, &out, "or a");
+    sv_push(b, &out, "ld b, a");
+    sv_push(b, &out, "ld a, h");
+    sv_pushf(b, &out, "jr z, %s", label2);
+    sv_pushf(b, &out, "%s:", label);
+    sv_push(b, &out, "srl a");
+    sv_pushf(b, &out, "djnz %s", label);
+    sv_pushf(b, &out, "%s:", label2);
+    sv_push(b, &out, "push af");
+    return out;
+}
+
+/* ---- Bits8.shri8 (_8bit.py:933-985) ---------------------------------- */
+static StrVec emit_shri8(Backend *b, Quad *q) {
+    const char *op1 = q->args[1], *op2 = q->args[2]; /* ins[2],ins[3] */
+    if (s_is_int(op2)) {
+        int o2 = s_int8(s_int_val(op2));
+        StrVec out = bits8_get_oper(b, op1, NULL, false);
+        if (o2 == 0) { sv_push(b, &out, "push af"); return out; }
+        if (o2 < 4) {
+            for (int i = 0; i < o2; i++) sv_push(b, &out, "sra a");
+            sv_push(b, &out, "push af");
+            return out;
+        }
+        char *label = s_tmp_label(b);
+        sv_pushf(b, &out, "ld b, %d", s_int8(o2));
+        sv_pushf(b, &out, "%s:", label);
+        sv_push(b, &out, "sra a");
+        sv_pushf(b, &out, "djnz %s", label);
+        sv_push(b, &out, "push af");
+        return out;
+    }
+    if (s_is_int(op1) && s_int_val(op1) == 0) {
+        StrVec out = bits8_get_oper(b, op2, NULL, false);
+        sv_push(b, &out, "xor a");
+        sv_push(b, &out, "push af");
+        return out;
+    }
+    StrVec out = bits8_get_oper(b, op1, op2, true);
+    char *label = s_tmp_label(b);
+    char *label2 = s_tmp_label(b);
+    sv_push(b, &out, "or a");
+    sv_push(b, &out, "ld b, a");
+    sv_push(b, &out, "ld a, h");
+    sv_pushf(b, &out, "jr z, %s", label2);
+    sv_pushf(b, &out, "%s:", label);
+    sv_push(b, &out, "sra a");
+    sv_pushf(b, &out, "djnz %s", label);
+    sv_pushf(b, &out, "%s:", label2);
+    sv_push(b, &out, "push af");
+    return out;
+}
+
+/* ---- Bits8.shl8 (_8bit.py:987-1038) ---------------------------------- */
+static StrVec emit_shl8(Backend *b, Quad *q) {
+    const char *op1 = q->args[1], *op2 = q->args[2]; /* ins[2],ins[3] */
+    if (s_is_int(op2)) {
+        int o2 = s_int8(s_int_val(op2));
+        StrVec out = bits8_get_oper(b, op1, NULL, false);
+        if (o2 == 0) { sv_push(b, &out, "push af"); return out; }
+        if (o2 < 6) {
+            for (int i = 0; i < o2; i++) sv_push(b, &out, "add a, a");
+            sv_push(b, &out, "push af");
+            return out;
+        }
+        char *label = s_tmp_label(b);
+        sv_pushf(b, &out, "ld b, %d", s_int8(o2));
+        sv_pushf(b, &out, "%s:", label);
+        sv_push(b, &out, "add a, a");
+        sv_pushf(b, &out, "djnz %s", label);
+        sv_push(b, &out, "push af");
+        return out;
+    }
+    if (s_is_int(op1) && s_int_val(op1) == 0) {
+        StrVec out = bits8_get_oper(b, op2, NULL, false);
+        sv_push(b, &out, "xor a");
+        sv_push(b, &out, "push af");
+        return out;
+    }
+    StrVec out = bits8_get_oper(b, op1, op2, true);
+    char *label = s_tmp_label(b);
+    char *label2 = s_tmp_label(b);
+    sv_push(b, &out, "or a");
+    sv_push(b, &out, "ld b, a");
+    sv_push(b, &out, "ld a, h");
+    sv_pushf(b, &out, "jr z, %s", label2);
+    sv_pushf(b, &out, "%s:", label);
+    sv_push(b, &out, "add a, a");
+    sv_pushf(b, &out, "djnz %s", label);
+    sv_pushf(b, &out, "%s:", label2);
+    sv_push(b, &out, "push af");
+    return out;
+}
+
 /* ---- Bits8.load8 (_8bit.py:1040-1048) -------------------------------- */
 static StrVec emit_load8(Backend *b, Quad *q) {
     StrVec out = bits8_get_oper(b, q->args[1], NULL, false);  /* ins[2] */
@@ -1079,6 +1446,342 @@ static StrVec emit_divi16(Backend *b, Quad *q) {
         out = bits16_get_oper(b, op1, op2, rev);
     }
     sv_push(b, &out, s_runtime_call(b, RL_DIVI16));
+    sv_push(b, &out, "push hl");
+    return out;
+}
+
+/* ---- Bits16.modu16 (_16bit.py:388-431) ------------------------------- */
+static StrVec emit_modu16(Backend *b, Quad *q) {
+    const char *op1 = q->args[1], *op2 = q->args[2]; /* ins[2],ins[3] */
+    StrVec out;
+    if (s_is_int(op2)) {
+        long o2 = s_int16(s_int_val(op2));
+        out = bits16_get_oper(b, op1, NULL, false);
+        if (o2 == 1) {
+            /* Faithful port of Python's `if op2[0] in ("_", "$")`:
+             * op2 has been reassigned to int (cls.int16), so op2[0]
+             * raises TypeError in CPython — this branch never produces
+             * output (Python aborts). Mirror by not emitting here. */
+            sv_push(b, &out, "ld hl, 0");
+            sv_push(b, &out, "push hl");
+            return out;
+        }
+        if (s_is_2n(o2)) {
+            long k = o2 - 1;
+            if (o2 > 255) {  /* only affects H */
+                sv_push(b, &out, "ld a, h");
+                sv_pushf(b, &out, "and %ld", k >> 8);
+                sv_push(b, &out, "ld h, a");
+            } else {
+                sv_push(b, &out, "ld h, 0");  /* High part goes 0 */
+                sv_push(b, &out, "ld a, l");
+                sv_pushf(b, &out, "and %ld", k % 0xFF);
+                sv_push(b, &out, "ld l, a");
+            }
+            sv_push(b, &out, "push hl");
+            return out;
+        }
+        sv_pushf(b, &out, "ld de, %ld", o2);
+    } else {
+        out = bits16_get_oper(b, op1, op2, false);
+    }
+    sv_push(b, &out, s_runtime_call(b, RL_MODU16));
+    sv_push(b, &out, "push hl");
+    return out;
+}
+
+/* ---- Bits16.modi16 (_16bit.py:433-476) ------------------------------- */
+static StrVec emit_modi16(Backend *b, Quad *q) {
+    const char *op1 = q->args[1], *op2 = q->args[2]; /* ins[2],ins[3] */
+    StrVec out;
+    if (s_is_int(op2)) {
+        long o2 = s_int16(s_int_val(op2));
+        out = bits16_get_oper(b, op1, NULL, false);
+        if (o2 == 1) {
+            if (strcmp(op1, "_") == 0 || strcmp(op1, "$") == 0) {
+                vec_free(out); out = sv_new();  /* discard previous op */
+            }
+            sv_push(b, &out, "ld hl, 0");
+            sv_push(b, &out, "push hl");
+            return out;
+        }
+        if (s_is_2n(o2)) {
+            long k = o2 - 1;
+            if (o2 > 255) {  /* only affects H */
+                sv_push(b, &out, "ld a, h");
+                sv_pushf(b, &out, "and %ld", k >> 8);
+                sv_push(b, &out, "ld h, a");
+            } else {
+                sv_push(b, &out, "ld h, 0");  /* High part goes 0 */
+                sv_push(b, &out, "ld a, l");
+                sv_pushf(b, &out, "and %ld", k % 0xFF);
+                sv_push(b, &out, "ld l, a");
+            }
+            sv_push(b, &out, "push hl");
+            return out;
+        }
+        sv_pushf(b, &out, "ld de, %ld", o2);
+    } else {
+        out = bits16_get_oper(b, op1, op2, false);
+    }
+    sv_push(b, &out, s_runtime_call(b, RL_MODI16));
+    sv_push(b, &out, "push hl");
+    return out;
+}
+
+/* ---- Bits16.or16 (_16bit.py:623-659) --------------------------------- */
+static StrVec emit_or16(Backend *b, Quad *q) {
+    const char *op1 = q->args[1], *op2 = q->args[2]; /* ins[2],ins[3] */
+    const char *other; long iv;
+    if (s_int_ops(op1, op2, &other, &iv)) {
+        if (iv == 0) {
+            StrVec out = bits16_get_oper(b, other, NULL, false);
+            sv_push(b, &out, "ld a, h");
+            sv_push(b, &out, "or l");  /* Convert x to Boolean */
+            sv_push(b, &out, "push af");
+            return out;  /* X or False = X */
+        }
+        StrVec out = bits16_get_oper(b, other, NULL, false);
+        sv_push(b, &out, "ld a, 0FFh");  /* X or True = True */
+        sv_push(b, &out, "push af");
+        return out;
+    }
+    StrVec out = bits16_get_oper(b, q->args[1], q->args[2], false);
+    sv_push(b, &out, "ld a, h");
+    sv_push(b, &out, "or l");
+    sv_push(b, &out, "or d");
+    sv_push(b, &out, "or e");
+    sv_push(b, &out, "push af");
+    return out;
+}
+
+/* ---- Bits16.bor16 (_16bit.py:661-692) -------------------------------- *
+ * Faithful to Python: after a non-special _int_ops match, op1/op2 are the
+ * swapped (other, int) pair and get_oper(op1, op2) is called on them (the
+ * int via str()). For the no-match path op1/op2 stay as ins[2]/ins[3]. */
+static StrVec emit_bor16(Backend *b, Quad *q) {
+    const char *op1 = q->args[1], *op2 = q->args[2]; /* ins[2],ins[3] */
+    const char *other; long iv;
+    if (s_int_ops(op1, op2, &other, &iv)) {
+        StrVec out = bits16_get_oper(b, other, NULL, false);
+        if (iv == 0) {  /* X | 0 = X */
+            sv_push(b, &out, "push hl");
+            return out;
+        }
+        if (iv == 0xFFFF) {  /* X & 0xFFFF = 0xFFFF */
+            sv_push(b, &out, "ld hl, 0FFFFh");
+            sv_push(b, &out, "push hl");
+            return out;
+        }
+        vec_free(out);
+        char ibuf[24];
+        snprintf(ibuf, sizeof(ibuf), "%ld", iv);
+        op1 = other; op2 = arena_strdup(b->arena, ibuf);
+    }
+    StrVec out = bits16_get_oper(b, op1, op2, false);
+    sv_push(b, &out, s_runtime_call(b, RL_BOR16));
+    sv_push(b, &out, "push hl");
+    return out;
+}
+
+/* ---- Bits16.xor16 (_16bit.py:694-730) -------------------------------- */
+static StrVec emit_xor16(Backend *b, Quad *q) {
+    const char *op1 = q->args[1], *op2 = q->args[2]; /* ins[2],ins[3] */
+    const char *other; long iv;
+    if (s_int_ops(op1, op2, &other, &iv)) {
+        StrVec out = bits16_get_oper(b, other, NULL, false);
+        if (iv == 0) {  /* X xor False = X */
+            sv_push(b, &out, "ld a, h");
+            sv_push(b, &out, "or l");
+            sv_push(b, &out, "push af");
+            return out;
+        }
+        sv_push(b, &out, "ld a, h");  /* X xor True = NOT X */
+        sv_push(b, &out, "or l");
+        sv_push(b, &out, "sub 1");
+        sv_push(b, &out, "sbc a, a");
+        sv_push(b, &out, "push af");
+        return out;
+    }
+    StrVec out = bits16_get_oper(b, q->args[1], q->args[2], false);
+    sv_push(b, &out, s_runtime_call(b, RL_XOR16));
+    sv_push(b, &out, "push af");
+    return out;
+}
+
+/* ---- Bits16.bxor16 (_16bit.py:732-763) ------------------------------- */
+static StrVec emit_bxor16(Backend *b, Quad *q) {
+    const char *op1 = q->args[1], *op2 = q->args[2]; /* ins[2],ins[3] */
+    const char *other; long iv;
+    if (s_int_ops(op1, op2, &other, &iv)) {
+        StrVec out = bits16_get_oper(b, other, NULL, false);
+        if (iv == 0) {  /* X ^ 0 = X */
+            sv_push(b, &out, "push hl");
+            return out;
+        }
+        if (iv == 0xFFFF) {  /* X ^ 0xFFFF = bNOT X */
+            sv_push(b, &out, s_runtime_call(b, RL_NEGHL));
+            sv_push(b, &out, "push hl");
+            return out;
+        }
+        vec_free(out);
+        char ibuf[24];
+        snprintf(ibuf, sizeof(ibuf), "%ld", iv);
+        op1 = other; op2 = arena_strdup(b->arena, ibuf);
+    }
+    StrVec out = bits16_get_oper(b, op1, op2, false);
+    sv_push(b, &out, s_runtime_call(b, RL_BXOR16));
+    sv_push(b, &out, "push hl");
+    return out;
+}
+
+/* ---- Bits16.and16 (_16bit.py:765-798) -------------------------------- */
+static StrVec emit_and16(Backend *b, Quad *q) {
+    const char *op1 = q->args[1], *op2 = q->args[2]; /* ins[2],ins[3] */
+    const char *other; long iv;
+    if (s_int_ops(op1, op2, &other, &iv)) {
+        StrVec out = bits16_get_oper(b, other, NULL, false);
+        if (iv != 0) {
+            sv_push(b, &out, "ld a, h");
+            sv_push(b, &out, "or l");
+            sv_push(b, &out, "push af");
+            return out;  /* X and True = X */
+        }
+        vec_free(out);
+        out = bits16_get_oper(b, other, NULL, false);
+        sv_push(b, &out, "xor a");  /* X and False = False */
+        sv_push(b, &out, "push af");
+        return out;
+    }
+    StrVec out = bits16_get_oper(b, op1, op2, false);
+    sv_push(b, &out, s_runtime_call(b, RL_AND16));
+    sv_push(b, &out, "push af");
+    return out;
+}
+
+/* ---- Bits16.band16 (_16bit.py:800-830) ------------------------------- */
+static StrVec emit_band16(Backend *b, Quad *q) {
+    const char *op1 = q->args[1], *op2 = q->args[2]; /* ins[2],ins[3] */
+    const char *other; long iv;
+    if (s_int_ops(op1, op2, &other, &iv)) {
+        if (iv == 0xFFFF) {  /* X & 0xFFFF = X */
+            return sv_new();
+        }
+        if (iv == 0) {  /* X & 0 = 0 */
+            StrVec out = bits16_get_oper(b, other, NULL, false);
+            sv_push(b, &out, "ld hl, 0");
+            sv_push(b, &out, "push hl");
+            return out;
+        }
+        char ibuf[24];
+        snprintf(ibuf, sizeof(ibuf), "%ld", iv);
+        op1 = other; op2 = arena_strdup(b->arena, ibuf);
+    }
+    StrVec out = bits16_get_oper(b, op1, op2, false);
+    sv_push(b, &out, s_runtime_call(b, RL_BAND16));
+    sv_push(b, &out, "push hl");
+    return out;
+}
+
+/* ---- Bits16.shru16 (_16bit.py:867-909) ------------------------------- */
+static StrVec emit_shru16(Backend *b, Quad *q) {
+    const char *op1 = q->args[1], *op2 = q->args[2]; /* ins[2],ins[3] */
+    char *label = s_tmp_label(b);
+    char *label2 = s_tmp_label(b);
+    StrVec out;
+    if (s_is_int(op2)) {
+        long op = s_int16(s_int_val(op2));
+        if (op == 0) return sv_new();
+        out = bits16_get_oper(b, op1, NULL, false);
+        if (op == 1) {
+            sv_push(b, &out, "srl h");
+            sv_push(b, &out, "rr l");
+            sv_push(b, &out, "push hl");
+            return out;
+        }
+        sv_pushf(b, &out, "ld b, %ld", op);
+    } else {
+        out = bits8_get_oper(b, op2, NULL, false);
+        sv_push(b, &out, "ld b, a");
+        StrVec p = bits16_get_oper(b, op1, NULL, false);
+        for (int i = 0; i < p.len; i++) vec_push(out, p.data[i]);
+        vec_free(p);
+        sv_push(b, &out, "or a");
+        sv_pushf(b, &out, "jr z, %s", label2);
+    }
+    sv_pushf(b, &out, "%s:", label);
+    sv_push(b, &out, "srl h");
+    sv_push(b, &out, "rr l");
+    sv_pushf(b, &out, "djnz %s", label);
+    sv_pushf(b, &out, "%s:", label2);
+    sv_push(b, &out, "push hl");
+    return out;
+}
+
+/* ---- Bits16.shri16 (_16bit.py:911-953) ------------------------------- */
+static StrVec emit_shri16(Backend *b, Quad *q) {
+    const char *op1 = q->args[1], *op2 = q->args[2]; /* ins[2],ins[3] */
+    char *label = s_tmp_label(b);
+    char *label2 = s_tmp_label(b);
+    StrVec out;
+    if (s_is_int(op2)) {
+        long op = s_int16(s_int_val(op2));
+        if (op == 0) return sv_new();
+        out = bits16_get_oper(b, op1, NULL, false);
+        if (op == 1) {
+            sv_push(b, &out, "srl h");
+            sv_push(b, &out, "rr l");
+            sv_push(b, &out, "push hl");
+            return out;
+        }
+        sv_pushf(b, &out, "ld b, %ld", op);
+    } else {
+        out = bits8_get_oper(b, op2, NULL, false);
+        sv_push(b, &out, "ld b, a");
+        StrVec p = bits16_get_oper(b, op1, NULL, false);
+        for (int i = 0; i < p.len; i++) vec_push(out, p.data[i]);
+        vec_free(p);
+        sv_push(b, &out, "or a");
+        sv_pushf(b, &out, "jr z, %s", label2);
+    }
+    sv_pushf(b, &out, "%s:", label);
+    sv_push(b, &out, "sra h");
+    sv_push(b, &out, "rr l");
+    sv_pushf(b, &out, "djnz %s", label);
+    sv_pushf(b, &out, "%s:", label2);
+    sv_push(b, &out, "push hl");
+    return out;
+}
+
+/* ---- Bits16.shl16 (_16bit.py:955-995) -------------------------------- */
+static StrVec emit_shl16(Backend *b, Quad *q) {
+    const char *op1 = q->args[1], *op2 = q->args[2]; /* ins[2],ins[3] */
+    char *label = s_tmp_label(b);
+    char *label2 = s_tmp_label(b);
+    StrVec out;
+    if (s_is_int(op2)) {
+        long op = s_int16(s_int_val(op2));
+        if (op == 0) return sv_new();
+        out = bits16_get_oper(b, op1, NULL, false);
+        if (op < 6) {
+            for (long i = 0; i < op; i++) sv_push(b, &out, "add hl, hl");
+            sv_push(b, &out, "push hl");
+            return out;
+        }
+        sv_pushf(b, &out, "ld b, %ld", op);
+    } else {
+        out = bits8_get_oper(b, op2, NULL, false);
+        sv_push(b, &out, "ld b, a");
+        StrVec p = bits16_get_oper(b, op1, NULL, false);
+        for (int i = 0; i < p.len; i++) vec_push(out, p.data[i]);
+        vec_free(p);
+        sv_push(b, &out, "or a");
+        sv_pushf(b, &out, "jr z, %s", label2);
+    }
+    sv_pushf(b, &out, "%s:", label);
+    sv_push(b, &out, "add hl, hl");
+    sv_pushf(b, &out, "djnz %s", label);
+    sv_pushf(b, &out, "%s:", label2);
     sv_push(b, &out, "push hl");
     return out;
 }
@@ -3902,6 +4605,31 @@ static StrVec quad_emit(Backend *b, Quad *q) {
     if (strcmp(I, "divi8")    == 0) return emit_divi8(b, q);
     if (strcmp(I, "divu16")   == 0) return emit_divu16(b, q);
     if (strcmp(I, "divi16")   == 0) return emit_divi16(b, q);
+    /* S7.x — 8/16-bit mod + bitwise/logical/shift _QUAD_TABLE rows
+     * (main.py:189-208,276-299,587-600). modu/modi are DISTINCT funcs;
+     * shl{u,i}->shl8/shl16; band{u,i}->band8/band16; etc. */
+    if (strcmp(I, "modu8")    == 0) return emit_modu8(b, q);
+    if (strcmp(I, "modi8")    == 0) return emit_modi8(b, q);
+    if (strcmp(I, "modu16")   == 0) return emit_modu16(b, q);
+    if (strcmp(I, "modi16")   == 0) return emit_modi16(b, q);
+    if (strcmp(I, "shru8")    == 0) return emit_shru8(b, q);
+    if (strcmp(I, "shri8")    == 0) return emit_shri8(b, q);
+    if (strcmp(I, "shlu8")    == 0 || strcmp(I, "shli8")    == 0) return emit_shl8(b, q);
+    if (strcmp(I, "shru16")   == 0) return emit_shru16(b, q);
+    if (strcmp(I, "shri16")   == 0) return emit_shri16(b, q);
+    if (strcmp(I, "shlu16")   == 0 || strcmp(I, "shli16")   == 0) return emit_shl16(b, q);
+    if (strcmp(I, "oru8")     == 0 || strcmp(I, "ori8")     == 0) return emit_or8(b, q);
+    if (strcmp(I, "oru16")    == 0 || strcmp(I, "ori16")    == 0) return emit_or16(b, q);
+    if (strcmp(I, "andu8")    == 0 || strcmp(I, "andi8")    == 0) return emit_and8(b, q);
+    if (strcmp(I, "andu16")   == 0 || strcmp(I, "andi16")   == 0) return emit_and16(b, q);
+    if (strcmp(I, "xoru8")    == 0 || strcmp(I, "xori8")    == 0) return emit_xor8(b, q);
+    if (strcmp(I, "xoru16")   == 0 || strcmp(I, "xori16")   == 0) return emit_xor16(b, q);
+    if (strcmp(I, "boru8")    == 0 || strcmp(I, "bori8")    == 0) return emit_bor8(b, q);
+    if (strcmp(I, "boru16")   == 0 || strcmp(I, "bori16")   == 0) return emit_bor16(b, q);
+    if (strcmp(I, "bandu8")   == 0 || strcmp(I, "bandi8")   == 0) return emit_band8(b, q);
+    if (strcmp(I, "bandu16")  == 0 || strcmp(I, "bandi16")  == 0) return emit_band16(b, q);
+    if (strcmp(I, "bxoru8")   == 0 || strcmp(I, "bxori8")   == 0) return emit_bxor8(b, q);
+    if (strcmp(I, "bxoru16")  == 0 || strcmp(I, "bxori16")  == 0) return emit_bxor16(b, q);
     if (strcmp(I, "cast")     == 0) return emit_cast(b, q);
     if (strcmp(I, "var")      == 0) return emit_var(b, q);
     if (strcmp(I, "vard")     == 0) return emit_vard(b, q);
