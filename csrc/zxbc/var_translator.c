@@ -628,10 +628,21 @@ static void vt_visit_vardecl(Translator *tr, AstNode *node) {
     }
 
     if (entry->u.id.addr_expr != NULL) {
-        /* entry.addr is a SYMBOL (the typecast) -> traverse_const; the
-         * non-SYMBOL int form (var_translator.py:34) is the C int64 addr
-         * path, unused by the S5.3 corpus. */
-        const char *addr = vt_traverse_const(tr, entry->u.id.addr_expr);
+        /* visit_VARDECL (var_translator.py:33-35):
+         *   addr = self.traverse_const(entry.addr)
+         *            if isinstance(entry.addr, symbols.SYMBOL) else entry.addr
+         *   self.ic_deflabel(entry.mangled, addr)
+         * Python ALWAYS routes a SYMBOL entry.addr through the full
+         * recursive Translator.traverse_const — the SAME walk used for
+         * arrays (var_translator.c:151 vt_traverse_const_expr) — not the
+         * leaf-only form. For the CONSTEXPR branch (p_var_decl_at:672-674,
+         * `DIM x AT @label[+k]`) entry.addr is a UNARY ADDRESS / BINARY;
+         * the leaf-only vt_traverse_const failed it ("not in scalar
+         * scope") and emitted an empty `_x EQU ` operand. The recursive
+         * form resolves @label -> .LABEL._<name> (labelref.py:20,34) and
+         * is byte-identical for the NUMBER/CONST leaf addr the prior
+         * scalar corpus (opt2_dim_at etc.) used. */
+        const char *addr = vt_traverse_const_expr(tr, entry->u.id.addr_expr);
         vt_ic_deflabel(tr, entry->u.id.mangled, addr);
         return;
     }

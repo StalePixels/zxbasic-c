@@ -432,12 +432,93 @@ static AstNode *opt_visit_constexpr(Visitor *v, AstNode *node) {
     return node;
 }
 
+/* The PARAMLIST ARGUMENT carries only name/byref/is_array; the actual
+ * lbound_used/ubound_used/is_dynamically_accessed flags a `UBOUND(a,..)`
+ * / `LBOUND(a,..)` / dynamic access inside the body sets live on the
+ * BODY-SCOPE symbol for that parameter (parser.c:4669 declares a
+ * separate CLASS_array ID in the function scope; parser.c:432-455 flags
+ * THAT node). Those body symbols are captured onto the function entry as
+ * u.id.local_entries (parser.c:4738-4748). Locate the param's body
+ * symbol by name. */
+static AstNode *opt_param_body_sym(const AstNode *callee, const char *pname) {
+    if (!callee || callee->tag != AST_ID || !pname)
+        return NULL;
+    for (int i = 0; i < callee->u.id.local_entries_count; i++) {
+        AstNode *e = callee->u.id.local_entries[i];
+        if (e && e->tag == AST_ID && e->u.id.scope == SCOPE_parameter &&
+            e->u.id.name && strcmp(e->u.id.name, pname) == 0)
+            return e;
+    }
+    return NULL;
+}
+
+/* _check_if_any_arg_is_an_array_and_needs_lbound_or_ubound +
+ * _update_bound_status (optimize.py:455-489). For each (arg, param) of
+ * zip(args, params): a byref array param whose ref's lbound/ubound are
+ * not BOTH already set propagates its bound-usage onto the argument
+ * array's shared symbol entry. Python plumbs this through arg.requires
+ * (call.py:48 add_required_symbol(param) makes the global arg array
+ * require the param; _update_bound_status ORs every requirer's
+ * p.ref.lbound_used / p.ref.ubound_used into arg.ref). The C has no
+ * requires graph, but the net effect is exactly "OR the byref array
+ * param's lbound_used/ubound_used into the argument array entry" — the
+ * documented faithful analogue (CLAUDE.md: derive from Python's
+ * entry.ref-sharing resolution). is_dynamically_accessed is NOT touched
+ * here (Python's _update_bound_status only ORs lbound/ubound; the
+ * call.py:53-55 is_dynamically_accessed propagation is a separate
+ * mechanism, already covered by parser.c:1043's unconditional set on
+ * every constructed array access). The arg array entry is the SAME
+ * shared symbol-table node VarTranslator.visit_ARRAYDECL reads
+ * (var_translator.c:496-505) — so the descriptor's __LBOUND__/__UBOUND__
+ * slot + trailing bound table now emit for lbound13's global _x. */
+static void opt_bound_status_helper(AstNode *node) {
+    if (!node || node->child_count < 2)
+        return;
+    AstNode *callee = node->children[0];
+    AstNode *arglist = node->children[1];
+    if (!callee || callee->tag != AST_ID || !arglist ||
+        arglist->tag != AST_ARGLIST)
+        return;
+    AstNode *params = callee->u.id.params;
+    if (!params || params->tag != AST_PARAMLIST)
+        return;
+
+    int zipn = arglist->child_count < params->child_count
+                   ? arglist->child_count : params->child_count;
+    for (int z = 0; z < zipn; z++) {
+        AstNode *arg = arglist->children[z];
+        AstNode *param = params->children[z];
+        if (!arg || arg->tag != AST_ARGUMENT || !param ||
+            param->tag != AST_ARGUMENT)
+            continue;
+        /* if not param.byref or param.class_ != CLASS.array: continue */
+        if (!param->u.argument.byref || !param->u.argument.is_array)
+            continue;
+        AstNode *argval = arg->child_count > 0 ? arg->children[0] : NULL;
+        if (!argval || argval->tag != AST_ID)
+            continue;
+        /* if arg.value.ref.lbound_used and arg.value.ref.ubound_used:
+         *     continue */
+        if (argval->u.id.lbound_used && argval->u.id.ubound_used)
+            continue;
+        AstNode *psym = opt_param_body_sym(callee, param->u.argument.name);
+        if (!psym)
+            continue;
+        /* _update_bound_status: arg_ref.lbound_used |= p.ref.lbound_used;
+         *                       arg_ref.ubound_used |= p.ref.ubound_used */
+        if (psym->u.id.lbound_used)
+            argval->u.id.lbound_used = true;
+        if (psym->u.id.ubound_used)
+            argval->u.id.ubound_used = true;
+    }
+}
+
 /* ----------------------------------------------------------------
  * visit_FUNCCALL (optimize.py:298-301) / visit_CALL (303-306):
  * recurse into node.args ONLY (children[1], the ARGLIST) — not the
  * entry (children[0]) to avoid infinite recursion through the symbol
- * table — then run the byref-array bound-status helper (a structural
- * no-op in the C AST; see file header). Idempotence-guarded.
+ * table — then run the byref-array bound-status helper. Idempotence-
+ * guarded.
  * ---------------------------------------------------------------- */
 static AstNode *opt_visit_call(Visitor *v, AstNode *node) {
     OptCtx *c = v->ctx;
@@ -445,9 +526,7 @@ static AstNode *opt_visit_call(Visitor *v, AstNode *node) {
         return node;
     if (node->child_count > 1)
         node->children[1] = visitor_visit(v, node->children[1]);
-    /* _check_if_any_arg_is_an_array_and_needs_lbound_or_ubound:
-     * meter-neutral codegen bookkeeping; the ref/requires/scope_ref
-     * infrastructure it needs is absent from the C AST (see header). */
+    opt_bound_status_helper(node);
     return node;
 }
 
@@ -491,17 +570,30 @@ static AstNode *opt_visit_funcdecl(Visitor *v, AstNode *node) {
  * builtins whose fname is IN/RND/USR. FUNCCALL→CALL conversion; for
  * LETARRAY only FUNCCALLs are kept. Own visited set (Python
  * filter_inorder's, ast.py:63-69) — mirror functiongraph.c:collect. */
-static void collect_side_effects(CompilerState *cs, AstNode *node,
+static void collect_side_effects(Visitor *v, AstNode *node,
                                  AstPtrVec *seen, AstPtrVec *out,
                                  bool builtins_too) {
+    CompilerState *cs = v->cs;
     if (!node || ptr_seen_or_add(seen, node))
         return;
     if (opt_is_callable(node))
         return; /* filter_inorder stop predicate: token != "FUNCTION" */
 
     if (node->tag == AST_FUNCCALL) {
+        /* filter_inorder (ast.py:64-65): `if filter_func(node): yield
+         * self.visit(node)` — the matched FUNCCALL is *visited* (not
+         * merely collected). visit_FUNCCALL (optimize.py:298-301)
+         * recurses node.args and runs
+         * _check_if_any_arg_is_an_array_and_needs_lbound_or_ubound,
+         * which is the load-bearing bound-status propagation for an
+         * unused-lvalue LET whose RHS is a byref-array call
+         * (lbound13: `LET y = maxValue(x)`, y unused). Without this
+         * visit the global array x's __UBOUND__ descriptor is never
+         * emitted. Idempotence-guarded inside opt_visit_call. */
+        node = visitor_visit(v, node);
         /* symbols.CALL(x.entry, x.args, ...) — convert FUNCCALL→CALL.
-         * Same node, retag (C CALL/FUNCCALL share layout, parser.c:1494). */
+         * Same node, retag (C CALL/FUNCCALL share layout, parser.c:1494).
+         * Python applies CALL() to the *visited* node. */
         AstNode *call = ast_new(cs, AST_CALL, node->lineno);
         call->type_ = node->type_;
         for (int i = 0; i < node->child_count; i++)
@@ -518,18 +610,18 @@ static void collect_side_effects(CompilerState *cs, AstNode *node,
         }
     }
     for (int i = 0; i < node->child_count; i++)
-        collect_side_effects(cs, node->children[i], seen, out, builtins_too);
+        collect_side_effects(v, node->children[i], seen, out, builtins_too);
 }
 
-static AstNode *build_side_effect_block(CompilerState *cs, AstNode *rhs,
+static AstNode *build_side_effect_block(Visitor *v, AstNode *rhs,
                                         int lineno, bool builtins_too) {
     AstPtrVec seen, out;
     vec_init(seen);
     vec_init(out);
-    collect_side_effects(cs, rhs, &seen, &out, builtins_too);
-    AstNode *block = ast_new(cs, AST_BLOCK, lineno);
+    collect_side_effects(v, rhs, &seen, &out, builtins_too);
+    AstNode *block = ast_new(v->cs, AST_BLOCK, lineno);
     for (int i = 0; i < out.len; i++)
-        ast_add_child(cs, block, out.data[i]);
+        ast_add_child(v->cs, block, out.data[i]);
     vec_free(seen);
     vec_free(out);
     return block;
@@ -549,7 +641,7 @@ static AstNode *opt_visit_let(Visitor *v, AstNode *node) {
                       lvalue->u.id.name ? lvalue->u.id.name : "",
                       "Variable"); /* Python default kind= "Variable" */
         AstNode *rhs = node->child_count > 1 ? node->children[1] : NULL;
-        return build_side_effect_block(v->cs, rhs, node->lineno, true);
+        return build_side_effect_block(v, rhs, node->lineno, true);
     }
     return visitor_generic(v, node);
 }
@@ -579,7 +671,7 @@ static AstNode *opt_visit_letarray(Visitor *v, AstNode *node) {
                       lvalue->u.id.name ? lvalue->u.id.name : "",
                       "Variable"); /* Python default kind= "Variable" */
         AstNode *rhs = node->child_count > 1 ? node->children[1] : NULL;
-        return build_side_effect_block(v->cs, rhs, node->lineno, false);
+        return build_side_effect_block(v, rhs, node->lineno, false);
     }
     return visitor_generic(v, node);
 }

@@ -1344,6 +1344,18 @@ static AstNode *parse_statement(Parser *p) {
                            label_text, p->cs->current_file, label_node->lineno);
             }
             label_node->u.id.declared = true;
+            /* declare_label (symboltable.py:626): entry.type_ =
+             * self.basic_types[global_.PTR_TYPE]. The C label-definition
+             * site is Python's declare_label analogue (p_label:455 ->
+             * declare_label). Without this a defined-first label keeps
+             * type_==NULL, so check_is_dynamic (is_dynamic, check.py:370)
+             * mis-classifies `@label` as dynamic and p_addr_of_id skips
+             * the CONSTEXPR wrap (parser.c:688) — making `DIM x AT @label`
+             * (label defined before) error "Address must be a numeric
+             * constant expression" instead of taking Python's CONSTEXPR
+             * branch. PTR_TYPE == gl.PTR_TYPE == TYPE_uinteger. */
+            label_node->type_ =
+                p->cs->symbol_table->basic_types[TYPE_uinteger];
         }
         /* symboltable.access_label scope_owner capture
          * (symboltable.py:621-623): if gl.FUNCTION_LEVEL,
@@ -4020,15 +4032,55 @@ static AstNode *parse_dim_statement(Parser *p) {
                 id_node->u.id.default_value_expr = value;
         }
         if (at_expr) {
-            /* p_var_decl_at (zxbparser.py:679):
-             *   entry.addr = make_typecast(PTR_TYPE, expr)  (static expr)
-             * S5.3 corpus is initializer-only; AT recorded faithfully via
-             * the same data_ast path (entry.addr drives ic_deflabel). */
+            /* p_var_decl_at (zxbparser.py:672-682) — the three-way branch:
+             *
+             *   if p[5].token == "CONSTEXPR":          # :672-674
+             *       tmp = p[5].expr
+             *       entry.addr = tmp                   # NOT typecast,
+             *                                          # NOT mark_accessed
+             *   elif not is_static(p[5]):              # :675-677
+             *       errmsg.syntax_error_address_must_be_constant; return
+             *   else:                                  # :679-682
+             *       entry.addr = make_typecast(PTR_TYPE, p[5])
+             *       mark_entry_as_accessed(entry)
+             *       if entry.scope == local: make_static(entry.name)
+             *
+             * Crucially the CONSTEXPR branch (a `@label` / `@label+1`
+             * address — p_addr_of_id:2685 / binary.make_node:113-116 wrap
+             * those in CONSTEXPR; the C make_unary/make_binary_node mirror
+             * this -> at_expr->tag == AST_CONSTEXPR) does NOT call
+             * mark_entry_as_accessed, so an UNUSED `DIM x AT @label`
+             * scalar is DCE-dropped at O>1 by VarTranslator.visit_VARDECL
+             * exactly like Python (no spurious `_x EQU` line). The prior
+             * unconditional accessed=true defeated that DCE gate. */
             TypeInfo *ptr_t =
                 p->cs->symbol_table->basic_types[TYPE_uinteger]; /* gl.PTR_TYPE */
-            AstNode *av = make_typecast(p->cs, ptr_t, at_expr, lineno);
-            id_node->u.id.addr_expr = av;
-            id_node->u.id.accessed = true; /* Python mark_entry_as_accessed */
+            if (at_expr->tag == AST_CONSTEXPR) {
+                /* tmp = p[5].expr; entry.addr = tmp (the CONSTEXPR's
+                 * inner node — UNARY ADDRESS / BINARY). No typecast, no
+                 * accessed marking. VarTranslator resolves it through
+                 * the recursive traverse_const (label -> .LABEL._name). */
+                AstNode *inner = at_expr->child_count > 0
+                                     ? at_expr->children[0]
+                                     : at_expr;
+                id_node->u.id.addr_expr = inner;
+            } else if (!check_is_static(at_expr)) {
+                /* elif not is_static(p[5]): address must be constant */
+                err_address_must_be_constant(p->cs, lineno);
+                return NULL;
+            } else {
+                /* else: static (NUMBER/CONST) address.
+                 * entry.addr = make_typecast(PTR_TYPE, p[5]);
+                 * mark_entry_as_accessed(entry).  (Python additionally
+                 * does `if entry.scope == local: make_static(name)` here
+                 * — like the array p_arr_decl_attr:785-786 path, the C
+                 * port does not model make_static; the global corpus
+                 * never hits the local branch, and not introducing an
+                 * unported mechanism keeps this minimal/faithful.) */
+                AstNode *av = make_typecast(p->cs, ptr_t, at_expr, lineno);
+                id_node->u.id.addr_expr = av;
+                id_node->u.id.accessed = true; /* mark_entry_as_accessed */
+            }
         }
         return NULL;
     }
