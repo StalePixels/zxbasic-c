@@ -159,22 +159,42 @@ static bool opt_is_callable(const AstNode *n) {
 
 /* chk.is_block_accessed (check.py:387-396): True if `block` is a LABEL
  * that is accessed, OR any non-callable child is recursively accessed.
- * Mirror of uc_is_null's recursive shape (unreachable.c:77-87). */
-static bool is_block_accessed(const AstNode *block) {
+ * Mirror of uc_is_null's recursive shape (unreachable.c:77-87).
+ *
+ * C-vs-Python adaptation: in Python a LABEL Symbol IS the symbol-table
+ * entry (block.accessed forwards via __getattr__ to LabelRef.accessed,
+ * which FunctionGraphVisitor.visit_GOTO/GOSUB sets on the entry). In the
+ * C AST the LABEL sentence's children[0] is a fresh, detached AST_ID
+ * (parser.c:1394-1397, 1404-1407) that does NOT share identity with the
+ * symbol-table entry — and FunctionGraph (functiongraph.c:128-138) sets
+ * u.id.accessed on the ENTRY returned by symboltable_access_label. So
+ * the in-tree LABEL child's .accessed stays false even when the label
+ * IS jump-targeted; reading off it under-reports and Python's keep-on-
+ * referenced-label predicate misfires (the dropped IF/WHILE bodies the
+ * S1-DIVERGE ifemptylabel1/2 and whilefalse1 cluster reports). Resolve the
+ * label by NAME via symboltable_lookup (read-only) to read .accessed
+ * off the shared entry — faithful to Python's "block.accessed". By
+ * optimizer-pass time parsing is complete, labels live in global scope,
+ * and the lookup is purely observational. */
+static bool is_block_accessed_ctx(CompilerState *cs, const AstNode *block) {
     if (!block)
         return false;
     if (kind_is(block, "LABEL")) {
-        /* Python is_LABEL(block) and block.accessed. The C LABEL
-         * sentence carries the label ID as children[0]; .accessed is
-         * read off that ID entry (faithful to FunctionGraph S2.2 which
-         * marks the label entry's u.id.accessed). */
         AstNode *lbl = block->child_count > 0 ? block->children[0] : NULL;
-        if (lbl && lbl->u.id.accessed)
-            return true;
+        if (lbl) {
+            if (lbl->u.id.accessed)
+                return true;
+            if (cs && cs->symbol_table && lbl->u.id.name) {
+                AstNode *entry =
+                    symboltable_lookup(cs->symbol_table, lbl->u.id.name);
+                if (entry && entry != lbl && entry->u.id.accessed)
+                    return true;
+            }
+        }
     }
     for (int i = 0; i < block->child_count; i++) {
         AstNode *ch = block->children[i];
-        if (!opt_is_callable(ch) && is_block_accessed(ch))
+        if (!opt_is_callable(ch) && is_block_accessed_ctx(cs, ch))
             return true;
     }
     return false;
@@ -730,7 +750,8 @@ static AstNode *opt_visit_if(Visitor *v, AstNode *node) {
         }
 
         bool block_accessed =
-            is_block_accessed(then_) || is_block_accessed(else_);
+            is_block_accessed_ctx(v->cs, then_) ||
+            is_block_accessed_ctx(v->cs, else_);
         if (!block_accessed && check_is_number(expr_)) {
             /* constant condition: keep only the taken branch. */
             if (expr_->u.number.value != 0)
@@ -769,7 +790,7 @@ static AstNode *opt_visit_while(Visitor *v, AstNode *node) {
 
     if (v->cs->opts.optimization_level >= 1) {
         if (check_is_number(expr_) && expr_->u.number.value == 0 &&
-            !is_block_accessed(body_))
+            !is_block_accessed_ctx(v->cs, body_))
             return c->nop;
     }
     return node;
@@ -793,7 +814,8 @@ static AstNode *opt_visit_for(Visitor *v, AstNode *node) {
     AstNode *body_ = node->child_count > 4 ? node->children[4] : NULL;
 
     if (v->cs->opts.optimization_level > 0 &&
-        is_number3(from_, to_, step_) && !is_block_accessed(body_)) {
+        is_number3(from_, to_, step_) &&
+        !is_block_accessed_ctx(v->cs, body_)) {
         double fv = from_->u.number.value;
         double tv = to_->u.number.value;
         double sv = step_->u.number.value;
