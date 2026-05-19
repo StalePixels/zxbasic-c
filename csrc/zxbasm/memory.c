@@ -158,11 +158,26 @@ void mem_declare_label(AsmState *as, const char *label, int lineno,
     bool is_address = (value_expr == NULL);
     int64_t value = 0;
 
+    /* The deferred EQU expression. Mirrors Python label.py where
+     * Label.value may BE an Expr (asmparse.py:101 stores p[3]
+     * un-evaluated; declared as Label.defined == value is not None,
+     * so an EQU bound to a non-None Expr IS "defined" even when that
+     * Expr cannot evaluate yet). NULL for address labels and for EQUs
+     * that evaluate immediately. */
+    Expr *deferred_expr = NULL;
+
     if (value_expr == NULL) {
         value = m->index;
     } else {
         if (!expr_try_eval(as, value_expr, &value)) {
-            /* Can't resolve now — defer to second pass. */
+            /* Can't resolve now — keep the Expr so the operand's
+             * pending-instruction second pass can recurse into it
+             * once the inner label is defined (expr.py:88-89).
+             * Do NOT collapse to value=0 (that permanently breaks
+             * forward `EQU = <unresolved label>+N`). The Expr is
+             * arena-allocated (expr.c) and lives for the whole
+             * assembly, like every other deferred/pending Expr. */
+            deferred_expr = value_expr;
             value = 0;
         }
     }
@@ -174,6 +189,7 @@ void mem_declare_label(AsmState *as, const char *label, int lineno,
         lbl->name = ex_label;
         lbl->lineno = lineno;
         lbl->value = value;
+        lbl->value_expr = deferred_expr;
         lbl->defined = true;
         lbl->local = false;
         lbl->is_address = true;
@@ -216,8 +232,11 @@ void mem_declare_label(AsmState *as, const char *label, int lineno,
                       existing->name, existing->lineno);
             return;
         }
-        /* Define previously forward-referenced label */
+        /* Define previously forward-referenced label.
+         * Python: Label.define(value, lineno) sets self.value = value
+         * (the value here being the Expr itself when un-evaluable). */
         existing->value = value;
+        existing->value_expr = deferred_expr;
         existing->defined = true;
         existing->lineno = lineno;
         existing->is_address = is_address;
@@ -227,6 +246,7 @@ void mem_declare_label(AsmState *as, const char *label, int lineno,
         lbl->name = ex_label;
         lbl->lineno = lineno;
         lbl->value = value;
+        lbl->value_expr = deferred_expr;
         lbl->defined = true;
         lbl->local = local;
         lbl->is_address = is_address;
@@ -259,6 +279,7 @@ Label *mem_get_label(AsmState *as, const char *label, int lineno)
         lbl->name = arena_strdup(&as->arena, label);  /* keep B/F suffix in internal name */
         lbl->lineno = lineno;
         lbl->value = 0;
+        lbl->value_expr = NULL;
         lbl->defined = false;
         lbl->local = false;
         lbl->is_address = false;
@@ -295,6 +316,7 @@ Label *mem_get_label(AsmState *as, const char *label, int lineno)
     lbl->name = ex_label;
     lbl->lineno = lineno;
     lbl->value = 0;
+    lbl->value_expr = NULL;
     lbl->defined = false;
     lbl->local = false;
     lbl->is_address = false;
@@ -329,6 +351,7 @@ void mem_set_label(AsmState *as, const char *label, int lineno, bool local)
         lbl->name = ex_label;
         lbl->lineno = lineno;
         lbl->value = 0;
+        lbl->value_expr = NULL;
         lbl->defined = false;
         lbl->local = local;
         lbl->is_address = false;

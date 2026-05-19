@@ -165,6 +165,12 @@ struct Label {
     char *name;          /* mangled name (with namespace prefix) */
     int lineno;
     int64_t value;
+    /* Deferred EQU expression. Mirrors Python label.py where Label.value
+     * may itself BE an Expr (asmparse.py:101 stores p[3] un-evaluated).
+     * NULL for address labels and for EQUs that evaluated immediately;
+     * non-NULL means this label's value is the (still-unresolved) Expr
+     * and expr.c must recurse into it (expr.py:88-89). */
+    Expr *value_expr;
     bool defined;        /* has a value been assigned? */
     bool local;          /* declared LOCAL within a PROC */
     bool is_address;     /* true if label = memory address (not EQU) */

@@ -59,6 +59,15 @@ static bool eval_impl(AsmState *as, Expr *e, int64_t *result, bool ignore)
     case EXPR_LABEL: {
         Label *lbl = e->u.label;
         if (lbl->defined) {
+            /* Mirror expr.py:88-89: if isinstance(item.value, Expr):
+             *   return item.value.try_eval()
+             * A label whose value is itself an Expr (a deferred forward
+             * EQU) recurses into that Expr — yielding its value when
+             * resolvable and DEFERRING (false) when not, never 0.
+             * Pass `ignore` through unchanged: Python's Expr.ignore is a
+             * single class flag shared by the recursive try_eval calls. */
+            if (lbl->value_expr)
+                return eval_impl(as, lbl->value_expr, result, ignore);
             *result = lbl->value;
             return true;
         }
