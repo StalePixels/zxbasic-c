@@ -1482,6 +1482,15 @@ static AstNode *parse_statement(Parser *p) {
         consume(p, BTOK_COMMA, "Expected ',' after POKE address");
         AstNode *val = parse_expression(p, PREC_NONE + 1);
         if (paren) consume(p, BTOK_RP, "Expected ')' after POKE");
+        /* p_poke/p_poke2/p_poke3 (zxbparser.py:2162-2207):
+         *   addr := make_typecast(TYPE.uinteger, addr)
+         *   val  := make_typecast(numbertype or TYPE.ubyte, val) */
+        addr = make_typecast(p->cs,
+                             p->cs->symbol_table->basic_types[TYPE_uinteger],
+                             addr, ln);
+        TypeInfo *vt = poke_type ? poke_type
+                     : p->cs->symbol_table->basic_types[TYPE_ubyte];
+        val = make_typecast(p->cs, vt, val, ln);
         if (addr) ast_add_child(p->cs, s, addr);
         if (val) ast_add_child(p->cs, s, val);
         return s;

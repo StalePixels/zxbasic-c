@@ -1160,6 +1160,33 @@ static AstNode *tr_visit_asm(Visitor *v, AstNode *node) {
     return node;
 }
 
+/* visit_POKE (translator.py:90-99): yield ch0(addr); yield ch1(val);
+ * if ch0 is a global non-const VAR -> ic_store(ch1.type_,"*"+ch0.t,ch1.t)
+ * else ic_store(ch1.type_, ch0.t, ch1.t). Parser make_typecast'd addr->
+ * uinteger, val->(numbertype|ubyte) (zxbparser.py:2162-2207). */
+static AstNode *tr_visit_poke(Visitor *v, AstNode *node) {
+    Translator *tr = v->ctx;
+    AstNode *ch0 = node->child_count > 0 ? node->children[0] : NULL;
+    AstNode *ch1 = node->child_count > 1 ? node->children[1] : NULL;
+    if (ch0) visitor_visit(v, ch0);
+    if (ch1) visitor_visit(v, ch1);
+    const char *a = (ch0 && ch0->t) ? ch0->t : "0";
+    if (ch0 && ch0->tag == AST_ID &&
+        ch0->u.id.class_ != CLASS_const &&
+        ch0->u.id.scope == SCOPE_global) {
+        size_t al = strlen(a);
+        char *ind = arena_alloc(&tr->cs->arena, al + 2);
+        ind[0] = '*';
+        memcpy(ind + 1, a, al + 1);
+        tr_ic_store(tr, ch1 ? ch1->type_ : NULL, ind,
+                    (ch1 && ch1->t) ? ch1->t : "");
+    } else {
+        tr_ic_store(tr, ch1 ? ch1->type_ : NULL, a,
+                    (ch1 && ch1->t) ? ch1->t : "");
+    }
+    return node;
+}
+
 /* visit_OUT (translator.py:808-811): yield child[0]; yield child[1];
  * ic_out(child[0].t, child[1].t). Parser make_typecast'd port->uinteger,
  * val->ubyte (zxbparser.py:2210-2216). */
@@ -2627,6 +2654,8 @@ static void tr_register_handlers(Visitor *v) {
     visitor_on_sentence(v, "BEEP", tr_visit_beep);
     /* visit_OUT (translator.py:808-811). */
     visitor_on_sentence(v, "OUT", tr_visit_out);
+    /* visit_POKE (translator.py:90-99). */
+    visitor_on_sentence(v, "POKE", tr_visit_poke);
     visitor_on_sentence(v, "EXIT_DO", tr_visit_exit_do);
     visitor_on_sentence(v, "EXIT_WHILE", tr_visit_exit_while);
     visitor_on_sentence(v, "EXIT_FOR", tr_visit_exit_for);
