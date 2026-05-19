@@ -26,6 +26,7 @@ PY_AST_DIFF     = csrc/tests/diff_ast_json.py
         test-semantic-fidelity verify-phase1-calibration \
         test-zxbc-codegen verify-phase5-calibration \
         test-zxbc-outfmt verify-phase6-calibration \
+        test-zxbc-full verify-phase7-calibration \
         test-cmdline-parity \
         sweep-asm-zero-byte regenerate-zxbc-baselines
 
@@ -109,6 +110,25 @@ test-zxbc-outfmt: $(ZXBC_C)
 # generator reproduces Python's tape bytes for the calibration fixture.
 verify-phase6-calibration: $(ZXBC_C)
 	./csrc/tests/run_phase6_calibration.sh $(ZXBC_C)
+
+# Phase 7 end-to-end full-equivalence meter (S7.3a, plan Phase-7 CR#4).
+# Measurement — the five-bucket count IS the port-complete meter; per
+# .bas, Python full-compile vs C full-compile (default .bin pipeline,
+# no --output-format / no --parse-only), exit code + every emitted
+# artefact byte-compared. SKIP-C-error is the loud S7.3 backlog driver
+# (never a legitimate terminal state), not a hiding skip. Exit 0 always
+# (like the codegen/outfmt meters); the verdict is the printed counts.
+# NOT wired into the `make test` aggregate — that is S7.3f/CR#5.
+test-zxbc-full: $(ZXBC_C)
+	./csrc/tests/run_zxbc_full_tests.sh $(ZXBC_C) $(ZXBC_TESTS)
+
+# Phase 7 named calibration gate (end-to-end .bin byte-equivalence).
+# Verifier — exits non-zero on drift/absence. GREEN at this commit
+# (the full default pipeline reproduces Python's .bin byte-identically
+# for the minimal typed calibration fixture); a RED here means the
+# end-to-end pipeline regressed for a simple typed program.
+verify-phase7-calibration: $(ZXBC_C)
+	./csrc/tests/run_phase7_calibration.sh $(ZXBC_C)
 
 # S7.2g end-to-end CLI parity gate. Mechanises the C-vs-Python flag
 # equivalence hand-verified per sub-slice across S7.2a–f (zxbc/zxbpp/
