@@ -412,6 +412,31 @@ static int s_log2(long x) { int n = 0; while (x > 1) { x >>= 1; n++; } return n;
 #define RL_OVER_TMP    ZXBC_NAMESPACE ".OVER_TMP"
 #define RL_PAPER_TMP   ZXBC_NAMESPACE ".PAPER_TMP"
 
+/* Simple statement RuntimeLabels (io.py:13,34 / misc.py:14 /
+ * random.py:12-13). NAMESPACE == .core. CLS/BORDER have no
+ * double-underscore; PAUSE does (misc.py:14 -> .core.__PAUSE). */
+#define RL_CLS         ZXBC_NAMESPACE ".CLS"
+#define RL_BORDER      ZXBC_NAMESPACE ".BORDER"
+#define RL_PAUSE       ZXBC_NAMESPACE ".__PAUSE"
+#define RL_RANDOMIZE   ZXBC_NAMESPACE ".RANDOMIZE"
+#define RL_RND         ZXBC_NAMESPACE ".RND"
+
+/* Standalone ATTR-sentence RuntimeLabels (io.py:16-23). NAMESPACE ==
+ * .core; NO double-underscore (same convention as the _TMP set). */
+#define RL_INK      ZXBC_NAMESPACE ".INK"
+#define RL_PAPER    ZXBC_NAMESPACE ".PAPER"
+#define RL_BRIGHT   ZXBC_NAMESPACE ".BRIGHT"
+#define RL_FLASH    ZXBC_NAMESPACE ".FLASH"
+#define RL_INVERSE  ZXBC_NAMESPACE ".INVERSE"
+#define RL_OVER     ZXBC_NAMESPACE ".OVER"
+#define RL_BOLD     ZXBC_NAMESPACE ".BOLD"
+#define RL_ITALIC   ZXBC_NAMESPACE ".ITALIC"
+
+/* BEEP RuntimeLabels (io.py:66-67). BEEP -> .core.BEEP (no mangle);
+ * BEEPER -> .core.__BEEPER (double-underscore). */
+#define RL_BEEP     ZXBC_NAMESPACE ".BEEP"
+#define RL_BEEPER   ZXBC_NAMESPACE ".__BEEPER"
+
 /* runtime_call (common.py:156-161): REQUIRES.add(LABEL_REQUIRED_MODULES
  * [label]) if present; returns "call {label}". The label->module map is
  * runtime/core.py:160-225 (only the S5.3-reachable labels). */
@@ -547,6 +572,24 @@ static const char *s_required_module(const char *label) {
     if (strcmp(label, RL_ITALIC_TMP) == 0) return "italic.asm";
     if (strcmp(label, RL_OVER_TMP)   == 0) return "over.asm";
     if (strcmp(label, RL_PAPER_TMP)  == 0) return "paper.asm";
+    /* Simple statements (io.py:71,89 / misc.py:23 / random.py:16). */
+    if (strcmp(label, RL_CLS)        == 0) return "cls.asm";
+    if (strcmp(label, RL_BORDER)     == 0) return "border.asm";
+    if (strcmp(label, RL_PAUSE)      == 0) return "pause.asm";
+    if (strcmp(label, RL_RANDOMIZE)  == 0) return "random.asm";
+    if (strcmp(label, RL_RND)        == 0) return "random.asm";
+    /* Standalone ATTR sentences (io.py:76-80,73-75,78). */
+    if (strcmp(label, RL_INK)        == 0) return "ink.asm";
+    if (strcmp(label, RL_PAPER)      == 0) return "paper.asm";
+    if (strcmp(label, RL_BRIGHT)     == 0) return "bright.asm";
+    if (strcmp(label, RL_FLASH)      == 0) return "flash.asm";
+    if (strcmp(label, RL_INVERSE)    == 0) return "inverse.asm";
+    if (strcmp(label, RL_OVER)       == 0) return "over.asm";
+    if (strcmp(label, RL_BOLD)       == 0) return "bold.asm";
+    if (strcmp(label, RL_ITALIC)     == 0) return "italic.asm";
+    /* BEEP (io.py:111-112). */
+    if (strcmp(label, RL_BEEP)       == 0) return "io/sound/beep.asm";
+    if (strcmp(label, RL_BEEPER)     == 0) return "io/sound/beeper.asm";
     return NULL;
 }
 

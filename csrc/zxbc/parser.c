@@ -1403,20 +1403,28 @@ static AstNode *parse_statement(Parser *p) {
         return make_sentence_node(p, "CLS", p->previous.lineno);
     }
 
-    /* BORDER expr */
+    /* BORDER expr  (zxbparser.py:944-946:
+     *   make_sentence(ln,"BORDER",make_typecast(TYPE.ubyte,p[2],ln))) */
     if (match(p, BTOK_BORDER)) {
         int ln = p->previous.lineno;
         AstNode *s = make_sentence_node(p, "BORDER", ln);
         AstNode *expr = parse_expression(p, PREC_NONE + 1);
+        expr = make_typecast(p->cs,
+                             p->cs->symbol_table->basic_types[TYPE_ubyte],
+                             expr, ln);
         if (expr) ast_add_child(p->cs, s, expr);
         return s;
     }
 
-    /* PAUSE expr */
+    /* PAUSE expr  (zxbparser.py:2159:
+     *   make_sentence(ln,"PAUSE",make_typecast(TYPE.uinteger,p[2],ln))) */
     if (match(p, BTOK_PAUSE)) {
         int ln = p->previous.lineno;
         AstNode *s = make_sentence_node(p, "PAUSE", ln);
         AstNode *expr = parse_expression(p, PREC_NONE + 1);
+        expr = make_typecast(p->cs,
+                             p->cs->symbol_table->basic_types[TYPE_uinteger],
+                             expr, ln);
         if (expr) ast_add_child(p->cs, s, expr);
         return s;
     }
@@ -1471,26 +1479,40 @@ static AstNode *parse_statement(Parser *p) {
         return s;
     }
 
-    /* BEEP duration, pitch */
+    /* BEEP duration, pitch  (zxbparser.py:1057-1063):
+     *   make_sentence(ln,"BEEP",
+     *     make_typecast(TYPE.float_,p[2],p.lineno(1)),
+     *     make_typecast(TYPE.float_,p[4],p.lineno(3))) */
     if (match(p, BTOK_BEEP)) {
         int ln = p->previous.lineno;
         AstNode *s = make_sentence_node(p, "BEEP", ln);
+        TypeInfo *float_t = p->cs->symbol_table->basic_types[TYPE_float];
         AstNode *dur = parse_expression(p, PREC_NONE + 1);
+        dur = make_typecast(p->cs, float_t, dur, ln);
         consume(p, BTOK_COMMA, "Expected ',' in BEEP");
+        int comma_ln = p->previous.lineno;
         AstNode *pitch = parse_expression(p, PREC_NONE + 1);
+        pitch = make_typecast(p->cs, float_t, pitch, comma_ln);
         if (dur) ast_add_child(p->cs, s, dur);
         if (pitch) ast_add_child(p->cs, s, pitch);
         return s;
     }
 
-    /* RANDOMIZE [expr] */
+    /* RANDOMIZE [expr]  (zxbparser.py:1047-1054):
+     *   no arg -> make_number(0, type_=TYPE.ulong)
+     *   expr   -> make_typecast(TYPE.ulong, p[2], ln) */
     if (match(p, BTOK_RANDOMIZE)) {
         int ln = p->previous.lineno;
         AstNode *s = make_sentence_node(p, "RANDOMIZE", ln);
+        TypeInfo *ulong_t = p->cs->symbol_table->basic_types[TYPE_ulong];
+        AstNode *expr;
         if (!check(p, BTOK_NEWLINE) && !check(p, BTOK_EOF) && !check(p, BTOK_CO)) {
-            AstNode *expr = parse_expression(p, PREC_NONE + 1);
-            if (expr) ast_add_child(p->cs, s, expr);
+            expr = parse_expression(p, PREC_NONE + 1);
+            expr = make_typecast(p->cs, ulong_t, expr, ln);
+        } else {
+            expr = make_number(p, 0, ln, ulong_t);
         }
+        if (expr) ast_add_child(p->cs, s, expr);
         return s;
     }
 
@@ -1811,9 +1833,14 @@ static AstNode *parse_statement(Parser *p) {
         else if (match(p, BTOK_BOLD))    attr_name = "BOLD";
         else if (match(p, BTOK_ITALIC))  attr_name = "ITALIC";
         if (attr_name) {
+            /* p_simple_instruction (zxbparser.py:2218-2228):
+             *   make_sentence(ln, p[1], make_typecast(TYPE.ubyte,p[2],ln)) */
             int ln = p->previous.lineno;
             AstNode *s = make_sentence_node(p, attr_name, ln);
             AstNode *val = parse_expression(p, PREC_NONE + 1);
+            val = make_typecast(p->cs,
+                                p->cs->symbol_table->basic_types[TYPE_ubyte],
+                                val, ln);
             if (val) ast_add_child(p->cs, s, val);
             return s;
         }

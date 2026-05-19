@@ -18,6 +18,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
+#include <math.h>
 
 /* S5.7d — the param/local IX-relative IC wrappers are defined below their
  * first callers (tr_visit_var :220ish, tr_emit_var_assign :246ish);
@@ -967,6 +968,140 @@ static AstNode *tr_visit_chkbreak(Visitor *v, AstNode *node) {
         tr_ic_fparam(tr, ptr, (child && child->t) ? child->t : "0");
         tr_runtime_call(tr, ".core.CHECK_BREAK", 0);
     }
+    return node;
+}
+
+/* visit_NOP (translator.py:50-51): pass — nothing to do. */
+static AstNode *tr_visit_nop(Visitor *v, AstNode *node) {
+    (void)v;
+    return node;
+}
+
+/* visit_CLS (translator.py:53-54): runtime_call(CLS, 0). No children. */
+static AstNode *tr_visit_cls(Visitor *v, AstNode *node) {
+    Translator *tr = v->ctx;
+    tr_runtime_call(tr, ".core.CLS", 0);
+    return node;
+}
+
+/* visit_BORDER (translator.py:886-889): yield child[0];
+ * ic_fparam(TYPE.ubyte, child[0].t); runtime_call(BORDER, 0).
+ * NB ic_fparam uses a hardcoded ubyte — the parser already
+ * make_typecast'd the operand to ubyte (zxbparser.py:946). */
+static AstNode *tr_visit_border(Visitor *v, AstNode *node) {
+    Translator *tr = v->ctx;
+    AstNode *c = node->child_count > 0 ? node->children[0] : NULL;
+    if (c) visitor_visit(v, c);
+    const TypeInfo *ubyte = tr->cs->symbol_table->basic_types[TYPE_ubyte];
+    tr_ic_fparam(tr, ubyte, (c && c->t) ? c->t : "0");
+    tr_runtime_call(tr, ".core.BORDER", 0);
+    return node;
+}
+
+/* visit_PAUSE (translator.py:904-907): yield child[0];
+ * ic_fparam(child[0].type_, child[0].t); runtime_call(PAUSE, 0).
+ * The parser make_typecast's the operand to uinteger
+ * (zxbparser.py:2159) so child[0].type_ is uinteger. */
+static AstNode *tr_visit_pause(Visitor *v, AstNode *node) {
+    Translator *tr = v->ctx;
+    AstNode *c = node->child_count > 0 ? node->children[0] : NULL;
+    if (c) visitor_visit(v, c);
+    tr_ic_fparam(tr, c ? c->type_ : NULL, (c && c->t) ? c->t : "0");
+    tr_runtime_call(tr, ".core.__PAUSE", 0);
+    return node;
+}
+
+/* visit_RANDOMIZE (translator.py:101-104): yield child[0];
+ * ic_fparam(child[0].type_, child[0].t); runtime_call(RANDOMIZE, 0).
+ * The parser supplies NUMBER(0,ulong) when no arg, else
+ * make_typecast(ulong, expr) (zxbparser.py:1047-1054). */
+static AstNode *tr_visit_randomize(Visitor *v, AstNode *node) {
+    Translator *tr = v->ctx;
+    AstNode *c = node->child_count > 0 ? node->children[0] : NULL;
+    if (c) visitor_visit(v, c);
+    tr_ic_fparam(tr, c ? c->type_ : NULL, (c && c->t) ? c->t : "0");
+    tr_runtime_call(tr, ".core.RANDOMIZE", 0);
+    return node;
+}
+
+/* visit_ATTR_sentence (translator.py:921-931) — the ONE handler for the
+ * 8 standalone attr statements (INK/PAPER/FLASH/BRIGHT/INVERSE/OVER/BOLD/
+ * ITALIC, kind == node.token): yield child[0]; ic_fparam(TYPE.ubyte,
+ * child[0].t); runtime_call({INK:.core.INK,...}[token],0). HAS_ATTR is
+ * write-only in Python (never read — no output effect), so omitted. */
+static AstNode *tr_visit_attr_sentence(Visitor *v, AstNode *node) {
+    Translator *tr = v->ctx;
+    AstNode *c = node->child_count > 0 ? node->children[0] : NULL;
+    if (c) visitor_visit(v, c);
+    const TypeInfo *ubyte = tr->cs->symbol_table->basic_types[TYPE_ubyte];
+    tr_ic_fparam(tr, ubyte, (c && c->t) ? c->t : "0");
+    const char *k = node->u.sentence.kind;
+    const char *label =
+        strcmp(k, "INK")     == 0 ? ".core.INK" :
+        strcmp(k, "PAPER")   == 0 ? ".core.PAPER" :
+        strcmp(k, "FLASH")   == 0 ? ".core.FLASH" :
+        strcmp(k, "BRIGHT")  == 0 ? ".core.BRIGHT" :
+        strcmp(k, "INVERSE") == 0 ? ".core.INVERSE" :
+        strcmp(k, "OVER")    == 0 ? ".core.OVER" :
+        strcmp(k, "BOLD")    == 0 ? ".core.BOLD" :
+                                    ".core.ITALIC";  /* ITALIC */
+    tr_runtime_call(tr, label, 0);
+    return node;
+}
+
+/* src.arch.zx48k.beep.getDEHL (beep.py:41-63) — duration,pitch ->
+ * (DE,HL) unsigned 16-bit. Faithful: Python int() truncates toward
+ * zero (== C (long) cast); 2.0**B == pow. The corpus const path keeps
+ * intPitch/duration in range so the BeepError raises are unreachable
+ * (a const out-of-range is a parse-time error before translation). */
+static void tr_beep_getDEHL(double duration, double pitch,
+                            long *DE, long *HL) {
+    static const double TABLE[12] = {
+        261.625565290, 277.182631135, 293.664768100, 311.126983881,
+        329.627557039, 349.228231549, 369.994422674, 391.995436072,
+        415.304697513, 440.000000000, 466.163761616, 493.883301378,
+    };
+    long intPitch = (long)pitch;
+    double fractPitch = pitch - (double)intPitch;
+    double tmp = 1.0 + 0.0577622606 * fractPitch;
+    long A = intPitch + 60;
+    long B = -5 + (long)((double)A / 12.0);
+    A %= 0xC;
+    double frec = TABLE[A];
+    double tmp2 = tmp * frec;
+    double f = tmp2 * pow(2.0, (double)B);
+    *DE = (long)(0.5 + f * duration - 1.0);
+    *HL = (long)(0.5 + 437500.0 / f - 30.125);
+}
+
+/* visit_BEEP (translator.py:891-902). Both-const -> getDEHL fold +
+ * ic_param(uint,HL)/ic_fparam(uint,DE)/runtime_call(BEEPER). Else ->
+ * yield child[1]; ic_param(float,c1.t); yield child[0];
+ * ic_fparam(float,c0.t); runtime_call(BEEP). Parser already
+ * make_typecast'd both operands to float (zxbparser.py:1057-1063). */
+static AstNode *tr_visit_beep(Visitor *v, AstNode *node) {
+    Translator *tr = v->ctx;
+    AstNode *c0 = node->child_count > 0 ? node->children[0] : NULL;
+    AstNode *c1 = node->child_count > 1 ? node->children[1] : NULL;
+    if (c0 && c1 && c0->tag == AST_NUMBER && c1->tag == AST_NUMBER) {
+        long DE = 0, HL = 0;
+        tr_beep_getDEHL(c0->u.number.value, c1->u.number.value, &DE, &HL);
+        const TypeInfo *uint_t =
+            tr->cs->symbol_table->basic_types[TYPE_uinteger];
+        char hb[24], db[24];
+        snprintf(hb, sizeof(hb), "%ld", HL);
+        snprintf(db, sizeof(db), "%ld", DE);
+        tr_ic_param(tr, uint_t, hb);
+        tr_ic_fparam(tr, uint_t, db);
+        tr_runtime_call(tr, ".core.__BEEPER", 0);
+        return node;
+    }
+    const TypeInfo *float_t = tr->cs->symbol_table->basic_types[TYPE_float];
+    if (c1) visitor_visit(v, c1);
+    tr_ic_param(tr, float_t, (c1 && c1->t) ? c1->t : "0");
+    if (c0) visitor_visit(v, c0);
+    tr_ic_fparam(tr, float_t, (c0 && c0->t) ? c0->t : "0");
+    tr_runtime_call(tr, ".core.BEEP", 0);
     return node;
 }
 
@@ -2223,6 +2358,23 @@ static void tr_register_handlers(Visitor *v) {
     visitor_on_sentence(v, "STOP", tr_visit_stop);
     visitor_on_sentence(v, "ERROR", tr_visit_error);
     visitor_on_sentence(v, "CHKBREAK", tr_visit_chkbreak);
+    /* Simple statements (translator.py:50-54,101-104,886-889,904-907). */
+    visitor_on_sentence(v, "NOP", tr_visit_nop);
+    visitor_on_sentence(v, "CLS", tr_visit_cls);
+    visitor_on_sentence(v, "BORDER", tr_visit_border);
+    visitor_on_sentence(v, "PAUSE", tr_visit_pause);
+    visitor_on_sentence(v, "RANDOMIZE", tr_visit_randomize);
+    /* visit_ATTR_sentence (translator.py:921-931) — 8 standalone attrs. */
+    visitor_on_sentence(v, "INK", tr_visit_attr_sentence);
+    visitor_on_sentence(v, "PAPER", tr_visit_attr_sentence);
+    visitor_on_sentence(v, "FLASH", tr_visit_attr_sentence);
+    visitor_on_sentence(v, "BRIGHT", tr_visit_attr_sentence);
+    visitor_on_sentence(v, "INVERSE", tr_visit_attr_sentence);
+    visitor_on_sentence(v, "OVER", tr_visit_attr_sentence);
+    visitor_on_sentence(v, "BOLD", tr_visit_attr_sentence);
+    visitor_on_sentence(v, "ITALIC", tr_visit_attr_sentence);
+    /* visit_BEEP (translator.py:891-902). */
+    visitor_on_sentence(v, "BEEP", tr_visit_beep);
     visitor_on_sentence(v, "EXIT_DO", tr_visit_exit_do);
     visitor_on_sentence(v, "EXIT_WHILE", tr_visit_exit_while);
     visitor_on_sentence(v, "EXIT_FOR", tr_visit_exit_for);
