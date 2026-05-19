@@ -13,6 +13,17 @@
  *      "NEXTREG N,N" -> 2 args of 1 byte each
  *      "LD (IX+N),N" -> 2 args of 1 byte each
  */
+/* Python's \b word-boundary uses \w == [A-Za-z0-9_]. A maximal run of
+ * 'N' counts as an operand slot iff it is delimited on both sides by a
+ * non-word char (or string start/end) -- exactly re.compile(r"\bN+\b").
+ * 'N' is itself a word char, so e.g. "NZ"/"NC" (run followed by word
+ * char 'Z'/'C') is NOT a match, while "NN"/"...,N"/"(IX+N)" is. */
+static int is_word_char(char c)
+{
+    return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+           (c >= '0' && c <= '9') || c == '_';
+}
+
 int count_arg_slots(const char *mnemonic, int *arg_bytes, int max_args)
 {
     int count = 0;
@@ -20,12 +31,18 @@ int count_arg_slots(const char *mnemonic, int *arg_bytes, int max_args)
 
     while (*p) {
         if (*p == 'N') {
+            int run_at_start = (p == mnemonic);
+            char before = run_at_start ? '\0' : p[-1];
             int n = 0;
             while (*p == 'N') { n++; p++; }
-            /* Check it's a word boundary: preceded by non-alpha, followed by non-alpha */
-            if (count < max_args) {
-                arg_bytes[count] = n;
-                count++;
+            char after = *p; /* '\0' at string end */
+            /* \bN+\b: word boundary before AND after the run */
+            if ((run_at_start || !is_word_char(before)) &&
+                (after == '\0' || !is_word_char(after))) {
+                if (count < max_args) {
+                    arg_bytes[count] = n;
+                    count++;
+                }
             }
         } else {
             p++;
