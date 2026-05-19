@@ -27,6 +27,7 @@ PY_AST_DIFF     = csrc/tests/diff_ast_json.py
         test-zxbc-codegen verify-phase5-calibration \
         test-zxbc-outfmt verify-phase6-calibration \
         test-zxbc-full verify-phase7-calibration \
+        test-zxbc-stages \
         test-cmdline-parity \
         sweep-asm-zero-byte regenerate-zxbc-baselines
 
@@ -129,6 +130,17 @@ test-zxbc-full: $(ZXBC_C)
 # end-to-end pipeline regressed for a simple typed program.
 verify-phase7-calibration: $(ZXBC_C)
 	./csrc/tests/run_phase7_calibration.sh $(ZXBC_C)
+
+# WIRED-IN multi-stage byte-identical meter (user-directed 2026-05-19).
+# Byte-identical is a GATED pipeline, not isolated stages: Stage 1
+# codegen ASM == Python; Stage 2 assemble THAT asm, C-bin == Python-bin
+# (GATED on S1-EQUAL — Stage 2 can never pass if Stage 1 fails); Stage 3
+# end-to-end default pipeline (GATED on S2-EQUAL). This makes the prior
+# metrics oversight — codegen meter green while the assembled binary
+# diverged, because nothing gated the composition — structurally
+# impossible. Port-complete requires every stage green, gated.
+test-zxbc-stages: $(ZXBC_C) $(ZXBASM_C)
+	./csrc/tests/run_zxbc_stage_validation.sh $(ZXBC_C) $(ZXBASM_C) $(ZXBC_TESTS)
 
 # S7.2g end-to-end CLI parity gate. Mechanises the C-vs-Python flag
 # equivalence hand-verified per sub-slice across S7.2a–f (zxbc/zxbpp/
