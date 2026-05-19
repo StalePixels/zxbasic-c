@@ -43,6 +43,7 @@ static void tr_ic_data(Translator *tr, const TypeInfo *type_,
 static int tr_data_type_code(const TypeInfo *type_);
 static const char *tr_traverse_const(Translator *tr, AstNode *node);
 static const char *tr_constref_t(Translator *tr, AstNode *value);
+static const char *tr_array_data_label(Translator *tr, AstNode *entry);
 
 /* TranslatorInstVisitor.emit (translator_inst_visitor.py:21-25):
  *   quad = Quad(*args); self.backend.MEMORY.append(quad) */
@@ -350,6 +351,19 @@ static AstNode *tr_visit_var(Visitor *v, AstNode *node) {
             node->t = (char *)compiler_new_temp(tr->cs);
         const char *dst = (node->t && node->t[0]) ? node->t
                         : compiler_new_temp(tr->cs);
+        /* VarRef.t (varref.py:38-42): for a NON-global *dynamic* (string)
+         * scalar/param the property returns f"${self._t}" — the leading
+         * '$' is load-bearing (it makes _ploadstr/_fploadstr skip the
+         * LOADSTR runtime_call, _pload.py:166-193, and is the heap-dup
+         * sentinel visit_ARGUMENT:216 keys on). Cache the '$'-prefixed
+         * form ONCE on the shared symbol node so every reference reads the
+         * identical Python `.t` value. */
+        if (node->type_ && type_is_dynamic(node->type_) && dst[0] != '$') {
+            char *ds = arena_alloc(&tr->cs->arena, strlen(dst) + 2);
+            ds[0] = '$';
+            strcpy(ds + 1, dst);
+            dst = ds;
+        }
         node->t = (char *)dst;
         tr_ic_pload(tr, node->type_, dst, ofs);
     }
@@ -943,21 +957,55 @@ static AstNode *tr_visit_argument(Visitor *v, AstNode *node) {
         tr->cs->symbol_table->basic_types[TYPE_uinteger]; /* gl.PTR_TYPE */
 
     if (!byref) {
-        /* :216-222 dynamic `$`-string VAR heap-dup — needs value.offset
-         * (param/local). Deferred (S5.8 string ABI). Loud, not silent. */
-        if (value && value->tag == AST_ID && value->type_ &&
-            value->type_->basic_type == TYPE_string &&
-            value->u.id.scope != SCOPE_global) {
-            fprintf(stderr,
-                "zxbc: visit_ARGUMENT dynamic-$string byval (scope %d) "
-                "param/local offset — S5.8 string ABI residue\n",
-                (int)value->u.id.scope);
+        /* :215-226. node.t == ARGUMENT.t (argument.py:27-36): byval &
+         * dynamic & a non-global VAR value => value.t with the leading
+         * '$' stripped (value.t[1:]); otherwise value.t. node.type_ ==
+         * value.type_.
+         *
+         * :216 the dynamic-`$`-string VAR heap-dup arm fires when the
+         * value is a VAR (CLASS.var id) of dynamic (string) type whose
+         * VarRef.t starts with '$' — i.e. a non-global string param/local
+         * (varref.py:38-42). It does NOT yield the value; it ic_ploads
+         * the *pointer* off the IX slot (param => +offset, local =>
+         * -offset) into the $-stripped temp, then ic_params it. The
+         * stripped (no-'$') temp makes _ploadstr emit the LOADSTR heap
+         * duplicate (_pload.py:166-178) — the byval string copy. */
+        bool var_is_dyn_dollar =
+            value && value->tag == AST_ID &&
+            value->u.id.class_ == CLASS_var &&
+            value->type_ && type_is_dynamic(value->type_) &&
+            value->u.id.scope != SCOPE_global;
+        if (var_is_dyn_dollar) {
+            /* node.t == value.t[1:]; value.t == VarRef.t == "$"+_t
+             * (varref.py:38-42). The bare temp's exact number never
+             * reaches output (ploadstr uses ins[2]=offset; the absent
+             * '$' is the only load-bearing bit). */
+            const char *base = value->t;
+            if (!(base && base[0])) base = compiler_new_temp(tr->cs);
+            const char *bare = (base[0] == '$') ? base + 1 : base;
+            /* :219-222 scope offset: parameter => +offset, local =>
+             * -offset (str()-coerced; no '*' — byval pointer copy). */
+            long off = value->u.id.offset;
+            if (value->u.id.scope == SCOPE_local) off = -off;
+            char ofs[24];
+            snprintf(ofs, sizeof(ofs), "%ld", off);
+            tr_ic_pload(tr, value->type_, bare, ofs);
+            tr_ic_param(tr, value->type_, bare);
+            return node;
         }
         /* :224 yield node.value */
         if (value) visitor_visit(v, value);
-        /* :225 ic_param(node.type_, node.t) — type_/t are value's. */
-        tr_ic_param(tr, value ? value->type_ : NULL,
-                    (value && value->t) ? value->t : "");
+        /* :225 ic_param(node.type_, node.t). node.t == ARGUMENT.t:
+         * byval-dynamic-VAR strips a leading '$' from value.t; every
+         * other shape passes value.t through unchanged. */
+        const char *vt = (value && value->t) ? value->t : "";
+        if (value && value->tag == AST_ID &&
+            value->u.id.class_ == CLASS_var &&
+            value->type_ && type_is_dynamic(value->type_) &&
+            value->u.id.scope != SCOPE_global &&
+            vt[0] == '$')
+            vt = vt + 1;
+        tr_ic_param(tr, value ? value->type_ : NULL, vt);
         return node;
     }
 
@@ -1036,6 +1084,42 @@ static AstNode *tr_visit_argument(Visitor *v, AstNode *node) {
     if (value && value->tag == AST_ARRAYACCESS) {
         AstNode *aent = value->child_count > 0 ? value->children[0] : NULL;
         Scope ascope = aent ? aent->u.id.scope : SCOPE_global;
+
+        /* :251-258  O>1 + global form. Python REPLACES node.value with
+         *   BINARY PLUS( UNARY ADDRESS(entry, PTR), NUMBER(offset, PTR) )
+         * and yields THAT. ADDRESS(global-array entry) is the *scalar*
+         * branch (operand.token != "ARRAYACCESS") → ic_load(PTR, t,
+         * "#"+entry.t); entry.t == ArrayRef.t(global) == data_label
+         * (arrayref.py:69-78). NUMBER(offset).t == str(offset) (no IC).
+         * BINARY PLUS → ic_add(PTR, t2, t1, str(offset)). The
+         * const-index byte offset is ARRAYACCESS.offset (is_const). The
+         * add of a static address + constant peephole-folds to
+         * `ld hl, <data_label> / inc hl…` — byte-identical to Python's
+         * O2 output. Verified Python IC: loadu16 t #_a.__DATA__ ;
+         * addu16 t2 t 1. Non-const offset is outside the repro scope and
+         * keeps the aaddr path below (loud-safe). */
+        if (ascope == SCOPE_global &&
+            tr->cs->opts.optimization_level > 1 &&
+            value->u.arrayaccess.is_const) {
+            const TypeInfo *uintt =
+                tr->cs->symbol_table->basic_types[TYPE_uinteger];
+            const char *dlabel = tr_array_data_label(tr, aent);
+            size_t dl = strlen(dlabel);
+            char *hsrc = arena_alloc(&tr->cs->arena, dl + 2);
+            hsrc[0] = '#';
+            memcpy(hsrc + 1, dlabel, dl + 1);
+            const char *t1 = compiler_new_temp(tr->cs);
+            tr_ic_load(tr, uintt, t1, hsrc);          /* ADDRESS(entry) */
+            const char *t2 = (node->t && node->t[0]) ? node->t
+                           : compiler_new_temp(tr->cs);
+            char obs[24];
+            snprintf(obs, sizeof(obs), "%ld",
+                     value->u.arrayaccess.offset);
+            tr_ic_arith(tr, "add", uintt, t2, t1, obs); /* + NUMBER */
+            return node;
+        }
+
+        /* :259-263 else form — UNARY ADDRESS(ARRAYACCESS.copy_from). */
         /* visit_ADDRESS `yield node.operand` == visit_ARRAYACCESS:
          * push the index ARGUMENT children in reverse (NO aload). */
         for (int i = value->child_count - 1; i >= 1; i--)
@@ -2538,7 +2622,13 @@ static AstNode *tr_visit_arrayaccess(Visitor *v, AstNode *node) {
                     entry->u.id.scope == SCOPE_local;
     long eoff = entry ? entry->u.id.offset : 0;
 
-    if (!is_const) {
+    /* Python SymbolARRAYACCESS.offset returns None UNCONDITIONALLY for
+     * scope == SCOPE.parameter (arrayaccess.py:77-78), so visit_ARRAYLOAD
+     * takes the `offset is None` (ic_paload) path for a param array even
+     * with a constant subscript. The const-param ic_pload branch below is
+     * never reached in Python — fold the param-scope override into the
+     * dynamic gate to match `node.offset is None`. */
+    if (!is_const || is_param) {
         /* :268-273 — yield node.args (the index ARGUMENT children, in
          * reverse); then scope-dispatched aload/paload. */
         for (int i = node->child_count - 1; i >= 1; i--)
@@ -2695,7 +2785,16 @@ static AstNode *tr_visit_letarray(Visitor *v, AstNode *node) {
         long a_eoff = aent ? aent->u.id.offset : 0;
         const char *rt;
 
-        if (!acc->u.arrayaccess.is_const) {
+        /* Python SymbolARRAYACCESS.offset (arrayaccess.py:77-78) returns
+         * None UNCONDITIONALLY when scope == SCOPE.parameter — a param
+         * array's element offset is never statically foldable (its bound
+         * table lives at runtime), so `arr.offset is None` and
+         * visit_LETARRAY takes the dynamic ic_pastore(f"*{entry.offset}")
+         * path even for a constant subscript. The C `is_const` flag only
+         * tracks subscript constness, so OR in the param-scope override
+         * to match Python's `offset is None`. */
+        bool offset_is_none = !acc->u.arrayaccess.is_const || a_param;
+        if (offset_is_none) {
             /* :334-342 dynamic store:
              *   yield children[1]   (RHS)
              *   yield arr           (ARRAYACCESS — push indices)
@@ -3826,9 +3925,26 @@ static void tr_visit_function(Translator *tr, AstNode *fdecl) {
                                        : lv->u.id.offset;
                         char ofs[24];
                         snprintf(ofs, sizeof(ofs), "%ld", off);
-                        const char *lt =
+                        /* local_var.t == VarRef.t (varref.py:34-42): a
+                         * non-global, *dynamic* (string) scalar is
+                         * f"${self._t}" — the leading '$' is what makes
+                         * _fploadstr (_pload.py:181-193) skip the LOADSTR
+                         * runtime_call (ins[1][0] != '$'). The temp number
+                         * itself never reaches output (offset comes from
+                         * ins[2]); only the '$' sentinel is load-bearing. */
+                        const char *base =
                             (lv->t && lv->t[0]) ? lv->t
                                                 : compiler_new_temp(tr->cs);
+                        const char *lt;
+                        if (base[0] == '$') {
+                            lt = base;
+                        } else {
+                            char *b = arena_alloc(&tr->cs->arena,
+                                                  strlen(base) + 2);
+                            b[0] = '$';
+                            strcpy(b + 1, base);
+                            lt = b;
+                        }
                         tr_ic_fpload(tr, str_t, lt, ofs);
                         tr_runtime_call(tr, ".core.__MEM_FREE", 0);
                     }

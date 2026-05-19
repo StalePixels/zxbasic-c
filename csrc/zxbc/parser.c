@@ -4239,6 +4239,36 @@ static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function, bool is_decl
                                "Can't declare mandatory param '%s' after optional param", param_name);
                 }
 
+                /* A deprecated sigil overrides the declared param type at
+                 * DECLARE time (SymbolTable.declare, symboltable.py:105-
+                 * 123): a$ => string, i% => integer, etc. Python resolves
+                 * this inside declare_param BEFORE PARAMLIST.append_child
+                 * accumulates `param.size` (paramlist.py:53-58), so the
+                 * sigil type must be on the node before
+                 * parser_assign_param_offsets runs — otherwise a `s$`
+                 * param sizes as the implicit float default (5 → psz 6)
+                 * instead of string (2 → psz 2). The body-scope
+                 * registration block below repeats this resolution; with
+                 * the type already corrected here it is a consistent
+                 * no-op. The explicit-vs-sigil conflict diagnostic
+                 * (symboltable.py:108-109) stays there (param-name line). */
+                {
+                    size_t pnl = strlen(param_name);
+                    if (pnl > 0 &&
+                        is_deprecated_suffix(param_name[pnl - 1])) {
+                        BasicType sbt =
+                            suffix_to_type(param_name[pnl - 1]);
+                        TypeInfo *sti =
+                            p->cs->symbol_table->basic_types[sbt];
+                        /* declare() overrides type_ unless an explicit
+                         * (non-implicit) declared type conflicts — in
+                         * which case Python keeps going after the error;
+                         * mirror by still adopting the sigil type (the
+                         * conflict is reported at the 4438-block). */
+                        param_type = sti;
+                    }
+                }
+
                 AstNode *param_node = ast_new(p->cs, AST_ARGUMENT, param_line);
                 param_node->u.argument.name = arena_strdup(&p->cs->arena, param_name);
                 param_node->u.argument.byref = byref;
@@ -4524,6 +4554,28 @@ static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function, bool is_decl
         }
         id_node->u.id.local_size =
             symboltable_compute_offsets(p->cs->symbol_table, body_scope);
+    }
+
+    /* SymbolTable.leave_scope (symboltable.py:268-277): every parameter
+     * that was never accessed in the body is force-marked accessed —
+     * "Parameters must always be present even if not used!". This is
+     * load-bearing for codegen: visit_LETARRAY / visit_ARRAYLOAD /
+     * emit_var_assign all gate on `entry.accessed` at O>1
+     * (optimize.py:309/322/344, translator.py:330/980); without this a
+     * write-only array/scalar PARAMETER (e.g. `q` in
+     * FUNCTION test(q() as UInteger): q(3)=7) is pruned and its whole
+     * body vanishes at the default O2. Mark BEFORE exit_scope so the
+     * shared symbol nodes the translator later reads carry it. (Warnings
+     * are intentionally not reproduced here — Python's leave_scope is
+     * called show_warnings=False on this path, zxbparser.py:2929.) */
+    {
+        Scope_ *bs = p->cs->symbol_table->current_scope;
+        for (int si = 0; si < bs->ordered_count; si++) {
+            AstNode *e = bs->ordered[si];
+            if (e && e->tag == AST_ID &&
+                e->u.id.scope == SCOPE_parameter && !e->u.id.accessed)
+                e->u.id.accessed = true;
+        }
     }
 
     /* Exit scope */

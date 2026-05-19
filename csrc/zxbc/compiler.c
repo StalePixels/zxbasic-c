@@ -1581,6 +1581,38 @@ bool check_pending_calls(CompilerState *cs) {
                 result = false;
                 continue;
             }
+        } else {
+            /* INLINE domain (Python call.py:102-103: entry.declared and
+             * not entry.forwarded — a def-first call). Python runs the
+             * FULL check_call_arguments here too, immediately at parse;
+             * its load-bearing side effect for codegen is
+             * `arg.byref = True` for every ByRef parameter (check.py:170),
+             * which the ByRef-array/@-element argument lowering in
+             * tr_visit_argument/tr_visit_unary keys on. The C cannot run
+             * the full R3-R10 here without re-firing the parenless-call
+             * (funcnoparm) FALSE_POS the gate comment documents, so run a
+             * MINIMAL byref-only pass: positionally zip args↔params and
+             * set arg.byref where the param is ByRef. No R3-R10
+             * diagnostics, no typecast, no default-fill — purely the
+             * codegen-visible arg.byref propagation Python performs. */
+            if (entry->tag == AST_ID && entry->u.id.params &&
+                entry->u.id.params->tag == AST_PARAMLIST &&
+                call->child_count >= 2) {
+                AstNode *pl = entry->u.id.params;
+                AstNode *al = call->children[1];
+                if (al && al->tag == AST_ARGLIST) {
+                    int zn = al->child_count < pl->child_count
+                                 ? al->child_count : pl->child_count;
+                    for (int z = 0; z < zn; z++) {
+                        AstNode *arg = al->children[z];
+                        AstNode *pm  = pl->children[z];
+                        if (!arg || arg->tag != AST_ARGUMENT || !pm)
+                            continue;
+                        if (pm->u.argument.byref)
+                            arg->u.argument.byref = true;
+                    }
+                }
+            }
         }
 
         /* R11 — forward-declared but never implemented (api/check.py

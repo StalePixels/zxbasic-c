@@ -316,6 +316,9 @@ static int s_log2(long x) { int n = 0; while (x > 1) { x >>= 1; n++; } return n;
 #define RL_BXOR32     ZXBC_NAMESPACE ".__BXOR32"
 #define RL_BNOT32     ZXBC_NAMESPACE ".__BNOT32"
 #define RL_PLOADF     ZXBC_NAMESPACE ".__PLOADF"  /* core.py:104 */
+#define RL_PISTORE16  ZXBC_NAMESPACE ".__PISTORE16" /* core.py:99 */
+#define RL_PISTORE32  ZXBC_NAMESPACE ".__PISTORE32" /* core.py:100 */
+#define RL_PSTORE32   ZXBC_NAMESPACE ".__PSTORE32"  /* core.py:107 */
 #define RL_ILOAD32    ZXBC_NAMESPACE ".__ILOAD32"
 #define RL_STORE32    ZXBC_NAMESPACE ".__STORE32"
 #define RL_ISTORE32   ZXBC_NAMESPACE ".__ISTORE32"
@@ -565,6 +568,9 @@ static const char *s_required_module(const char *label) {
     if (strcmp(label, RL_BXOR32)     == 0) return "bitwise/bxor32.asm";
     if (strcmp(label, RL_BNOT32)     == 0) return "bitwise/bnot32.asm";
     if (strcmp(label, RL_PLOADF)     == 0) return "ploadf.asm"; /* core.py:233 */
+    if (strcmp(label, RL_PISTORE16)  == 0) return "istore16.asm"; /* core.py:228 */
+    if (strcmp(label, RL_PISTORE32)  == 0) return "pistore32.asm"; /* core.py:229 */
+    if (strcmp(label, RL_PSTORE32)   == 0) return "pstore32.asm"; /* core.py:236 */
     if (strcmp(label, RL_ILOAD32)    == 0) return "iload32.asm";
     if (strcmp(label, RL_STORE32)    == 0) return "store32.asm";
     if (strcmp(label, RL_ISTORE32)   == 0) return "store32.asm";
@@ -2656,6 +2662,142 @@ static StrVec emit_pload32(Backend *b, Quad *q) {
     s_pload(b, &out, q_ins(q, 2), 4);
     sv_push(b, &out, "push de");
     sv_push(b, &out, "push hl");
+    return out;
+}
+/* _ploadstr (_pload.py:166-178): _pload(ins[2], 2); if ins[1][0] != '$':
+ * runtime_call(LOADSTR); then push hl. ins[1] == q->args[0] (the temp). */
+static StrVec emit_ploadstr(Backend *b, Quad *q) {
+    StrVec out = sv_new();
+    s_pload(b, &out, q_ins(q, 2), 2);
+    const char *t = q_ins(q, 1);
+    if (t[0] != '$')
+        sv_push(b, &out, s_runtime_call(b, RL_LOADSTR));
+    sv_push(b, &out, "push hl");
+    return out;
+}
+/* _fploadstr (_pload.py:181-193): _pload(ins[2], 2); if ins[1][0] != '$':
+ * runtime_call(LOADSTR). Unlike ploadstr, no push hl. */
+static StrVec emit_fploadstr(Backend *b, Quad *q) {
+    StrVec out = sv_new();
+    s_pload(b, &out, q_ins(q, 2), 2);
+    const char *t = q_ins(q, 1);
+    if (t[0] != '$')
+        sv_push(b, &out, s_runtime_call(b, RL_LOADSTR));
+    return out;
+}
+/* _pstore8 (_pload.py:196-258): store ins[2] at IX + ins[1] (8-bit).
+ * ins[1]==q->args[0] (offset, '*'=indirect), ins[2]==q->args[1] (value).
+ * Verbatim port. */
+static StrVec emit_pstore8(Backend *b, Quad *q) {
+    const char *value  = q_ins(q, 2);
+    const char *offset = q_ins(q, 1);
+    bool indirect = offset[0] == '*';
+    int size = 0;
+    if (indirect) { offset++; size = 1; }
+    long I = s_int_val(offset);
+    if (I >= 0) {
+        I += 4;                       /* ret addr + push IX */
+        if (!indirect) I += 1;        /* F flag ignored */
+    }
+    StrVec out;
+    bool vint = s_is_int(value);
+    if (vint) out = sv_new();
+    else      out = bits8_get_oper(b, value, NULL, false);
+
+    bool ix_changed = !(-128 + size <= I && I <= 127 - size);
+    if (ix_changed) {
+        sv_push(b, &out, "push ix");
+        sv_push(b, &out, "pop hl");
+        sv_pushf(b, &out, "ld de, %ld", I);
+        sv_push(b, &out, "add hl, de");
+    }
+    if (indirect) {
+        if (ix_changed) {
+            sv_push(b, &out, "ld c, (hl)");
+            sv_push(b, &out, "inc hl");
+            sv_push(b, &out, "ld h, (hl)");
+            sv_push(b, &out, "ld l, c");
+        } else {
+            sv_pushf(b, &out, "ld h, (ix%+ld)", I + 1);
+            sv_pushf(b, &out, "ld l, (ix%+ld)", I);
+        }
+        if (vint) sv_pushf(b, &out, "ld (hl), %d", s_int8(s_int_val(value)));
+        else      sv_push(b, &out, "ld (hl), a");
+        return out;
+    }
+    /* direct store */
+    if (ix_changed) {
+        if (vint) sv_pushf(b, &out, "ld (hl), %d", s_int8(s_int_val(value)));
+        else      sv_push(b, &out, "ld (hl), a");
+        return out;
+    }
+    if (vint)
+        sv_pushf(b, &out, "ld (ix%+ld), %d", I, s_int8(s_int_val(value)));
+    else
+        sv_pushf(b, &out, "ld (ix%+ld), a", I);
+    return out;
+}
+/* _pstore16 (_pload.py:262-323): verbatim port. */
+static StrVec emit_pstore16(Backend *b, Quad *q) {
+    const char *value  = q_ins(q, 2);
+    const char *offset = q_ins(q, 1);
+    bool indirect = offset[0] == '*';
+    int size = 1;
+    if (indirect) offset++;
+    long i = s_int_val(offset);
+    if (i >= 0) i += 4;
+    StrVec out;
+    bool vint = s_is_int(value);
+    if (vint) out = sv_new();
+    else      out = bits16_get_oper(b, value, NULL, false);
+
+    bool ix_changed = !(-128 + size <= i && i <= 127 - size);
+    if (indirect) {
+        if (vint) sv_pushf(b, &out, "ld hl, %d", s_int16(s_int_val(value)));
+        sv_pushf(b, &out, "ld bc, %ld", i);
+        sv_push(b, &out, s_runtime_call(b, RL_PISTORE16));
+        return out;
+    }
+    if (ix_changed) {
+        if (!vint) sv_push(b, &out, "ex de, hl");
+        sv_push(b, &out, "push ix");
+        sv_push(b, &out, "pop hl");
+        sv_pushf(b, &out, "ld bc, %ld", i);
+        sv_push(b, &out, "add hl, bc");
+        if (vint) {
+            int v = s_int16(s_int_val(value));
+            sv_pushf(b, &out, "ld (hl), %d", v & 0xFF);
+            sv_push(b, &out, "inc hl");
+            sv_pushf(b, &out, "ld (hl), %d", (v >> 8) & 0xFF);
+            return out;
+        }
+        sv_push(b, &out, "ld (hl), e");
+        sv_push(b, &out, "inc hl");
+        sv_push(b, &out, "ld (hl), d");
+        return out;
+    }
+    if (vint) {
+        int v = s_int16(s_int_val(value));
+        sv_pushf(b, &out, "ld (ix%+ld), %d", i, v & 0xFF);
+        sv_pushf(b, &out, "ld (ix%+ld), %d", i + 1, (v >> 8) & 0xFF);
+    } else {
+        sv_pushf(b, &out, "ld (ix%+ld), l", i);
+        sv_pushf(b, &out, "ld (ix%+ld), h", i + 1);
+    }
+    return out;
+}
+/* _pstore32 (_pload.py:326-353): verbatim port. */
+static StrVec emit_pstore32(Backend *b, Quad *q) {
+    const char *value  = q_ins(q, 2);
+    const char *offset = q_ins(q, 1);
+    bool indirect = offset[0] == '*';
+    if (indirect) offset++;
+    long i = s_int_val(offset);
+    if (i >= 0) i += 4;
+    StrVec out = bits32_get_oper(b, value, NULL, false, false);
+    sv_pushf(b, &out, "ld bc, %ld", i);
+    sv_push(b, &out, s_runtime_call(b,
+                                    indirect ? RL_PISTORE32 : RL_PSTORE32));
     return out;
 }
 
@@ -5250,6 +5392,11 @@ static StrVec quad_emit(Backend *b, Quad *q) {
     if (strcmp(I, "ploadi8")  == 0 || strcmp(I, "ploadu8")  == 0) return emit_pload8(b, q);
     if (strcmp(I, "ploadi16") == 0 || strcmp(I, "ploadu16") == 0) return emit_pload16(b, q);
     if (strcmp(I, "ploadi32") == 0 || strcmp(I, "ploadu32") == 0) return emit_pload32(b, q);
+    if (strcmp(I, "ploadstr")  == 0) return emit_ploadstr(b, q);
+    if (strcmp(I, "fploadstr") == 0) return emit_fploadstr(b, q);
+    if (strcmp(I, "pstorei8")  == 0 || strcmp(I, "pstoreu8")  == 0) return emit_pstore8(b, q);
+    if (strcmp(I, "pstorei16") == 0 || strcmp(I, "pstoreu16") == 0) return emit_pstore16(b, q);
+    if (strcmp(I, "pstorei32") == 0 || strcmp(I, "pstoreu32") == 0) return emit_pstore32(b, q);
 
     /* Array element access (main.py:430-478,504-528,585 ICInfo). f16
      * array load maps to _aload32 (main.py:476); astore/pastore f16 use
