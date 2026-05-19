@@ -618,8 +618,12 @@ int codegen_emit(CompilerState *cs, AstNode *ast) {
      * PRINT_IS_USED). The fresh ppf is the cleared ID_TABLE; these
      * preproc_define calls are the reset_id_table() re-seed. Faithful to
      * the exact set: empty bodies for the flags (Python "" value),
-     * "1" for ___PRINT_IS_USED___, the opt_strategy number for
-     * __OPT_STRATEGY__. ___PRINT_IS_USED___ is the byte-critical one:
+     * "1" for ___PRINT_IS_USED___, and the opt_strategy WORD for
+     * __OPT_STRATEGY__ — Python's OptimizationStrategy is a StrEnum
+     * (config.py:33-35 Size="size"/Speed="speed"/Auto="auto") and
+     * args_config.py:188 seeds OPTIONS.__DEFINES["__OPT_STRATEGY__"]
+     * = OPTIONS.opt_strategy, i.e. the word, NOT the enum's int
+     * (S7.2f). ___PRINT_IS_USED___ is the byte-critical one:
      * copy_attr.asm:1 `#ifdef ___PRINT_IS_USED___` gates its
      * `#include once <print.asm>` (copy_attr.asm:2), so without this the
      * runtime include-resolution ORDER diverges from Python. */
@@ -630,8 +634,15 @@ int codegen_emit(CompilerState *cs, AstNode *ast) {
     if (cs->opts.enable_break)
         preproc_define(&ppf, "__ENABLE_BREAK__", "", 0, NULL);
     {
-        char optstrat[16];
-        snprintf(optstrat, sizeof(optstrat), "%d", (int)cs->opts.opt_strategy);
+        /* OptimizationStrategy StrEnum value (config.py:33-35), the
+         * same enum→word mapping the S7.2c-ii save-config writer uses
+         * (main.c). NOT the OptStrategy int (was a latent divergence —
+         * no stdlib .asm reads __OPT_STRATEGY__ today, but the define
+         * value was observably wrong vs Python). */
+        const char *optstrat =
+            cs->opts.opt_strategy == OPT_STRATEGY_SIZE  ? "size"
+          : cs->opts.opt_strategy == OPT_STRATEGY_SPEED ? "speed"
+          :                                               "auto";
         preproc_define(&ppf, "__OPT_STRATEGY__", optstrat, 0, NULL);
     }
     if (cs->print_is_used)
