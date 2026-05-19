@@ -350,6 +350,25 @@ int codegen_emit(CompilerState *cs, AstNode *ast) {
     peephole_init(a);
     peephole_main();
 
+    /* Parse-time #require seeding (zxbparser.py:3234 — the
+     * `arch.target.backend.REQUIRES.add(p[2])` calls executed during
+     * zxbparser.parser.parse, zxbc.py:107). In Python `common.REQUIRES`
+     * is cleared by backend.init() (zxbc.py:93) BEFORE the parse, then
+     * the parse populates it, then the translator adds more
+     * (common.runtime_call:159), then emit()/emit_prologue read the
+     * union. The C Backend is constructed here (after the parse), so the
+     * staged parse-time names (cs->requires) are merged into b->requires_
+     * right after backend_init — replicating the exact
+     * clear→parse→translate→emit accumulation order. The translator-time
+     * adds (S7.1b-i, backend.c:732/737) and the second-pass get_inits
+     * harvest then accumulate on top, exactly as Python does. */
+    {
+        char *rq;
+        vec_foreach(cs->requires, rq) {
+            hashmap_set(&b.requires_, arena_strdup(a, rq), (void *)1);
+        }
+    }
+
     /* ---- S5.3 (N1): build data_ast + seed the temp counter ------------
      *
      * data_ast: a BLOCK of VARDECL(entry) over the global CLASS_var

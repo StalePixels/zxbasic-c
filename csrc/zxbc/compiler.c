@@ -1642,6 +1642,7 @@ void compiler_init(CompilerState *cs) {
     vec_init(cs->datas);
     vec_init(cs->data_functions);
     vec_init(cs->inits);
+    vec_init(cs->requires);
     vec_init(cs->sym_entries_ordered);   /* N1 */
 
     cs->symbol_table = symboltable_new(cs);
@@ -1671,6 +1672,7 @@ void compiler_destroy(CompilerState *cs) {
     vec_free(cs->datas);
     vec_free(cs->data_functions);
     vec_free(cs->inits);
+    vec_free(cs->requires);
     vec_free(cs->sym_entries_ordered);   /* N1 */
 
     arena_destroy(&cs->arena);

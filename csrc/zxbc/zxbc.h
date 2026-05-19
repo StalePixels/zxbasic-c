@@ -621,6 +621,16 @@ struct CompilerState {
     /* Init routines */
     VEC(char *) inits;       /* #init labels */
 
+    /* #require'd asm modules collected at parse time — the faithful
+     * analogue of Python's parse-time `arch.target.backend.REQUIRES.add`
+     * (zxbparser.py:3234 p_preproc_line_require). Python's
+     * `common.REQUIRES` is a module global cleared by backend.init()
+     * BEFORE the parse (zxbc.py:93) and populated DURING the parse; the C
+     * Backend is constructed after the parse, so the parse-time names are
+     * staged here and seeded into b->requires_ in codegen_emit right after
+     * backend_init (matching the Python clear→parse→translate→emit order).*/
+    VEC(char *) requires;    /* parse-time #require module names */
+
     /* Default type for undeclared variables */
     TypeInfo *default_type;
 

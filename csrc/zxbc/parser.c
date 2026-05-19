@@ -2290,8 +2290,21 @@ static AstNode *parse_statement(Parser *p) {
         return make_nop(p);
     }
     if (match(p, BTOK__REQUIRE)) {
-        /* Skip the required library name for now */
-        if (check(p, BTOK_STRC)) advance(p);
+        /* zxbparser.py:3232-3234 p_preproc_line_require:
+         *     """preproc_line : _REQUIRE STRING"""
+         *     arch.target.backend.REQUIRES.add(p[2])
+         * p[2] is the quote-stripped module name (zxblex.py:511-513
+         * t_preproc_STRING strips the surrounding quotes); the C preproc
+         * STRC token already arrives quote-stripped (lexer.c lex_preproc).
+         * Python's `common.REQUIRES` is the live module global read by
+         * emit()/emit_prologue; the C Backend is built later in codegen,
+         * so stage the name on cs->requires (seeded into b->requires_
+         * after backend_init in codegen_emit). */
+        if (check(p, BTOK_STRC)) {
+            advance(p);
+            vec_push(p->cs->requires,
+                     arena_strdup(&p->cs->arena, p->previous.sval));
+        }
         return make_nop(p);
     }
     if (match(p, BTOK__PRAGMA)) {
