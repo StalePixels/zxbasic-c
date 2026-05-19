@@ -27,6 +27,17 @@ void zxbc_msg_output(CompilerState *cs, const char *msg) {
     fprintf(err_stream(cs), "%s\n", msg);
 }
 
+/* errmsg.py:109-113 warning_command_line_flag_deprecation:
+ *     msg_output(f"WARNING: deprecated flag {flag}")
+ * Buffer is sized for the prefix plus the longest flag string used
+ * (the --emit-backend / --strict-bool messages, ~80 chars); 256 is
+ * comfortably safe and snprintf truncates rather than overflows. */
+void zxbc_warning_command_line_flag_deprecation(CompilerState *cs, const char *flag) {
+    char buf[256];
+    snprintf(buf, sizeof(buf), "WARNING: deprecated flag %s", flag);
+    zxbc_msg_output(cs, buf);
+}
+
 void zxbc_info(CompilerState *cs, const char *fmt, ...) {
     if (cs->opts.debug_level < 1)
         return;

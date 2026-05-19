@@ -34,6 +34,10 @@ void zxbc_msg_output(CompilerState *cs, const char *msg);
 /* Info messages (only if debug_level >= 1) */
 void zxbc_info(CompilerState *cs, const char *fmt, ...);
 
+/* Command-line flag deprecation warning (errmsg.py:108-113).
+ * Special warning that can't be silenced; no line number nor filename. */
+void zxbc_warning_command_line_flag_deprecation(CompilerState *cs, const char *flag);
+
 /* ----------------------------------------------------------------
  * Specific error messages (matching Python's errmsg.py functions)
  * ---------------------------------------------------------------- */

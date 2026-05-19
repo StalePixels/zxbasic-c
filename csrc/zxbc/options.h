@@ -44,6 +44,19 @@ typedef struct CompilerOptions {
     bool default_byref;
     int max_syntax_errors;
 
+    /* Whether each deprecated output-format flag (and -f/--output-format)
+     * was seen on the command line. Mirrors Python's options.output_format
+     * / options.tzx / options.tap / options.asm / options.emit_backend
+     * truthiness in args_config.py:107-128 — used ONLY to drive the
+     * deprecation-warning elif chain; output_file_type resolution itself
+     * is unchanged (last-wins, out of S7.2b scope). memset-zeroed by
+     * compiler_options_init like the other bool fields. */
+    bool opt_seen_output_format;
+    bool opt_seen_tzx;
+    bool opt_seen_tap;
+    bool opt_seen_asm;
+    bool opt_seen_emit_backend;
+
     /* Output control */
     char *memory_map;        /* filename for memory map, or NULL */
     bool use_basic_loader;

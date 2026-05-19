@@ -32,6 +32,45 @@ int main(int argc, char *argv[]) {
 
     cs.current_file = cs.opts.input_filename;
 
+    /* Command-line flag deprecation warnings (args_config.py:107-132).
+     * Python emits these in args_config (BEFORE OPTIONS.stderr is
+     * rebound to the -e file at args_config.py:171-172), and
+     * OPTIONS.stderr defaults to sys.stderr (config.py:202). So these
+     * warnings ALWAYS go to the real stderr, even with -e FILE — the
+     * -e file never carries a WARNING: line. We replicate that ordering
+     * here: cs.error_cache is already initialised (compiler.c:1520, via
+     * compiler_init at main.c:22) and cs.opts.stderr_f is still NULL
+     * (the -e fopen block below has not run yet), so err_stream() in
+     * zxbc_msg_output resolves to the real stderr — Python-faithful.
+     *
+     * Scope: warning emission + the --strict-bool force-reset only.
+     * output_file_type resolution stays last-wins (set in args.c) — out
+     * of S7.2b scope. The elif chain is mandatory: -f/--output-format
+     * SUPPRESSES all four format-flag deprecations, and only ONE ever
+     * fires. The strict-bool block is independent and can fire
+     * alongside one of the four. */
+    if (cs.opts.opt_seen_output_format) {
+        /* -f / --output-format given: NO deprecation warning. */
+    } else if (cs.opts.opt_seen_tzx) {
+        zxbc_warning_command_line_flag_deprecation(
+            &cs, "--tzx (use -f tzx or --output-format=tzx instead)");
+    } else if (cs.opts.opt_seen_tap) {
+        zxbc_warning_command_line_flag_deprecation(
+            &cs, "--tap (use -f tap or --output-format=tap instead)");
+    } else if (cs.opts.opt_seen_asm) {
+        zxbc_warning_command_line_flag_deprecation(
+            &cs, "--asm (use -f asm or --output-format=asm instead)");
+    } else if (cs.opts.opt_seen_emit_backend) {
+        zxbc_warning_command_line_flag_deprecation(
+            &cs, "--emit-backend (use -f ir or --output-format=ir instead)");
+    }
+
+    if (cs.opts.strict_bool) {
+        cs.opts.strict_bool = false;
+        zxbc_warning_command_line_flag_deprecation(
+            &cs, "--strict-bool is deprecated (no longer needed)");
+    }
+
     /* Open error file if specified */
     if (cs.opts.stderr_filename) {
         cs.opts.stderr_f = fopen(cs.opts.stderr_filename, "w");

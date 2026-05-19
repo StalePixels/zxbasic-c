@@ -175,23 +175,28 @@ int zxbc_parse_args(int argc, char **argv, CompilerOptions *opts) {
                 break;
             case 'f':
                 opts->output_file_type = ya_optarg;
+                opts->opt_seen_output_format = true;
                 opts->cmdline_set |= OPT_SET_OUTPUT_TYPE;
                 break;
             case 'T':
                 opts->output_file_type = "tzx";
+                opts->opt_seen_tzx = true;
                 opts->cmdline_set |= OPT_SET_OUTPUT_TYPE;
                 break;
             case 't':
                 opts->output_file_type = "tap";
+                opts->opt_seen_tap = true;
                 opts->cmdline_set |= OPT_SET_OUTPUT_TYPE;
                 break;
             case 'A':
                 opts->output_file_type = "asm";
+                opts->opt_seen_asm = true;
                 opts->cmdline_set |= OPT_SET_OUTPUT_TYPE;
                 break;
             case 'E':
                 opts->emit_backend = true;
                 opts->output_file_type = "ir";
+                opts->opt_seen_emit_backend = true;
                 opts->cmdline_set |= OPT_SET_OUTPUT_TYPE;
                 break;
             case LOPT_PARSE_ONLY:
