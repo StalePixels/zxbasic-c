@@ -481,6 +481,16 @@ static int s_log2(long x) { int n = 0; while (x > 1) { x >>= 1; n++; } return n;
 /* INKEY (io.py:43,94). */
 #define RL_INKEY  ZXBC_NAMESPACE ".INKEY"
 
+/* Builtin-function RuntimeLabels (misc.py:12-17 / core.py:61,119,133). */
+#define RL_ASC      ZXBC_NAMESPACE ".__ASC"
+#define RL_CHR      ZXBC_NAMESPACE ".CHR"
+#define RL_USR      ZXBC_NAMESPACE ".USR"
+#define RL_USR_STR  ZXBC_NAMESPACE ".USR_STR"
+#define RL_VAL      ZXBC_NAMESPACE ".VAL"
+#define RL_LBOUND   ZXBC_NAMESPACE ".__LBOUND"
+#define RL_UBOUND   ZXBC_NAMESPACE ".__UBOUND"
+#define RL_STR_FAST ZXBC_NAMESPACE ".__STR_FAST"
+
 /* 8/16-bit unary runtime helpers (core.py:12-13,29). NEGHL (RL_NEGHL)
  * already defined above (neg16.asm). */
 #define RL_ABS8    ZXBC_NAMESPACE ".__ABS8"
@@ -678,6 +688,15 @@ static const char *s_required_module(const char *label) {
     if (strcmp(label, RL_ABS8)       == 0) return "abs8.asm";
     if (strcmp(label, RL_ABS16)      == 0) return "abs16.asm";
     if (strcmp(label, RL_BNOT16)     == 0) return "bitwise/bnot16.asm";
+    /* Builtin functions (misc.py:21-26 / core.py:190,248,262). */
+    if (strcmp(label, RL_ASC)        == 0) return "asc.asm";
+    if (strcmp(label, RL_CHR)        == 0) return "chr.asm";
+    if (strcmp(label, RL_USR)        == 0) return "usr.asm";
+    if (strcmp(label, RL_USR_STR)    == 0) return "usr_str.asm";
+    if (strcmp(label, RL_VAL)        == 0) return "val.asm";
+    if (strcmp(label, RL_LBOUND)     == 0) return "array/arraybound.asm";
+    if (strcmp(label, RL_UBOUND)     == 0) return "array/arraybound.asm";
+    if (strcmp(label, RL_STR_FAST)   == 0) return "str.asm";
     return NULL;
 }
 

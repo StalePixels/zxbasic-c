@@ -499,6 +499,11 @@ static void tr_ic_load(Translator *tr, const TypeInfo *type_,
     const char *args[2] = { t1, t2 };
     tr_emit_quad(tr, base, 2, args);
 }
+/* ic_lenstr (translator_inst_visitor.py:157-158): emit("lenstr",t1,t2). */
+static void tr_ic_lenstr(Translator *tr, const char *t1, const char *t2) {
+    const char *args[2] = { t1, t2 };
+    tr_emit_quad(tr, "lenstr", 2, args);
+}
 /* ic_in (translator_inst_visitor.py:127-128): emit("in", t). */
 static void tr_ic_in(Translator *tr, const char *t) {
     const char *args[1] = { t };
@@ -1331,8 +1336,83 @@ static int tr_builtin_dispatch(Visitor *v, AstNode *node) {
         return 1;
     }
 
+    /* PEEK (builtin_translator.py:66-70): NUMBER operand ->
+     * ic_load(node.type_,node.t,"*#"+op.t) else "*"+op.t. */
+    if (strcmp(fn, "PEEK") == 0) {
+        if (node->t == NULL) node->t = compiler_new_temp(tr->cs);
+        const char *pfx = (op && op->tag == AST_NUMBER) ? "*#" : "*";
+        size_t ol = strlen(ot);
+        char *src = arena_alloc(&tr->cs->arena, ol + 3);
+        snprintf(src, ol + 3, "%s%s", pfx, ot);
+        tr_ic_load(tr, node->type_, node->t, src);
+        return 1;
+    }
+
+    /* LEN (builtin_translator.py:45-46): ic_lenstr(node.t, op.t). */
+    if (strcmp(fn, "LEN") == 0) {
+        if (node->t == NULL) node->t = compiler_new_temp(tr->cs);
+        tr_ic_lenstr(tr, node->t, ot);
+        return 1;
+    }
+
+    /* CODE (builtin_translator.py:29-35) / VAL (49-55): ic_fparam(
+     * PTR_TYPE,op.t); ic_fparam(ubyte, op not STRING/VAR and op.t!="_"
+     * ? 1 : 0); runtime_call(ASC, ubyte.size) | (VAL, node.size). */
+    if (strcmp(fn, "CODE") == 0 || strcmp(fn, "VAL") == 0) {
+        const TypeInfo *uint_t =
+            tr->cs->symbol_table->basic_types[TYPE_uinteger];
+        const TypeInfo *ubyte_t =
+            tr->cs->symbol_table->basic_types[TYPE_ubyte];
+        tr_ic_fparam(tr, uint_t, ot);
+        bool freeit = op && op->tag != AST_STRING && op->tag != AST_ID &&
+                      !(op->t && strcmp(op->t, "_") == 0);
+        tr_ic_fparam(tr, ubyte_t, freeit ? "1" : "0");
+        if (strcmp(fn, "CODE") == 0)
+            tr_runtime_call(tr, ".core.__ASC",
+                            type_size(ubyte_t));
+        else
+            tr_runtime_call(tr, ".core.VAL", nsz);
+        return 1;
+    }
+
+    /* STR (builtin_translator.py:41-43): ic_fparam(float, c0.t);
+     * runtime_call(STR_FAST, node.type_.size). */
+    if (strcmp(fn, "STR") == 0) {
+        tr_ic_fparam(tr, tr->cs->symbol_table->basic_types[TYPE_float], ot);
+        tr_runtime_call(tr, ".core.__STR_FAST", nsz);
+        return 1;
+    }
+
+    /* CHR (builtin_translator.py:37-39): ic_fparam(STR_INDEX_TYPE,
+     * len(operand)=#args); runtime_call(CHR, node.size). */
+    if (strcmp(fn, "CHR") == 0) {
+        const TypeInfo *uint_t =
+            tr->cs->symbol_table->basic_types[TYPE_uinteger];
+        char nb[16];
+        snprintf(nb, sizeof(nb), "%d", node->child_count);
+        tr_ic_fparam(tr, uint_t, nb);
+        tr_runtime_call(tr, ".core.CHR", nsz);
+        return 1;
+    }
+
+    /* USR (builtin_translator.py:164-166) / USR_STR (159-162):
+     * ic_fparam(PTR_TYPE|string, c0.t); runtime_call(USR|USR_STR,
+     * node.type_.size). */
+    if (strcmp(fn, "USR") == 0) {
+        tr_ic_fparam(tr, tr->cs->symbol_table->basic_types[TYPE_uinteger],
+                     ot);
+        tr_runtime_call(tr, ".core.USR", nsz);
+        return 1;
+    }
+    if (strcmp(fn, "USR_STR") == 0) {
+        tr_ic_fparam(tr, tr->cs->symbol_table->basic_types[TYPE_string],
+                     ot);
+        tr_runtime_call(tr, ".core.USR_STR", nsz);
+        return 1;
+    }
+
     (void)v;
-    return 0;  /* not-yet-ported builtin — see 4c+ */
+    return 0;  /* not-yet-ported builtin (LBOUND/UBOUND) — see follow-up */
 }
 
 /* visit_BUILTIN (translator.py:150-158): yield node.operand; dispatch to
