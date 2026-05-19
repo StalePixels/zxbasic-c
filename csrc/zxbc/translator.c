@@ -40,6 +40,7 @@ static void tr_ic_data(Translator *tr, const TypeInfo *type_,
                        char **data, int n);
 static int tr_data_type_code(const TypeInfo *type_);
 static const char *tr_traverse_const(Translator *tr, AstNode *node);
+static const char *tr_constref_t(Translator *tr, AstNode *value);
 
 /* TranslatorInstVisitor.emit (translator_inst_visitor.py:21-25):
  *   quad = Quad(*args); self.backend.MEMORY.append(quad) */
@@ -224,6 +225,54 @@ static AstNode *tr_visit_end(Visitor *v, AstNode *node) {
     return node;
 }
 
+/* ConstRef.t (src/symbols/id_/ref/constref.py:30-32): a CONST id's `.t`
+ * is its stored value's `.t` — NOT the mangled label (that is VarRef.t,
+ * varref.py:35-37, which the C parser wrongly stamps onto consts too at
+ * the shared DIM/CONST `.t = mangled` line). Faithfully resolve the
+ * value node's `.t` exactly as the Python Symbol `.t` property would:
+ *   - NUMBER   -> str(value)                    (number.py:71-72)
+ *   - CONSTEXPR -> "#" + traverse_const(expr)   (constexpr.py:43-45,
+ *                  translator_visitor.py:240-241)
+ *   - nested CONST id -> that const's ConstRef.t (constref.py:31-32,
+ *                  recursive through its own stored value)
+ *   - STRING   -> the string label (string_.py .t; the C parser gates
+ *                  string consts out of default_value_expr so this is
+ *                  defensive — kept for 1:1 fidelity with ConstRef.t).
+ * Returns "" when the value is absent (matches the C "" fall-throughs
+ * the consuming ops already tolerate). */
+static const char *tr_constref_t(Translator *tr, AstNode *value) {
+    if (!value)
+        return "";
+    if (value->tag == AST_NUMBER)
+        return tr_traverse_const(tr, value); /* NUMBER.t == str(value) */
+    if (value->tag == AST_CONSTEXPR) {
+        /* SymbolCONSTEXPR.t == "#" + traverse_const(self); and
+         * traverse_const(CONSTEXPR) recurses into .expr. */
+        AstNode *inner = value->child_count > 0 ? value->children[0] : NULL;
+        const char *r = tr_traverse_const(tr, inner ? inner : value);
+        size_t rl = strlen(r);
+        char *s = arena_alloc(&tr->cs->arena, rl + 2);
+        s[0] = '#';
+        memcpy(s + 1, r, rl + 1);
+        return s;
+    }
+    if (value->tag == AST_ID && value->u.id.class_ == CLASS_const)
+        return tr_constref_t(tr, value->u.id.default_value_expr);
+    if (value->tag == AST_STRING) {
+        const char *sv = value->u.string.value ? value->u.string.value : "";
+        char *lbl = backend_add_string_label(tr->backend, sv,
+                                              value->u.string.length);
+        size_t ll = strlen(lbl);
+        char *s = arena_alloc(&tr->cs->arena, ll + 2);
+        s[0] = '#';
+        memcpy(s + 1, lbl, ll + 1);
+        return s;
+    }
+    /* Any other stored value: its already-resolved .t (mirrors the bare
+     * Symbol.t fall-through). */
+    return value->t ? value->t : "";
+}
+
 /* visit_VAR (translator.py:112-128). Global-var rvalue fast path: when
  * node.t == node.mangled and scope == global_, Python returns immediately
  * (the value is read directly from memory by the consuming op via its
@@ -232,6 +281,21 @@ static AstNode *tr_visit_end(Visitor *v, AstNode *node) {
  * real gap, so fail loud rather than emit nothing silently. */
 static AstNode *tr_visit_var(Visitor *v, AstNode *node) {
     Translator *tr = v->ctx;
+    /* Python dispatches by node.token: a CLASS.const id has token
+     * "CONST" (constref.py:22-24), so it routes to visit_CONST
+     * (translator.py:109-110) — `yield node.symbol` — NOT visit_VAR.
+     * The C visitor keys on the AST_ID tag, so reproduce the token
+     * split here. visit_CONST visits the stored value (so a STRING/
+     * CONSTEXPR value emits its label), and the node's resolved `.t`
+     * is ConstRef.t == the value's `.t` (constref.py:30-32) — never
+     * the mangled label. */
+    if (node->u.id.class_ == CLASS_const) {
+        AstNode *value = node->u.id.default_value_expr;
+        if (value)
+            visitor_visit(v, value);          /* visit_CONST: yield symbol */
+        node->t = (char *)tr_constref_t(tr, value); /* ConstRef.t */
+        return node;
+    }
     const char *t = node->t;
     const char *mangled = node->u.id.mangled;
     if (t && mangled && strcmp(t, mangled) == 0 &&
