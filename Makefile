@@ -26,6 +26,7 @@ PY_AST_DIFF     = csrc/tests/diff_ast_json.py
         test-semantic-fidelity verify-phase1-calibration \
         test-zxbc-codegen verify-phase5-calibration \
         test-zxbc-outfmt verify-phase6-calibration \
+        test-cmdline-parity \
         sweep-asm-zero-byte regenerate-zxbc-baselines
 
 build:
@@ -108,6 +109,20 @@ test-zxbc-outfmt: $(ZXBC_C)
 # generator reproduces Python's tape bytes for the calibration fixture.
 verify-phase6-calibration: $(ZXBC_C)
 	./csrc/tests/run_phase6_calibration.sh $(ZXBC_C)
+
+# S7.2g end-to-end CLI parity gate. Mechanises the C-vs-Python flag
+# equivalence hand-verified per sub-slice across S7.2a–f (zxbc/zxbpp/
+# zxbasm: output-format selection, deprecated-flag WARNINGs, tape-
+# append, save-config, the argparse-faithful validation/mutex/format
+# gates, --opt-strategy, the zxbpp/zxbasm flag-rejection narrowing).
+# Verifier — invokes BOTH the C binary and python3.12 on the same argv
+# + fixture and compares exit code / error-message content / output
+# bytes; exits non-zero iff any case FAILs. Complementary byte/exit
+# gate to the fast struct-level cmdline_value_tests (test_cmdline.c,
+# untouched). NOT wired into the `make test` aggregate — S7.3 owns the
+# `make test` completion meter.
+test-cmdline-parity: $(ZXBC_C) $(ZXBPP_C) $(ZXBASM_C)
+	./csrc/tests/run_cmdline_parity.sh $(ZXBC_C) $(ZXBPP_C) $(ZXBASM_C) .
 
 sweep-asm-zero-byte:
 	@matches=$$(find tests/functional -name '*.bin' -size 0); \
