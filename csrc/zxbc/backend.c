@@ -2684,6 +2684,17 @@ static StrVec emit_pload32(Backend *b, Quad *q) {
     sv_push(b, &out, "push hl");
     return out;
 }
+/* float_fpush body is defined later (with the Float emitters); the
+ * existing forward decl is later still, so declare here for emit_ploadf. */
+static void float_fpush(Backend *b, StrVec *out);
+/* _ploadf (_pload.py:155-160): _pload(ins[2], 5); Float.fpush().
+ * 5-byte float local-load. PLOADF16 (main.py:532) routes to _pload32. */
+static StrVec emit_ploadf(Backend *b, Quad *q) {
+    StrVec out = sv_new();
+    s_pload(b, &out, q_ins(q, 2), 5);
+    float_fpush(b, &out);
+    return out;
+}
 /* _ploadstr (_pload.py:166-178): _pload(ins[2], 2); if ins[1][0] != '$':
  * runtime_call(LOADSTR); then push hl. ins[1] == q->args[0] (the temp). */
 static StrVec emit_ploadstr(Backend *b, Quad *q) {
@@ -5535,6 +5546,8 @@ static StrVec quad_emit(Backend *b, Quad *q) {
     if (strcmp(I, "ploadi8")  == 0 || strcmp(I, "ploadu8")  == 0) return emit_pload8(b, q);
     if (strcmp(I, "ploadi16") == 0 || strcmp(I, "ploadu16") == 0) return emit_pload16(b, q);
     if (strcmp(I, "ploadi32") == 0 || strcmp(I, "ploadu32") == 0) return emit_pload32(b, q);
+    if (strcmp(I, "ploadf16")  == 0) return emit_pload32(b, q);   /* PLOADF16 -> _pload32 (main.py:532) */
+    if (strcmp(I, "ploadf")    == 0) return emit_ploadf(b, q);
     if (strcmp(I, "ploadstr")  == 0) return emit_ploadstr(b, q);
     if (strcmp(I, "fploadstr") == 0) return emit_fploadstr(b, q);
     if (strcmp(I, "pstorei8")  == 0 || strcmp(I, "pstoreu8")  == 0) return emit_pstore8(b, q);
