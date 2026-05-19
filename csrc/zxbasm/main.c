@@ -145,14 +145,23 @@ int main(int argc, char *argv[])
     if (use_tzx) output_format = "tzx";
     else if (use_tap) output_format = "tap";
 
+    /* S7.2d-iii — faithful port of src/zxbasm/zxbasm.py:143-149.
+     * Python uses o_parser.error(...) which (argparse) prints
+     * "usage: …\n<prog>: error: <msg>" to stderr and sys.exit(2);
+     * the `return 3` / `return 4` after each o_parser.error are DEAD
+     * code (never reached). So BOTH exit 2 (not 3/4), with Python's
+     * exact message text (note the second is asymmetric: "--tzx or
+     * tap format" — bare `tap`, not `--tap`). The argparse usage:
+     * preamble is the carried user-adjudication, not reproduced
+     * (same standing decision as the S7.2d-i/-ii gates). */
     if ((int)use_tzx + (int)use_tap > 1) {
-        fprintf(stderr, "error: Options --tap and --tzx are mutually exclusive\n");
-        return 3;
+        fprintf(stderr, "error: Options --tap, --tzx and --asm are mutually exclusive\n");
+        return 2;
     }
 
     if (use_basic && !use_tzx && !use_tap) {
-        fprintf(stderr, "error: Option --BASIC and --autorun requires --tzx or --tap format\n");
-        return 4;
+        fprintf(stderr, "error: Option --BASIC and --autorun requires --tzx or tap format\n");
+        return 2;
     }
 
     /* Default output filename */
