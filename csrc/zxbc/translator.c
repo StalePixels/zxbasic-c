@@ -1115,6 +1115,29 @@ static AstNode *tr_visit_beep(Visitor *v, AstNode *node) {
     return node;
 }
 
+/* visit_ASM (translator.py:963-967):
+ *   ic_inline(f'#line {node.lineno} "{node.filename}"')
+ *   ic_inline(node.asm)
+ *   ic_inline(f'#line {node.lineno + len(node.asm.split("\n"))} "..."')
+ * node.filename == gl.FILENAME (== cs->current_file). The middle line
+ * count is len(split("\n")) == (#newlines)+1. */
+static AstNode *tr_visit_asm(Visitor *v, AstNode *node) {
+    Translator *tr = v->ctx;
+    const char *fn = tr->cs->current_file ? tr->cs->current_file : "";
+    const char *code = node->u.asm_block.code ? node->u.asm_block.code : "";
+    int nlines = 1;
+    for (const char *s = code; *s; s++) if (*s == '\n') nlines++;
+    size_t fnl = strlen(fn);
+    char *buf = arena_alloc(&tr->cs->arena, fnl + 48);
+    snprintf(buf, fnl + 48, "#line %d \"%s\"", node->lineno, fn);
+    translator_ic_inline(tr, buf);
+    translator_ic_inline(tr, code);
+    char *buf2 = arena_alloc(&tr->cs->arena, fnl + 48);
+    snprintf(buf2, fnl + 48, "#line %d \"%s\"", node->lineno + nlines, fn);
+    translator_ic_inline(tr, buf2);
+    return node;
+}
+
 /* visit_OUT (translator.py:808-811): yield child[0]; yield child[1];
  * ic_out(child[0].t, child[1].t). Parser make_typecast'd port->uinteger,
  * val->ubyte (zxbparser.py:2210-2216). */
@@ -2436,6 +2459,8 @@ static void tr_register_handlers(Visitor *v) {
     visitor_on_tag(v, AST_FUNCCALL, tr_visit_funccall);
     /* visit_BUILTIN (translator.py:150-158). */
     visitor_on_tag(v, AST_BUILTIN, tr_visit_builtin);
+    /* visit_ASM (translator.py:963-967). */
+    visitor_on_tag(v, AST_ASM, tr_visit_asm);
     visitor_on_tag(v, AST_ARGLIST, tr_visit_arglist);
     visitor_on_tag(v, AST_ARGUMENT, tr_visit_argument);
     visitor_on_sentence(v, "CALL", tr_visit_call);

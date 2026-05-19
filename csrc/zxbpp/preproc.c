@@ -1716,9 +1716,14 @@ static void process_directive(PreprocState *pp, const char *directive)
         pp->has_output = true;
     } else if (strnicmp_local(p, "line", (size_t)dlen) == 0 && dlen == 4) {
         handle_line_directive(pp, rest);
-        /* In ASM mode, #line is consumed silently (updates tracking only).
-         * In BASIC mode, #line passes through to output. */
-        if (!pp->in_asm) {
+        /* zxbpp p_line/p_line_file (zxbpp.py:492-505) re-emit the #line
+         * unconditionally when ENABLED — true in BASIC mode AND in the
+         * zxbc.py:183 ASM-filter second pass (the shared zxbpp grammar;
+         * mode only swaps the lexer). The first-pass `asm..end asm`
+         * tracker (in_asm without asm_filter_mode) keeps the silent
+         * consume — its byte-correct #line machinery is unrelated and
+         * out of scope here. */
+        if (!pp->in_asm || pp->asm_filter_mode) {
             const char *lr = skip_ws(rest);
             strbuf_printf(&pp->output, "#line %s\n", lr);
             pp->has_output = true;
