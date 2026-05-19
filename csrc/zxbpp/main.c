@@ -9,10 +9,12 @@
 #include "zxbpp.h"
 
 #include "cwalk.h"
+#include "utils.h"
 #include "ya_getopt.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
 
 static void usage(const char *progname)
 {
@@ -21,11 +23,8 @@ static void usage(const char *progname)
     fprintf(stderr, "  -o, --output FILE    Output file (default: stdout)\n");
     fprintf(stderr, "  -d, --debug          Increase debug level\n");
     fprintf(stderr, "  -e, --errmsg FILE    Error messages file (default: stderr)\n");
-    fprintf(stderr, "  -D, --define NAME[=VALUE]  Define a macro\n");
-    fprintf(stderr, "  -I, --include-path DIR     Add include search path\n");
     fprintf(stderr, "  --arch ARCH          Target architecture (default: zx48k)\n");
     fprintf(stderr, "  --expect-warnings N  Suppress first N warnings\n");
-    fprintf(stderr, "  --version            Show version\n");
     fprintf(stderr, "  -h, --help           Show this help\n");
 }
 
@@ -40,29 +39,18 @@ int main(int argc, char *argv[])
     int debug_level = 0;
     int expect_warnings = 0;
 
-    /* Macro definitions from command line */
-    char *cmdline_defines[64];
-    int num_defines = 0;
-
-    /* Include paths from command line */
-    char *cmdline_includes[64];
-    int num_includes = 0;
-
     static struct option long_options[] = {
         {"output",          required_argument, NULL, 'o'},
         {"debug",           no_argument,       NULL, 'd'},
         {"errmsg",          required_argument, NULL, 'e'},
-        {"define",          required_argument, NULL, 'D'},
-        {"include-path",    required_argument, NULL, 'I'},
         {"arch",            required_argument, NULL, 'A'},
         {"expect-warnings", required_argument, NULL, 'W'},
-        {"version",         no_argument,       NULL, 'V'},
         {"help",            no_argument,       NULL, 'h'},
         {NULL, 0, NULL, 0}
     };
 
     int opt;
-    while ((opt = getopt_long(argc, argv, "o:de:D:I:h", long_options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "o:de:h", long_options, NULL)) != -1) {
         switch (opt) {
         case 'o':
             output_file = optarg;
@@ -73,29 +61,27 @@ int main(int argc, char *argv[])
         case 'e':
             error_file = optarg;
             break;
-        case 'D':
-            if (num_defines < 64)
-                cmdline_defines[num_defines++] = optarg;
-            break;
-        case 'I':
-            if (num_includes < 64)
-                cmdline_includes[num_includes++] = optarg;
-            break;
         case 'A':
             arch = optarg;
             break;
         case 'W':
             expect_warnings = atoi(optarg);
             break;
-        case 'V':
-            printf("zxbpp %s (C port)\n", ZXBASIC_C_VERSION);
-            return 0;
         case 'h':
             usage(argv[0]);
             return 0;
         default:
-            usage(argv[0]);
-            return 1;
+            /* Unrecognized option. Python zxbpp uses argparse, which
+             * rejects unknown options with exit code 2 (parser.error).
+             * getopt cannot reproduce argparse's exact "usage:" preamble
+             * or its tokenized "unrecognized arguments:" list (carried
+             * user-adjudication); the faithful, byte-required behavior is
+             * an error:-prefixed stderr line + exit 2 (matching the C
+             * parser.error convention used for --arch validation below
+             * and in zxbasm/main.c). getopt has already printed its own
+             * diagnostic to stderr for the offending token. */
+            fprintf(stderr, "error: unrecognized arguments\n");
+            return 2;
         }
     }
 
@@ -123,6 +109,39 @@ int main(int argc, char *argv[])
     pp.arch = arena_strdup(&pp.arena, arch);
     pp.expect_warnings = expect_warnings;
 
+    /* Built-in include path — faithful port of Python zxbpp
+     * set_include_path / get_include_path (src/zxbpp/zxbpp.py:142-165):
+     *   get_include_path(arch) = realpath(dirname(__file__)/os.pardir/
+     *                                     "lib"/"arch"/arch)
+     *   set_include_path(): INCLUDE_MAP[arch] = [pwd/stdlib, pwd/runtime];
+     *                       INCLUDEPATH = INCLUDE_MAP[OPTIONS.architecture]
+     * Python zxbpp has NO -I/-D CLI option (S7.2e-i removed the C-only
+     * extras); its include path is derived ENTIRELY from --arch + the
+     * built-in pair, anchored to the interpreter file's own directory
+     * (CWD-INDEPENDENT). The C analogue anchors to the running
+     * executable's dir via get_executable_dir (the os.path.dirname
+     * (__file__) analogue) + realpath (os.path.realpath). This is the
+     * SAME faithful shape already proven in csrc/zxbc/main.c:249-265
+     * (S7.1e); pushed unconditionally (set_include_path adds the pair
+     * for the arch with no existence check — only per-file lookup skips
+     * missing dirs, zxbpp.py:158-205). */
+    {
+        char exe_dir[PATH_MAX];
+        char raw_path[PATH_MAX];
+        char real_path[PATH_MAX];
+
+        if (get_executable_dir(argv[0], exe_dir, sizeof(exe_dir))) {
+            snprintf(raw_path, sizeof(raw_path),
+                     "%s/../../../src/lib/arch/%s/stdlib", exe_dir, arch);
+            if (realpath(raw_path, real_path))
+                vec_push(pp.include_paths, arena_strdup(&pp.arena, real_path));
+            snprintf(raw_path, sizeof(raw_path),
+                     "%s/../../../src/lib/arch/%s/runtime", exe_dir, arch);
+            if (realpath(raw_path, real_path))
+                vec_push(pp.include_paths, arena_strdup(&pp.arena, real_path));
+        }
+    }
+
     /* Error output */
     if (error_file) {
         if (strcmp(error_file, "/dev/null") == 0) {
@@ -138,34 +157,10 @@ int main(int argc, char *argv[])
         }
     }
 
-    /* Add include paths */
-    for (int i = 0; i < num_includes; i++) {
-        /* Handle colon-separated paths */
-        char *paths = strdup(cmdline_includes[i]);
-        char *tok = strtok(paths, ":");
-        while (tok) {
-            char *p = arena_strdup(&pp.arena, tok);
-            vec_push(pp.include_paths, p);
-            tok = strtok(NULL, ":");
-        }
-        free(paths);
-    }
-
-    /* Add default include paths based on architecture */
-    /* These will be relative to the zxbasic root — for now, we try
-     * to find them relative to the input file or current directory */
-
-    /* Process command-line defines */
-    for (int i = 0; i < num_defines; i++) {
-        char *eq = strchr(cmdline_defines[i], '=');
-        if (eq) {
-            char *name = arena_strndup(&pp.arena, cmdline_defines[i],
-                                       (size_t)(eq - cmdline_defines[i]));
-            preproc_define(&pp, name, eq + 1, 0, "<cmdline>");
-        } else {
-            preproc_define(&pp, cmdline_defines[i], "", 0, "<cmdline>");
-        }
-    }
+    /* NOTE: Python zxbpp exposes no -D/-I CLI option (S7.2e-i removed
+     * the C-only extras); macros are not defined from argv, and the
+     * include path is the --arch-derived built-in pair set up above
+     * (the set_include_path port) — exactly Python's model. */
 
     /* Process input */
     if (input_file) {

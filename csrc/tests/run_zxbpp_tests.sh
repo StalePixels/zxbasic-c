@@ -38,9 +38,13 @@ while [ "$PROJECT_ROOT" != "/" ]; do
 done
 REAL_PROJECT_ROOT=$(cd "$PROJECT_ROOT" && pwd -P)
 
+# S7.2e: the C-only `-I` crutch is gone. Python zxbpp has no -I; it
+# resolves includes via set_include_path (--arch-derived built-ins,
+# zxbpp.py:142-165) and the harness invokes it bare (['zxbpp', bi]).
+# The C zxbpp now does the same (S7.2e-ii ported set_include_path into
+# csrc/zxbpp/main.c), so C is invoked identically bare — the genuine
+# drop-in-equivalence test, no asymmetric crutch.
 INCLUDE_ARGS=""
-[ -d "$PROJECT_ROOT/src/lib/arch/zx48k/stdlib" ] && \
-    INCLUDE_ARGS="-I $PROJECT_ROOT/src/lib/arch/zx48k/stdlib"
 
 PYTHON_INTERNAL_LOG="$PROJECT_ROOT/csrc/tests/phase1-python-internal-skips.log"
 : > "$PYTHON_INTERNAL_LOG"
