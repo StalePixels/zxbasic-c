@@ -15,6 +15,7 @@
 #include "optimizer/optimizer.h"
 #include "asm_bridge.h"
 #include "zxbpp.h"
+#include "utils.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -525,14 +526,20 @@ int codegen_emit(CompilerState *cs, AstNode *ast) {
      * preproc_string(.., input_filename) is filter_(asm_output,
      * filename=input_filename) (zxbpp.py:912-925 LEXER.input(input_,
      * filename)); ppf.output (read via strbuf_cstr) is the zxbpp.OUTPUT
-     * global. Include search path = src/lib/arch/<arch>/{stdlib,runtime}
-     * cwd-relative (stdlib first, runtime second — zxbpp.py:162,182-205;
-     * Python's <...> form => local_first=False, pure path search,
-     * first-match-wins) then OPTIONS.include_path — built EXACTLY as the
-     * first pass does (main.c:55-69, same arch/include_path sources, same
-     * order/access() guard); the cwd-relative form is what makes the C
-     * `#line` path string byte-match Python (zxbpp.py:220
-     * get_relative_filename_path). The original input filename is
+     * global. Include search path = the executable-anchored ABSOLUTE
+     * src/lib/arch/<arch>/{stdlib,runtime} (stdlib first, runtime
+     * second — zxbpp.py:142-164,182-205; Python's <...> form =>
+     * local_first=False, pure path search, first-match-wins) then the
+     * colon-split OPTIONS.include_path (zxbpp.py:193) — built EXACTLY as
+     * the first pass does (main.c, same arch/include_path sources, same
+     * unconditional-push, same order, same -I split). The absolute
+     * built-in anchor is CWD-independent (get_include_path uses
+     * os.path.dirname(__file__), zxbpp.py:144-152); the EXISTING #line
+     * transform (preproc.c:1371-1382, get_relative_filename_path
+     * zxbpp.py:220 / api/utils.py:95-107) then re-relativises it to the
+     * CWD when the file is under CWD and keeps it absolute otherwise —
+     * byte-matching Python from BOTH project-root and scratch CWDs by
+     * construction. The original input filename is
      * cs->opts.input_filename — the same value main.c:71 passes to the
      * first-pass preproc_file (zxbc.py:187 filename=input_filename).
      *
@@ -556,20 +563,47 @@ int codegen_emit(CompilerState *cs, AstNode *ast) {
                               * from in_asm, the BASIC asm..end asm
                               * tracker). zxbc.py:181-189 second pass. */
     ppf.debug_level = cs->opts.debug_level;
+    /* BYTE-IDENTICAL to the first-pass block in main.c (codegen.c
+     * mandate above): executable-anchored ABSOLUTE built-in pair pushed
+     * UNCONDITIONALLY (no access() gate — set_include_path is
+     * unconditional, zxbpp.py:158-164; only per-file lookup skips
+     * missing dirs, zxbpp.py:195-205), then the colon-SPLIT -I dirs
+     * appended after (zxbpp.py:193). argv[0] is unavailable this deep in
+     * the pipeline; get_executable_dir uses the OS exe-path APIs
+     * (_NSGetExecutablePath / /proc/self/exe / GetModuleFileNameA) which
+     * need no argv — the argv0 fallback is unreachable on supported
+     * platforms, so passing NULL is sound. */
     {
         const char *arch = cs->opts.architecture ? cs->opts.architecture : "zx48k";
-        char stdlib_path[PATH_MAX];
-        char runtime_path[PATH_MAX];
+        char exe_dir[PATH_MAX];
+        char raw_path[PATH_MAX];
+        char real_path[PATH_MAX];
 
-        snprintf(stdlib_path, sizeof(stdlib_path), "src/lib/arch/%s/stdlib", arch);
-        snprintf(runtime_path, sizeof(runtime_path), "src/lib/arch/%s/runtime", arch);
-        if (access(stdlib_path, R_OK) == 0) {
-            vec_push(ppf.include_paths, arena_strdup(&ppf.arena, stdlib_path));
-            vec_push(ppf.include_paths, arena_strdup(&ppf.arena, runtime_path));
+        if (get_executable_dir(NULL, exe_dir, sizeof(exe_dir))) {
+            snprintf(raw_path, sizeof(raw_path),
+                     "%s/../../../src/lib/arch/%s/stdlib", exe_dir, arch);
+            if (realpath(raw_path, real_path))
+                vec_push(ppf.include_paths, arena_strdup(&ppf.arena, real_path));
+            snprintf(raw_path, sizeof(raw_path),
+                     "%s/../../../src/lib/arch/%s/runtime", exe_dir, arch);
+            if (realpath(raw_path, real_path))
+                vec_push(ppf.include_paths, arena_strdup(&ppf.arena, real_path));
         }
     }
-    if (cs->opts.include_path)
-        vec_push(ppf.include_paths, cs->opts.include_path);
+
+    if (cs->opts.include_path && cs->opts.include_path[0]) {
+        char ipbuf[PATH_MAX];
+        if (strlen(cs->opts.include_path) < sizeof(ipbuf)) {
+            strcpy(ipbuf, cs->opts.include_path);
+            char *save = NULL;
+            for (char *seg = strtok_r(ipbuf, ":", &save);
+                 seg != NULL;
+                 seg = strtok_r(NULL, ":", &save)) {
+                if (seg[0])
+                    vec_push(ppf.include_paths, arena_strdup(&ppf.arena, seg));
+            }
+        }
+    }
 
     /* set_option_defines() + reset_id_table() (zxbc.py:183-184): Python
      * re-seeds zxbpp's ID_TABLE from config.OPTIONS.__DEFINES before the

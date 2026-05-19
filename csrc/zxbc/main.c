@@ -11,6 +11,7 @@
 #include "codegen.h"
 #include "zxbpp.h"
 #include "cwalk.h"
+#include "utils.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -52,21 +53,50 @@ int main(int argc, char *argv[]) {
     preproc_init(&pp);
     pp.debug_level = cs.opts.debug_level;
 
+    /* Built-in include path (zxbpp.set_include_path / get_include_path,
+     * src/zxbpp/zxbpp.py:142-164) then the -I dirs (zxbpp.py:193). The
+     * built-in pair is anchored to the running executable's own
+     * directory — the C analogue of get_include_path()'s
+     * os.path.dirname(__file__) (CWD-INDEPENDENT, zxbpp.py:144-152) —
+     * and realpath()'d (mirrors os.path.realpath). Pushed
+     * UNCONDITIONALLY (set_include_path sets INCLUDE_MAP for every arch
+     * with no existence check; only per-file lookup skips missing dirs,
+     * zxbpp.py:158-205) — no access() gate, matching Python. The -I
+     * value is colon-SPLIT and appended AFTER the built-ins (zxbpp.py:193
+     * i_path.extend(OPTIONS.include_path.split(":"))), empty segments
+     * skipped, order preserved. This block is BYTE-IDENTICAL to the
+     * second-pass block in codegen.c (codegen.c:531-532 mandate). */
     {
         const char *arch = cs.opts.architecture ? cs.opts.architecture : "zx48k";
-        char stdlib_path[PATH_MAX];
-        char runtime_path[PATH_MAX];
+        char exe_dir[PATH_MAX];
+        char raw_path[PATH_MAX];
+        char real_path[PATH_MAX];
 
-        snprintf(stdlib_path, sizeof(stdlib_path), "src/lib/arch/%s/stdlib", arch);
-        snprintf(runtime_path, sizeof(runtime_path), "src/lib/arch/%s/runtime", arch);
-        if (access(stdlib_path, R_OK) == 0) {
-            vec_push(pp.include_paths, arena_strdup(&pp.arena, stdlib_path));
-            vec_push(pp.include_paths, arena_strdup(&pp.arena, runtime_path));
+        if (get_executable_dir(argv[0], exe_dir, sizeof(exe_dir))) {
+            snprintf(raw_path, sizeof(raw_path),
+                     "%s/../../../src/lib/arch/%s/stdlib", exe_dir, arch);
+            if (realpath(raw_path, real_path))
+                vec_push(pp.include_paths, arena_strdup(&pp.arena, real_path));
+            snprintf(raw_path, sizeof(raw_path),
+                     "%s/../../../src/lib/arch/%s/runtime", exe_dir, arch);
+            if (realpath(raw_path, real_path))
+                vec_push(pp.include_paths, arena_strdup(&pp.arena, real_path));
         }
     }
 
-    if (cs.opts.include_path)
-        vec_push(pp.include_paths, cs.opts.include_path);
+    if (cs.opts.include_path && cs.opts.include_path[0]) {
+        char ipbuf[PATH_MAX];
+        if (strlen(cs.opts.include_path) < sizeof(ipbuf)) {
+            strcpy(ipbuf, cs.opts.include_path);
+            char *save = NULL;
+            for (char *seg = strtok_r(ipbuf, ":", &save);
+                 seg != NULL;
+                 seg = strtok_r(NULL, ":", &save)) {
+                if (seg[0])
+                    vec_push(pp.include_paths, arena_strdup(&pp.arena, seg));
+            }
+        }
+    }
 
     int pp_rc = preproc_file(&pp, cs.opts.input_filename);
     if (pp_rc != 0 || pp.error_count > 0) {
