@@ -1647,13 +1647,22 @@ static AstNode *parse_statement(Parser *p) {
         return s;
     }
 
-    /* STOP */
+    /* STOP  (zxbparser.py p_stop_raise ~1665-1674): default code is
+     * MINUS(typecast(ubyte,NUMBER(9)), NUMBER(1)) which folds to 8
+     * (BASIC error "STOP statement"). Bare-STOP C was emitting 9
+     * directly (off-by-one in label_decl3/slice2/stoperr). */
     if (match(p, BTOK_STOP)) {
         int ln = p->previous.lineno;
         AstNode *s = make_sentence_node(p, "STOP", ln);
-        AstNode *code = make_number(p, 9, ln, p->cs->symbol_table->basic_types[TYPE_uinteger]);
+        TypeInfo *ubyte_t = p->cs->symbol_table->basic_types[TYPE_ubyte];
+        AstNode *code;
         if (!check(p, BTOK_NEWLINE) && !check(p, BTOK_EOF) && !check(p, BTOK_CO)) {
             code = parse_expression(p, PREC_NONE + 1);
+        } else {
+            AstNode *nine = make_number(p, 9, ln, NULL);
+            AstNode *q = make_typecast(p->cs, ubyte_t, nine, ln);
+            AstNode *one = make_number(p, 1, ln, NULL);
+            code = make_binary_node(p->cs, "MINUS", q, one, ln, NULL);
         }
         ast_add_child(p->cs, s, code);
         return s;
