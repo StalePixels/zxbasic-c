@@ -601,6 +601,12 @@ struct CompilerState {
     bool labels_allowed;     /* for line-start label detection */
     bool let_assignment;     /* inside a LET statement */
     bool print_is_used;      /* PRINT has been referenced */
+    /* function_translator.py:79-80 — set when a local bounded array's
+     * bound_ptrs != ["0","0"]; mirrors OPTIONS.__DEFINES
+     * ["__ZXB_USE_LOCAL_ARRAY_WITH_BOUNDS__"]="" so the ASM filter pass
+     * (set_option_defines+reset_id_table, zxbc.py:183-187) #includes the
+     * _WITH_BOUNDS runtime variants gated in array/arrayalloc.asm:75. */
+    bool local_array_with_bounds_used;
     int last_brk_linenum;    /* last line for BREAK check */
 
     /* Function tracking */

@@ -161,9 +161,39 @@ static const char *vt_traverse_const_expr(Translator *tr, AstNode *node) {
     }
 
     if (node->tag == AST_ID) {
-        /* CONST entry: traverse_const returns node.t. An ADDRESS operand
-         * resolved to a symbol-table ID carries .mangled ("_a"). */
+        /* Faithful port of TranslatorVisitor.traverse_const's ID arms
+         * (translator_visitor.py:184-185,235-246), identical to the
+         * complete tr_traverse_const (translator.c) AST_ID branch:
+         *
+         *  - CLASS_label -> node.t == LabelRef.t == parent.mangled ==
+         *    ".LABEL._<name>" (labelref.py:20,34). The C label entry's
+         *    own .mangled is the function-namespaced "_<fn>.<name>"
+         *    (compiler.c:1256-1257) — NOT the LabelRef form — so the
+         *    LabelRef-mangled string is computed here exactly as
+         *    tr_label_mangled does (".LABEL._" + entry.name; global_.py
+         *    LABELS_NAMESPACE=".LABEL", MANGLE_CHR="_"). Without this a
+         *    local `@label` in a const-vector emitted "_test.label1"
+         *    instead of Python's ".LABEL._label1".
+         *  - CLASS_const -> ConstRef.t (the resolved value string).
+         *  - else (ID/VARARRAY) -> node.t, else (has_address & global)
+         *    .mangled (:243-244), else .mangled, else .name. */
+        if (node->u.id.class_ == CLASS_label) {
+            const char *nm = node->u.id.name ? node->u.id.name
+                           : (node->t ? node->t : "");
+            size_t nl = strlen(nm);
+            char *r = arena_alloc(&tr->cs->arena, nl + 9);
+            memcpy(r, ".LABEL._", 8);
+            memcpy(r + 8, nm, nl + 1);
+            return r;
+        }
+        if (node->u.id.class_ == CLASS_const)
+            return node->t ? node->t
+                 : (node->u.id.mangled ? node->u.id.mangled : "");
         if (node->t != NULL) return node->t;
+        if (node->u.id.has_address &&
+            node->u.id.scope == SCOPE_global &&
+            node->u.id.mangled != NULL)
+            return node->u.id.mangled;
         if (node->u.id.mangled != NULL) return node->u.id.mangled;
         return node->u.id.name ? node->u.id.name : "";
     }
@@ -230,7 +260,17 @@ int tr_default_value(Translator *tr, const TypeInfo *type_,
             if (out_cap > 0) out[0] = arena_strdup(&tr->cs->arena, "<ERROR>");
             return out_cap > 0 ? 1 : 0;
         }
-        const char *val = vt_traverse_const(tr, expr);
+        /* translator.py:1041 val = Translator.traverse_const(expr).
+         * Python's traverse_const is the FULL recursive walk
+         * (translator_visitor.py:177-246: CONSTEXPR->.expr, UNARY
+         * ADDRESS->operand, LABEL->LabelRef.t==".LABEL._<name>"). The
+         * leaf-only vt_traverse_const cannot resolve a CONSTEXPR-wrapped
+         * `@label` (returns its unset .t == ""), so a local
+         * `DIM a(..) => {@l1,..}` emitted empty `DEFW`. Use the recursive
+         * vt_traverse_const_expr — the faithful traverse_const analogue.
+         * Verified no scalar/global-array regression (the const-vector
+         * leaves are NUMBER/CONST/CONSTEXPR, identically resolved). */
+        const char *val = vt_traverse_const_expr(tr, expr);
         const TypeInfo *ef = expr->type_ && expr->type_->final_type
                                  ? expr->type_->final_type : expr->type_;
         int esize = type_size(expr->type_);

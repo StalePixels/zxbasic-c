@@ -1766,6 +1766,11 @@ void compiler_init(CompilerState *cs) {
     cs->labels_allowed = true;
     cs->let_assignment = false;
     cs->print_is_used = false;
+    /* function_translator.py:79-80 OPTIONS.__DEFINES
+     * ["__ZXB_USE_LOCAL_ARRAY_WITH_BOUNDS__"] mirror — cleared per
+     * compilation like print_is_used (memset already zeros it; explicit
+     * for parity with the print_is_used reset). */
+    cs->local_array_with_bounds_used = false;
     cs->last_brk_linenum = 0;
     cs->data_is_used = false;
     /* gl.DATA_PTR_CURRENT reset (zxbparser.py:149): current_data_label()

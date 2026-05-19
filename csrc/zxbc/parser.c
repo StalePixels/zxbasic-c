@@ -3301,6 +3301,28 @@ static AstNode *parse_array_initializer(Parser *p) {
                         && expr->u.id.class_ == CLASS_var) {
                         err_not_constant(p->cs, init->lineno);
                     }
+                    /* p_const_vector_elem_list:892-895 /
+                     * _list_list:913-916 — the make_constexpr branch:
+                     *     if not is_static(e):
+                     *         if isinstance(e, sym.UNARY):
+                     *             tmp = make_constexpr(p.lineno, e)
+                     * A non-static UNARY (e.g. a `@label` whose entry is
+                     * SCOPE.local, so p_addr_of_id's own is_dynamic-gated
+                     * CONSTEXPR-wrap did NOT fire — parser.c:688) is
+                     * delayed-const-eval wrapped HERE so Translator
+                     * .default_value's CONSTEXPR branch emits the
+                     * `##.LABEL._x` data image (arrlabels4/5/7/8/9: local
+                     * `DIM a(..) => {@l1,..}`). Global-scope @label already
+                     * arrives CONSTEXPR (static) so this is a no-op there
+                     * (arrlabels2/3/10/10b unaffected). lineno = element's
+                     * line, faithful to make_constexpr(p.lineno(1|2), e). */
+                    if (!check_is_static(expr) && expr->tag == AST_UNARY) {
+                        AstNode *ce = ast_new(p->cs, AST_CONSTEXPR,
+                                              expr->lineno);
+                        ast_add_child(p->cs, ce, expr);
+                        ce->type_ = expr->type_;
+                        expr = ce;
+                    }
                     ast_add_child(p->cs, init, expr);
                 }
             }

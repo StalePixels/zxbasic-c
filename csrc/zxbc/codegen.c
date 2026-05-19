@@ -667,6 +667,18 @@ int codegen_emit(CompilerState *cs, AstNode *ast) {
     if (cs->print_is_used)
         preproc_define(&ppf, "___PRINT_IS_USED___", "1", 0, NULL);
 
+    /* function_translator.py:79-80 — set during the FunctionTranslator
+     * pass (translator_function_start, codegen.c step 7) when a local
+     * bounded array's bound_ptrs != ["0","0"]. OPTIONS.__DEFINES is
+     * PERSISTENT (set_option_defines only adds keys), so this survives
+     * into reset_id_table()'s ID_TABLE re-seed for the ASM filter_ pass,
+     * enabling the #ifdef __ZXB_USE_LOCAL_ARRAY_WITH_BOUNDS__ block in
+     * array/arrayalloc.asm:75 (the _WITH_BOUNDS runtime variants). Empty
+     * body, matching Python's "" value. */
+    if (cs->local_array_with_bounds_used)
+        preproc_define(&ppf, "__ZXB_USE_LOCAL_ARRAY_WITH_BOUNDS__", "",
+                       0, NULL);
+
     /* User -D/--define defines re-seeded for the ASM filter_ pass too.
      * Python's OPTIONS.__DEFINES (populated by args_config.py:91-96) is
      * PERSISTENT, so reset_id_table() (zxbpp.py:106-113) re-seeds these

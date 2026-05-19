@@ -3754,6 +3754,13 @@ static void tr_visit_function(Translator *tr, AstNode *fdecl) {
             bptrs[0] = lbound_needed ? lbl_lb : (char *)"0";
             bptrs[1] = lv->u.id.ubound_used ? lbl_ub : (char *)"0";
 
+            /* :79-80 if bound_ptrs != ["0","0"]:
+             *     OPTIONS["__DEFINES"]["__ZXB_USE_LOCAL_ARRAY_WITH_BOUNDS__"]=""
+             * Persists into the ASM filter_ pass (set_option_defines only
+             * ADDS keys; never clears) so arrayalloc.asm:75 #ifdef fires. */
+            if (strcmp(bptrs[0], "0") != 0 || strcmp(bptrs[1], "0") != 0)
+                tr->cs->local_array_with_bounds_used = true;
+
             AstNode *bl = lv->u.id.arr_boundlist;
             int ndims = bl ? bl->child_count : 0;
 
