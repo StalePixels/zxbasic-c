@@ -547,7 +547,14 @@ static void vt_visit_arraydecl(Translator *tr, AstNode *node) {
     }
     long size = count * type_size(node->type_);
 
-    char *arr_data[1024];
+    /* Sized to total cell-byte count (per arrayref/arraydecl). Arena-owned
+     * so it's safe past this function's scope (vt_ic_vard formats into the
+     * py-list repr immediately, but the slots are read once during that
+     * formatting). For an empty array (count==0) fall back to a 1-slot
+     * placeholder to keep callers safe. */
+    long cap = size > 0 ? size : 1;
+    char **arr_data = (char **)arena_alloc(&tr->cs->arena,
+                                           sizeof(char *) * (size_t)cap);
     int arr_n = 0;
     bool has_addr = (addr_expr != NULL);
 
@@ -558,9 +565,9 @@ static void vt_visit_arraydecl(Translator *tr, AstNode *node) {
         vt_ic_deflabel(tr, data_label, addr);
     } else if (init_node != NULL) {
         arr_n = tr_array_default_value(tr, node->type_, init_node,
-                                       arr_data, 0, 1024);
+                                       arr_data, 0, (int)cap);
     } else {
-        for (long i = 0; i < size && arr_n < 1024; i++)
+        for (long i = 0; i < size && arr_n < cap; i++)
             arr_data[arr_n++] = "00";
     }
 

@@ -1223,9 +1223,16 @@ static AstNode *tr_visit_call_common(Visitor *v, AstNode *node,
     } else {
         /* :206 ic_call(entry.mangled, 0) — procedure, discard return. */
         tr_ic_call(tr, mg, 0);
-        /* :207-208 discard a returned string. */
-        if (callee->u.id.class_ == CLASS_function && callee->type_ &&
-            callee->type_->basic_type == TYPE_string) {
+        /* :207-208 discard a returned string. Resolve through .final to
+         * match Python's self.TYPE(TYPE.string) equality — a callee's
+         * declared type_ can be a TYPEREF that wraps the underlying
+         * BASICTYPE (translator.py FunctionRef.type_ -> TypeRef.final). */
+        const TypeInfo *ft = callee->type_
+            ? (callee->type_->final_type ? callee->type_->final_type
+                                          : callee->type_)
+            : NULL;
+        if (callee->u.id.class_ == CLASS_function && ft &&
+            ft->basic_type == TYPE_string) {
             tr_runtime_call(tr, ".core.__MEM_FREE", 0);
         }
     }

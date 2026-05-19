@@ -4447,6 +4447,36 @@ static int eval_str_list(Backend *b, const char *s, char **out, int cap) {
     return n;
 }
 
+/* Dynamic variant — counts items first, allocates an arena array sized
+ * to exactly that many. Used for array DATA images which can exceed the
+ * 64-entry fixed-cap of the static callers (e.g. DIM a(10,10) = 605
+ * elements). The returned array is arena-owned; *out_n is element count. */
+static char **eval_str_list_dyn(Backend *b, const char *s, int *out_n) {
+    /* Pass 1: count single-quoted tokens (mirrors the parse below). */
+    int count = 0;
+    const char *p = s;
+    while (*p && *p != '[') p++;
+    if (*p == '[') p++;
+    {
+        const char *q = p;
+        while (*q) {
+            while (*q == ' ' || *q == ',') q++;
+            if (*q == ']' || *q == '\0') break;
+            if (*q != '\'') { q++; continue; }
+            q++;
+            while (*q && *q != '\'') q++;
+            if (*q == '\'') q++;
+            count++;
+        }
+    }
+    char **arr = count > 0
+        ? (char **)arena_alloc(b->arena, sizeof(char *) * (size_t)count)
+        : NULL;
+    int n = eval_str_list(b, s, arr, count);
+    *out_n = n;
+    return arr;
+}
+
 /* RE_HEXA (generic.py): ^[0-9A-F]+$ on the uppercased token. */
 static bool s_re_hexa(const char *x) {
     if (!*x) return false;
@@ -4465,8 +4495,8 @@ static bool s_re_hexa(const char *x) {
 static StrVec emit_data(Backend *b, Quad *q) {
     StrVec out = sv_new();
     const char *t = q->args[0];
-    char *items[64];
-    int n = eval_str_list(b, q->args[1], items, 64);
+    int n = 0;
+    char **items = eval_str_list_dyn(b, q->args[1], &n);
 
     const char *size;
     if (strcmp(t, "i8") == 0 || strcmp(t, "u8") == 0) {
@@ -4516,8 +4546,8 @@ static StrVec emit_data(Backend *b, Quad *q) {
 static StrVec emit_vard(Backend *b, Quad *q) {
     StrVec out = sv_new();
     sv_pushf(b, &out, "%s:", q->args[0]);
-    char *items[64];
-    int n = eval_str_list(b, q->args[1], items, 64);
+    int n = 0;
+    char **items = eval_str_list_dyn(b, q->args[1], &n);
     for (int i = 0; i < n; i++) {
         const char *x = items[i];
         if (x[0] == '#') {                       /* literal */
@@ -4554,8 +4584,8 @@ static StrVec emit_varx(Backend *b, Quad *q) {
     StrVec out = sv_new();
     sv_pushf(b, &out, "%s:", q->args[0]);
     const char *t = q->args[1];                  /* type-size */
-    char *items[64];
-    int n = eval_str_list(b, q->args[2], items, 64);
+    int n = 0;
+    char **items = eval_str_list_dyn(b, q->args[2], &n);
 
     const char *size;
     if (strcmp(t, "i8") == 0 || strcmp(t, "u8") == 0) {
@@ -4628,8 +4658,9 @@ static void s_at_end_vard(Backend *b, const char *label,
  * (ix - offset). IDX_REG == "ix" (common.py:121). */
 static StrVec emit_lvarx(Backend *b, Quad *q) {
     StrVec out = sv_new();
-    char *items[256];
-    int n = eval_str_list(b, q_ins(q, 3), items, 256);  /* l = eval(ins[3]) */
+    int n = 0;
+    char **items = eval_str_list_dyn(b, q_ins(q, 3), &n);  /* l = eval(ins[3]) */
+    (void)items;
     char *label = s_tmp_label(b);
     long offset = s_int_val(q_ins(q, 1));
     const char *suffix = q_ins(q, 2);
@@ -4660,8 +4691,8 @@ static StrVec emit_lvard(Backend *b, Quad *q) {
     StrVec out = sv_new();
     char *label = s_tmp_label(b);
     long offset = s_int_val(q_ins(q, 1));
-    char *items[256];
-    int n = eval_str_list(b, q_ins(q, 2), items, 256);  /* eval(ins[2]) */
+    int n = 0;
+    char **items = eval_str_list_dyn(b, q_ins(q, 2), &n);  /* eval(ins[2]) */
 
     s_at_end_vard(b, label, q_ins(q, 2));
 
