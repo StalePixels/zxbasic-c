@@ -186,9 +186,21 @@ static const char *vt_traverse_const_expr(Translator *tr, AstNode *node) {
             memcpy(r + 8, nm, nl + 1);
             return r;
         }
-        if (node->u.id.class_ == CLASS_const)
-            return node->t ? node->t
-                 : (node->u.id.mangled ? node->u.id.mangled : "");
+        if (node->u.id.class_ == CLASS_const) {
+            /* ConstRef.t (constref.py:30-32) == _value.t (the stored
+             * value's textual form), NOT the const's mangled label. The
+             * C parser stamps id_node->t = mangled at DIM/CONST decl
+             * (parser.c ~4026), and the runtime tr_visit_var
+             * (translator.c CLASS_const arm) later overwrites with the
+             * folded value — but var_translator runs first. Recurse
+             * into default_value_expr directly so `dim p at <const>`
+             * emits `_p EQU <value>` not `_p EQU _<const>`
+             * (dim_at_label8). */
+            if (node->u.id.default_value_expr)
+                return vt_traverse_const_expr(tr, node->u.id.default_value_expr);
+            if (node->t) return node->t;
+            return node->u.id.mangled ? node->u.id.mangled : "";
+        }
         if (node->t != NULL) return node->t;
         if (node->u.id.has_address &&
             node->u.id.scope == SCOPE_global &&
