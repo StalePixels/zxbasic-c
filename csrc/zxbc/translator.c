@@ -509,6 +509,28 @@ static void tr_ic_out(Translator *tr, const char *t1, const char *t2) {
     const char *args[2] = { t1, t2 };
     tr_emit_quad(tr, "out", 2, args);
 }
+/* ic_neg/ic_bnot/ic_abs (translator_inst_visitor.py:184-188,79-80,61-62):
+ * emit(f"<op>{TSUFFIX}", t1, t2). ic_not uses _no_bool
+ * (translator_inst_visitor.py:190-191). */
+static void tr_ic_unop(Translator *tr, const char *base,
+                       const TypeInfo *type_, const char *t1,
+                       const char *t2, bool no_bool) {
+    const char *suf = no_bool ? tr_no_bool(type_) : tr_tsuffix(type_);
+    char ins[16];
+    snprintf(ins, sizeof(ins), "%s%s", base, suf);
+    const char *args[2] = { t1, t2 };
+    tr_emit_quad(tr, ins, 2, args);
+}
+/* ic_aaddr (translator_inst_visitor.py:58-59): emit("aaddr", t1, t2). */
+static void tr_ic_aaddr(Translator *tr, const char *t1, const char *t2) {
+    const char *args[2] = { t1, t2 };
+    tr_emit_quad(tr, "aaddr", 2, args);
+}
+/* ic_paaddr (translator_inst_visitor.py:199-200): emit("paaddr",t1,t2). */
+static void tr_ic_paaddr(Translator *tr, const char *t1, const char *t2) {
+    const char *args[2] = { t1, t2 };
+    tr_emit_quad(tr, "paaddr", 2, args);
+}
 /* S5.7d — ic_paddr / ic_pload / ic_pstore (translator_inst_visitor.py
  * :201-202, :214-215, :218-219). The inside-function parameter/local
  * IX-relative address+load+store surface. Now landed with their first
@@ -1218,6 +1240,14 @@ static int tr_builtin_dispatch(Visitor *v, AstNode *node) {
         return 1;
     }
 
+    /* ABS (builtin_translator.py:57-58): ic_abs(children[0].type_,
+     * node.t, children[0].t). */
+    if (strcmp(fn, "ABS") == 0) {
+        if (node->t == NULL) node->t = compiler_new_temp(tr->cs);
+        tr_ic_unop(tr, "abs", op ? op->type_ : NULL, node->t, ot, false);
+        return 1;
+    }
+
     (void)v;
     return 0;  /* not-yet-ported builtin — see 4c+ */
 }
@@ -1232,6 +1262,90 @@ static AstNode *tr_visit_builtin(Visitor *v, AstNode *node) {
         if (node->u.builtin.discard_result)
             tr_ic_fparam(tr, node->type_, compiler_new_temp(tr->cs));
     }
+    return node;
+}
+
+/* visit_UNARY (translator.py:139-148) -> UnaryOpTranslator
+ * (unary_op_translator.py). Each sub-op yields node.operand first.
+ *   MINUS: ic_neg(node.type_,  node.t, operand.t)
+ *   NOT:   ic_not(operand.type_, node.t, operand.t)
+ *   BNOT:  ic_bnot(operand.type_, node.t, operand.t)
+ *   ADDRESS: scalar global -> ic_load(node.type_, node.t, "#"+operand.t);
+ *            parameter -> ic_paddr(operand.offset + operand.type_.size%2);
+ *            local -> ic_paddr(-operand.offset); ARRAYACCESS -> ic_aaddr/
+ *            ic_paaddr by scope (entry == operand's array ID child[0]). */
+static AstNode *tr_visit_unary(Visitor *v, AstNode *node) {
+    Translator *tr = v->ctx;
+    const char *opr = node->u.unary.operator;
+    AstNode *operand = node->child_count > 0 ? node->children[0] : NULL;
+    if (!opr) return node;
+
+    if (strcmp(opr, "MINUS") == 0) {
+        if (operand) visitor_visit(v, operand);
+        if (node->t == NULL) node->t = compiler_new_temp(tr->cs);
+        tr_ic_unop(tr, "neg", node->type_, node->t,
+                   (operand && operand->t) ? operand->t : "", false);
+        return node;
+    }
+    if (strcmp(opr, "NOT") == 0) {
+        if (operand) visitor_visit(v, operand);
+        if (node->t == NULL) node->t = compiler_new_temp(tr->cs);
+        tr_ic_unop(tr, "not", operand ? operand->type_ : NULL, node->t,
+                   (operand && operand->t) ? operand->t : "", true);
+        return node;
+    }
+    if (strcmp(opr, "BNOT") == 0) {
+        if (operand) visitor_visit(v, operand);
+        if (node->t == NULL) node->t = compiler_new_temp(tr->cs);
+        tr_ic_unop(tr, "bnot", operand ? operand->type_ : NULL, node->t,
+                   (operand && operand->t) ? operand->t : "", false);
+        return node;
+    }
+    if (strcmp(opr, "ADDRESS") == 0) {
+        Scope scope = operand ? operand->u.id.scope : SCOPE_global;
+        if (operand && operand->tag == AST_ARRAYACCESS) {
+            visitor_visit(v, operand);
+            AstNode *entry = operand->child_count > 0 ? operand->children[0]
+                                                      : NULL;
+            if (node->t == NULL) node->t = compiler_new_temp(tr->cs);
+            if (scope == SCOPE_global)
+                tr_ic_aaddr(tr, node->t,
+                            entry ? entry->u.id.mangled : "");
+            else if (scope == SCOPE_parameter) {
+                char ob[24];
+                snprintf(ob, sizeof(ob), "*%ld",
+                         entry ? (long)entry->u.id.offset : 0);
+                tr_ic_paaddr(tr, node->t, ob);
+            } else { /* local */
+                char ob[24];
+                snprintf(ob, sizeof(ob), "%ld",
+                         entry ? -(long)entry->u.id.offset : 0);
+                tr_ic_paaddr(tr, node->t, ob);
+            }
+            return node;
+        }
+        /* scalar variable */
+        if (node->t == NULL) node->t = compiler_new_temp(tr->cs);
+        if (scope == SCOPE_global) {
+            size_t ol = operand && operand->t ? strlen(operand->t) : 0;
+            char *src = arena_alloc(&tr->cs->arena, ol + 2);
+            src[0] = '#';
+            memcpy(src + 1, (operand && operand->t) ? operand->t : "", ol);
+            src[ol + 1] = '\0';
+            tr_ic_load(tr, node->type_, node->t, src);
+        } else if (scope == SCOPE_parameter) {
+            int sz = operand && operand->type_
+                       ? type_size(operand->type_) : 0;
+            tr_ic_paddr(tr,
+                        (long)(operand ? operand->u.id.offset : 0) + (sz % 2),
+                        node->t);
+        } else { /* local */
+            tr_ic_paddr(tr, -(long)(operand ? operand->u.id.offset : 0),
+                        node->t);
+        }
+        return node;
+    }
+    fprintf(stderr, "zxbc: visit_UNARY unknown operator '%s'\n", opr);
     return node;
 }
 
@@ -2461,6 +2575,8 @@ static void tr_register_handlers(Visitor *v) {
     visitor_on_tag(v, AST_BUILTIN, tr_visit_builtin);
     /* visit_ASM (translator.py:963-967). */
     visitor_on_tag(v, AST_ASM, tr_visit_asm);
+    /* visit_UNARY (translator.py:139-148). */
+    visitor_on_tag(v, AST_UNARY, tr_visit_unary);
     visitor_on_tag(v, AST_ARGLIST, tr_visit_arglist);
     visitor_on_tag(v, AST_ARGUMENT, tr_visit_argument);
     visitor_on_sentence(v, "CALL", tr_visit_call);

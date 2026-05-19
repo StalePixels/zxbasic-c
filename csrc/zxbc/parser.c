@@ -382,6 +382,26 @@ static AstNode *parse_builtin_func(Parser *p, const char *fname, BTokenType kw) 
         consume(p, BTOK_RP, "Expected ')' after builtin argument");
     }
 
+    /* p_abs (zxbparser.py:3545-3552): ABS of an unsigned value is the
+     * value itself (redundant); ABS of a numeric constant folds via
+     * make_builtin/make_node (builtin.py:74-77). Only the BUILTIN-node
+     * path (signed non-const) reaches visit_BUILTIN. */
+    if (kw == BTOK_ABS && arg->type_) {
+        const TypeInfo *ft = arg->type_->final_type ? arg->type_->final_type
+                                                     : arg->type_;
+        if (ft->tag == AST_BASICTYPE &&
+            basictype_is_unsigned(ft->basic_type)) {
+            return arg;  /* is_unsigned -> p[0] = p[2] */
+        }
+        if (arg->tag == AST_NUMBER) {
+            /* make_node fold (builtin.py:74-77): SymbolNUMBER(func(v),
+             * type_=None) — type_ not passed to make_builtin in p_abs,
+             * so the folded NUMBER re-infers its type from the value. */
+            double val = arg->u.number.value;
+            return make_number(p, val >= 0 ? val : -val, lineno, NULL);
+        }
+    }
+
     /* Set result type based on function */
     SymbolTable *st = p->cs->symbol_table;
     switch (kw) {

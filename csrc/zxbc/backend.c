@@ -460,6 +460,12 @@ static int s_log2(long x) { int n = 0; while (x > 1) { x >>= 1; n++; } return n;
 /* INKEY (io.py:43,94). */
 #define RL_INKEY  ZXBC_NAMESPACE ".INKEY"
 
+/* 8/16-bit unary runtime helpers (core.py:12-13,29). NEGHL (RL_NEGHL)
+ * already defined above (neg16.asm). */
+#define RL_ABS8    ZXBC_NAMESPACE ".__ABS8"
+#define RL_ABS16   ZXBC_NAMESPACE ".__ABS16"
+#define RL_BNOT16  ZXBC_NAMESPACE ".__BNOT16"
+
 /* runtime_call (common.py:156-161): REQUIRES.add(LABEL_REQUIRED_MODULES
  * [label]) if present; returns "call {label}". The label->module map is
  * runtime/core.py:160-225 (only the S5.3-reachable labels). */
@@ -632,6 +638,10 @@ static const char *s_required_module(const char *label) {
     if (strcmp(label, RL_SGNF16)     == 0) return "sgnf16.asm";
     if (strcmp(label, RL_SGNF)       == 0) return "sgnf.asm";
     if (strcmp(label, RL_INKEY)      == 0) return "io/keyboard/inkey.asm";
+    /* 8/16-bit unary helpers (core.py:141-142,158). */
+    if (strcmp(label, RL_ABS8)       == 0) return "abs8.asm";
+    if (strcmp(label, RL_ABS16)      == 0) return "abs16.asm";
+    if (strcmp(label, RL_BNOT16)     == 0) return "bitwise/bnot16.asm";
     return NULL;
 }
 
@@ -2437,6 +2447,63 @@ static StrVec emit_out(Backend *b, Quad *q) {
     sv_push(b, &out, "out (c), a");
     return out;
 }
+
+/* Bits8 unary (_8bit.py:844-877): get_oper(ins[2]) in A, op, push af. */
+static StrVec emit_not8(Backend *b, Quad *q) {
+    StrVec out = bits8_get_oper(b, q_ins(q, 2), NULL, false);
+    sv_push(b, &out, "sub 1");
+    sv_push(b, &out, "sbc a, a");
+    sv_push(b, &out, "push af");
+    return out;
+}
+static StrVec emit_bnot8(Backend *b, Quad *q) {
+    StrVec out = bits8_get_oper(b, q_ins(q, 2), NULL, false);
+    sv_push(b, &out, "cpl");
+    sv_push(b, &out, "push af");
+    return out;
+}
+static StrVec emit_neg8(Backend *b, Quad *q) {
+    StrVec out = bits8_get_oper(b, q_ins(q, 2), NULL, false);
+    sv_push(b, &out, "neg");
+    sv_push(b, &out, "push af");
+    return out;
+}
+static StrVec emit_abs8(Backend *b, Quad *q) {
+    StrVec out = bits8_get_oper(b, q_ins(q, 2), NULL, false);
+    sv_push(b, &out, s_runtime_call(b, RL_ABS8));
+    sv_push(b, &out, "push af");
+    return out;
+}
+
+/* Bits16 unary (_16bit.py:833-865): get_oper(ins[2]) in HL, op, push hl
+ * (not16 pushes af). */
+static StrVec emit_not16(Backend *b, Quad *q) {
+    StrVec out = bits16_get_oper(b, q_ins(q, 2), NULL, false);
+    sv_push(b, &out, "ld a, h");
+    sv_push(b, &out, "or l");
+    sv_push(b, &out, "sub 1");
+    sv_push(b, &out, "sbc a, a");
+    sv_push(b, &out, "push af");
+    return out;
+}
+static StrVec emit_bnot16(Backend *b, Quad *q) {
+    StrVec out = bits16_get_oper(b, q_ins(q, 2), NULL, false);
+    sv_push(b, &out, s_runtime_call(b, RL_BNOT16));
+    sv_push(b, &out, "push hl");
+    return out;
+}
+static StrVec emit_neg16(Backend *b, Quad *q) {
+    StrVec out = bits16_get_oper(b, q_ins(q, 2), NULL, false);
+    sv_push(b, &out, s_runtime_call(b, RL_NEGHL));
+    sv_push(b, &out, "push hl");
+    return out;
+}
+static StrVec emit_abs16(Backend *b, Quad *q) {
+    StrVec out = bits16_get_oper(b, q_ins(q, 2), NULL, false);
+    sv_push(b, &out, s_runtime_call(b, RL_ABS16));
+    sv_push(b, &out, "push hl");
+    return out;
+}
 static StrVec emit_retf(Backend *b, Quad *q) {
     StrVec out = float_get_oper(b, q_ins(q, 1), NULL);
     sv_push(b, &out, "#pragma opt require a,bc,de");
@@ -3962,9 +4029,13 @@ static StrVec quad_emit(Backend *b, Quad *q) {
     if (strcmp(I, "nef16") == 0) return emit_nef16(b, q);
     if (strcmp(I, "nef")   == 0) return emit_nef(b, q);
     /* abs / neg */
+    if (strcmp(I, "absi8")  == 0) return emit_abs8(b, q);
+    if (strcmp(I, "absi16") == 0) return emit_abs16(b, q);
     if (strcmp(I, "absi32") == 0) return emit_abs32(b, q);
     if (strcmp(I, "absf16") == 0) return emit_absf16(b, q);
     if (strcmp(I, "absf")   == 0) return emit_absf(b, q);
+    if (strcmp(I, "negu8")  == 0 || strcmp(I, "negi8")  == 0) return emit_neg8(b, q);
+    if (strcmp(I, "negu16") == 0 || strcmp(I, "negi16") == 0) return emit_neg16(b, q);
     if (strcmp(I, "negu32") == 0 || strcmp(I, "negi32") == 0) return emit_neg32(b, q);
     if (strcmp(I, "negf16") == 0) return emit_negf16(b, q);
     if (strcmp(I, "negf")   == 0) return emit_negf(b, q);
@@ -3978,12 +4049,16 @@ static StrVec quad_emit(Backend *b, Quad *q) {
     if (strcmp(I, "xoru32") == 0 || strcmp(I, "xori32") == 0) return emit_xor32(b, q);
     if (strcmp(I, "xorf16") == 0) return emit_xorf16(b, q);
     if (strcmp(I, "xorf")   == 0) return emit_xorf(b, q);
+    if (strcmp(I, "notu8")  == 0 || strcmp(I, "noti8")  == 0) return emit_not8(b, q);
+    if (strcmp(I, "notu16") == 0 || strcmp(I, "noti16") == 0) return emit_not16(b, q);
     if (strcmp(I, "notu32") == 0 || strcmp(I, "noti32") == 0) return emit_not32(b, q);
     if (strcmp(I, "notf16") == 0) return emit_notf16(b, q);
     if (strcmp(I, "notf")   == 0) return emit_notf(b, q);
     if (strcmp(I, "bandu32")== 0 || strcmp(I, "bandi32")== 0) return emit_band32(b, q);
     if (strcmp(I, "boru32") == 0 || strcmp(I, "bori32") == 0) return emit_bor32(b, q);
     if (strcmp(I, "bxoru32")== 0 || strcmp(I, "bxori32")== 0) return emit_bxor32(b, q);
+    if (strcmp(I, "bnotu8") == 0 || strcmp(I, "bnoti8") == 0) return emit_bnot8(b, q);
+    if (strcmp(I, "bnotu16")== 0 || strcmp(I, "bnoti16")== 0) return emit_bnot16(b, q);
     if (strcmp(I, "bnotu32")== 0 || strcmp(I, "bnoti32")== 0) return emit_bnot32(b, q);
     /* param / ret */
     /* S5.7b — 8/16-bit param/fparam/ret + 32-bit fparam + paddr/pload
