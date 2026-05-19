@@ -1686,8 +1686,74 @@ static int tr_builtin_dispatch(Visitor *v, AstNode *node) {
         return 1;
     }
 
+    /* LBOUND / UBOUND runtime path (builtin_translator.py:127-157).
+     * Constant dimensions are folded upstream (zxbparser.py p_expr_lbound
+     * _expr const-prop) and never reach here; this is the non-constant-
+     * dimension runtime lowering. operands[0]==array ID entry (child[0]),
+     * operands[1]==dim expr (child[1], make_typecast'd to uinteger by the
+     * parser). Python:
+     *   yield node.operands[1]                       # visit dim expr
+     *   ic_param(gl.BOUND_TYPE, operands[1].t)        # BOUND_TYPE=uinteger
+     *   entry = operands[0]
+     *   if entry.scope == global_:
+     *       ic_fparam(gl.PTR_TYPE, f"#{entry.mangled}")
+     *   elif entry.scope == parameter:
+     *       ic_pload(gl.PTR_TYPE, entry.t, entry.offset)
+     *       t1 = optemps.new_t(); ic_fparam(gl.PTR_TYPE, t1)
+     *   elif entry.scope == local:
+     *       ic_paddr(-entry.offset, entry.t)
+     *       t1 = optemps.new_t(); ic_fparam(gl.PTR_TYPE, t1)
+     *   runtime_call(LBOUND|UBOUND, self.TYPE(gl.BOUND_TYPE).size)
+     * gl.BOUND_TYPE == gl.PTR_TYPE == uinteger (arch/z80/__init__.py).
+     * The pload/paddr destination is entry.t but the fparam uses a fresh
+     * optemps.new_t() (NOT the pload dest) — replicated bug-for-bug; the
+     * pload→call register fusion in the backend carries the value. The
+     * generic tr_visit_builtin already did `yield node.operand`
+     * (children[0]==array ID); tr_visit_var returns immediately for a
+     * CLASS_array node (visit_VARARRAY pass) so that yield is a no-op
+     * here, exactly as Python's visit_VARARRAY. */
+    if (strcmp(fn, "LBOUND") == 0 || strcmp(fn, "UBOUND") == 0) {
+        const TypeInfo *uint_t =
+            tr->cs->symbol_table->basic_types[TYPE_uinteger];
+        AstNode *entry = node->child_count > 0 ? node->children[0] : NULL;
+        AstNode *dim   = node->child_count > 1 ? node->children[1] : NULL;
+        /* yield node.operands[1] */
+        if (dim) visitor_visit(v, dim);
+        /* ic_param(gl.BOUND_TYPE, operands[1].t) */
+        tr_ic_param(tr, uint_t, (dim && dim->t) ? dim->t : "0");
+        Scope sc = entry ? entry->u.id.scope : SCOPE_global;
+        if (sc == SCOPE_global) {
+            const char *mg = (entry && entry->u.id.mangled)
+                            ? entry->u.id.mangled : "";
+            size_t ml = strlen(mg);
+            char *gp = arena_alloc(&tr->cs->arena, ml + 2);
+            snprintf(gp, ml + 2, "#%s", mg);
+            tr_ic_fparam(tr, uint_t, gp);
+        } else if (sc == SCOPE_parameter) {
+            char ofs[24];
+            snprintf(ofs, sizeof(ofs), "%d", entry->u.id.offset);
+            tr_ic_pload(tr, uint_t, (entry->t && entry->t[0]) ? entry->t
+                                    : compiler_new_temp(tr->cs), ofs);
+            tr_ic_fparam(tr, uint_t, compiler_new_temp(tr->cs));
+        } else { /* SCOPE_local */
+            tr_ic_paddr(tr, -(long)entry->u.id.offset,
+                        (entry->t && entry->t[0]) ? entry->t
+                        : compiler_new_temp(tr->cs));
+            tr_ic_fparam(tr, uint_t, compiler_new_temp(tr->cs));
+        }
+        /* RuntimeLabel.LBOUND/UBOUND == CoreLabels.{LBOUND,UBOUND} ==
+         * f"{NAMESPACE}.__LBOUND" / "...__UBOUND" (core.py:61/133,
+         * NAMESPACE==CORE_NAMESPACE==".core"); backend.c RL_LBOUND/
+         * RL_UBOUND + array/arraybound.asm module rows already match. */
+        tr_runtime_call(tr,
+                        strcmp(fn, "LBOUND") == 0 ? ".core.__LBOUND"
+                                                  : ".core.__UBOUND",
+                        type_size(uint_t));
+        return 1;
+    }
+
     (void)v;
-    return 0;  /* not-yet-ported builtin (LBOUND/UBOUND) — see follow-up */
+    return 0;  /* not-yet-ported builtin — see follow-up */
 }
 
 /* visit_BUILTIN (translator.py:150-158): yield node.operand; dispatch to
