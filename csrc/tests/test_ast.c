@@ -597,7 +597,7 @@ TEST(test_var_scope_local) {
     CompilerState *cs = new_cs();
     SymbolTable *st = cs->symbol_table;
 
-    symboltable_enter_scope(st, cs);
+    symboltable_enter_scope(st, cs, "");
     AstNode *v = symboltable_declare_variable(st, cs, "v", 1,
         type_new_ref(cs, st->basic_types[TYPE_integer], 0, false));
     ASSERT_EQ(v->u.id.scope, SCOPE_local);
@@ -659,7 +659,7 @@ TEST(test_vararray_scope_local) {
     CompilerState *cs = new_cs();
     SymbolTable *st = cs->symbol_table;
 
-    symboltable_enter_scope(st, cs);
+    symboltable_enter_scope(st, cs, "");
 
     AstNode *bl = ast_new(cs, AST_BOUNDLIST, 1);
     AstNode *b = ast_new(cs, AST_BOUND, 1);

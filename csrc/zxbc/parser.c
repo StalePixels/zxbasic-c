@@ -4312,9 +4312,47 @@ static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function, bool is_decl
     }
 
     /* Declare function/sub in the CURRENT (parent) scope BEFORE entering body scope.
-     * This enables recursive calls — the function name is visible from inside. */
+     * This enables recursive calls — the function name is visible from inside.
+     *
+     * Python declare_func (symboltable.py:727-743) does get_entry(id_) —
+     * a search of ALL scopes (symboltable.py:82) — not just the current
+     * one. If the entry already exists (e.g. it was forward-CALLED, so
+     * access_func implicitly declared it CLASS_unknown and leave_scope
+     * relocated it to global), declare_func REUSES that same object and
+     * re-mangles it `f"{current_namespace}_{entry.name}"` — a literal
+     * '_' join (symboltable.py:741), NOT make_child_namespace's '.'
+     * join. Only a genuinely fresh function takes the else branch
+     * (symboltable.py:743 -> declare -> make_child_namespace, the '.'
+     * form). C symboltable_declare only checks the CURRENT scope, so a
+     * relocated-to-global forward entry was missed: a duplicate `_p.r`
+     * entry got built instead of reusing the global `_p_r` one
+     * (paramstr5). Mirror get_entry's cross-scope search here. */
     SymbolClass cls = is_function ? CLASS_function : CLASS_sub;
-    AstNode *id_node = symboltable_declare(p->cs->symbol_table, p->cs, func_name, lineno, cls);
+    AstNode *pre_existing =
+        symboltable_lookup(p->cs->symbol_table, func_name);
+    AstNode *id_node;
+    if (pre_existing) {
+        /* declare_func "entry is not None" branch (symboltable.py:728-
+         * 741): reuse the shared object; CLASS_unknown -> to_function;
+         * mangled = "{current_namespace}_{name}" (literal '_' join). */
+        id_node = pre_existing;
+        if (id_node->u.id.class_ == CLASS_unknown)
+            id_node->u.id.class_ = cls; /* entry.to_function(class_) */
+        const char *ns = p->cs->symbol_table->current_scope->namespace_;
+        if (!ns) ns = "";
+        size_t nl = strlen(func_name), sl = strlen(ns);
+        char *m = arena_alloc(&p->cs->arena, sl + 1 + nl + 1);
+        memcpy(m, ns, sl);
+        m[sl] = '_';
+        memcpy(m + sl + 1, func_name, nl + 1);
+        id_node->u.id.mangled = m;
+    } else {
+        /* declare_func else branch (symboltable.py:743): fresh declare
+         * -> make_child_namespace(current_namespace, name) ('.' join);
+         * for global scope (ns "") that is "_name", unchanged. */
+        id_node = symboltable_declare(p->cs->symbol_table, p->cs,
+                                      func_name, lineno, cls);
+    }
 
     /* Check for duplicate definition or class mismatch */
     if (id_node->u.id.declared && id_node->lineno != lineno) {
@@ -4434,8 +4472,11 @@ static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function, bool is_decl
     /* Full definition — clear forwarded flag if this was previously declared */
     id_node->u.id.forwarded = false;
 
-    /* Enter function body scope */
-    symboltable_enter_scope(p->cs->symbol_table, p->cs);
+    /* Enter function body scope. Python p_function_def (zxbparser.py:
+     * 3025) calls enter_scope(name) with p[3] — the RAW function name
+     * (suffix NOT stripped; only declare() strips it for entry.name/
+     * .mangled). The namespace prefix therefore uses func_name_raw. */
+    symboltable_enter_scope(p->cs->symbol_table, p->cs, func_name_raw);
 
     /* Register parameters in the function scope (so body can reference them).
      * Strip deprecated suffixes ($%&!) so lookups match (Python strips on get_entry). */
@@ -4588,6 +4629,20 @@ static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function, bool is_decl
     ast_add_child(p->cs, decl, params);
     ast_add_child(p->cs, decl, body);
     decl->type_ = ret_type;
+
+    /* Python p_funcdecl (zxbparser.py:2913): `p[0].entry.ref.body = p[2]`
+     * — the function body is stamped onto the SHARED function-entry's
+     * ref. In the C AST the faithful analogue is the dedicated
+     * id_node->u.id.body handle (same reason u.id.params exists: a later
+     * call node's ast_add_child re-parents id_node, so id->parent is
+     * unreliable; the entry-owned field is stable). FunctionGraph's
+     * transitive accessed-cascade — Python _get_calls_from_children /
+     * filter_inorder descends a CALL's child[0] FUNCTION entry into its
+     * .ref.body to reach nested calls (optimize.py:164-184) — needs this
+     * link to walk from a callee ID into its body. The definition's body
+     * wins over any forward DECLARE's empty block, mirroring Python where
+     * the definition's p[2] replaces the forward funcref body. */
+    id_node->u.id.body = body;
 
     vec_push(p->cs->functions, id_node);
 

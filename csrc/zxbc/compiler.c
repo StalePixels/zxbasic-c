@@ -22,6 +22,7 @@ SymbolTable *symboltable_new(CompilerState *cs) {
     hashmap_init(&st->global_scope->symbols);
     st->global_scope->parent = NULL;
     st->global_scope->level = 0;
+    st->global_scope->namespace_ = ""; /* Python current_namespace="" (symboltable.py:54) */
     st->current_scope = st->global_scope;
 
     /* Initialize type registry */
@@ -36,11 +37,38 @@ SymbolTable *symboltable_new(CompilerState *cs) {
     return st;
 }
 
-void symboltable_enter_scope(SymbolTable *st, CompilerState *cs) {
+/* SymbolTable.make_child_namespace (symboltable.py:140-149). */
+char *make_child_namespace(CompilerState *cs, const char *parent,
+                           const char *child) {
+    if (!child) child = "";
+    if (parent == NULL || parent[0] == '\0') {
+        /* MANGLE_CHR ("_") + child (global_.py:167). */
+        size_t cl = strlen(child);
+        char *r = arena_alloc(&cs->arena, cl + 2);
+        r[0] = '_';
+        memcpy(r + 1, child, cl + 1);
+        return r;
+    }
+    /* parent + NAMESPACE_SEPARATOR (".") + child (global_.py:168). */
+    size_t pl = strlen(parent), cl = strlen(child);
+    char *r = arena_alloc(&cs->arena, pl + cl + 2);
+    memcpy(r, parent, pl);
+    r[pl] = '.';
+    memcpy(r + pl + 1, child, cl + 1);
+    return r;
+}
+
+void symboltable_enter_scope(SymbolTable *st, CompilerState *cs,
+                             const char *namespace_name) {
     Scope_ *scope = arena_calloc(st->arena, 1, sizeof(Scope_));
     hashmap_init(&scope->symbols);
     scope->parent = st->current_scope;
     scope->level = st->current_scope->level + 1;
+    /* Python enter_scope: current_namespace = make_child_namespace(
+     * current_namespace, namespace) (symboltable.py:228); the new Scope
+     * stores it (scope.py:45). */
+    scope->namespace_ = make_child_namespace(
+        cs, st->current_scope->namespace_, namespace_name ? namespace_name : "");
     st->current_scope = scope;
 }
 
@@ -62,6 +90,60 @@ static void scope_push_ordered(SymbolTable *st, Scope_ *scope, AstNode *node) {
 }
 
 void symboltable_exit_scope(SymbolTable *st) {
+    Scope_ *leaving = st->current_scope;
+
+    /* Python leave_scope (symboltable.py:279-281): every CLASS.unknown
+     * entry remaining in the scope being left is moved to the GLOBAL
+     * scope via move_to_global_scope. This is the load-bearing
+     * def-LATER mechanism: a call like `r(q$)` inside `SUB p` where `r`
+     * is not yet declared implicitly declares `r` as CLASS_unknown in
+     * p's scope (access_func). On leaving p's scope Python relocates
+     * that entry to global so the later top-level `SUB r` definition's
+     * declare_func (get_entry searches all scopes) finds and mutates
+     * THE SAME entry object — making the CALL's callee and the
+     * FUNCDECL's entry identical (shared accessed/class/body). Without
+     * this the C kept two distinct `r` entries: the call's orphaned
+     * CLASS_unknown one (dropped by the callee-class codegen gate) and
+     * the FUNCDECL's global one. (paramstr4/paramstr5 mechanism 1.)
+     *
+     * move_to_global_scope (symboltable.py:289-305): scope=global_; for
+     * non-labels mangled = make_child_namespace(global_ns "", name) ==
+     * "_name"; insert into global scope, delete from the leaving scope.
+     * Iterate the insertion-ordered list (Python current_scope.values()
+     * order); guard `len(table) > 1` is implied (we only relocate when
+     * leaving a non-global scope, i.e. parent != NULL). */
+    if (leaving->parent) {
+        for (int i = 0; i < leaving->ordered_count; i++) {
+            AstNode *e = leaving->ordered[i];
+            if (!e || e->tag != AST_ID ||
+                e->u.id.class_ != CLASS_unknown)
+                continue;
+            const char *nm = e->u.id.name;
+            /* Still keyed in the leaving scope? (Python `id_ in
+             * current_scope`.) */
+            if (hashmap_get(&leaving->symbols, nm) != e)
+                continue;
+            e->u.id.scope = SCOPE_global;
+            e->u.id.offset_set = false; /* symbol.ref.offset = None */
+            /* mangled = make_child_namespace("", name) == "_" + name
+             * (global scope namespace is ""). Recompute off the
+             * arena (st->arena) — no signature change. */
+            {
+                size_t nl = strlen(nm);
+                char *m = arena_alloc(st->arena, nl + 2);
+                m[0] = '_';
+                memcpy(m + 1, nm, nl + 1);
+                e->u.id.mangled = m;
+            }
+            hashmap_set(&st->global_scope->symbols, nm, e);
+            hashmap_remove(&leaving->symbols, nm);
+            /* Keep it discoverable in global insertion order too (the
+             * faithful analogue of global_scope[id_] = symbol adding it
+             * to the global OrderedDict). */
+            scope_push_ordered(st, st->global_scope, e);
+        }
+    }
+
     if (st->current_scope->parent) {
         /* Note: we don't free the scope — arena handles that */
         st->current_scope = st->current_scope->parent;
@@ -152,15 +234,16 @@ AstNode *symboltable_declare(SymbolTable *st, CompilerState *cs,
     /* Create new ID node */
     AstNode *node = ast_new(cs, AST_ID, lineno);
     node->u.id.name = arena_strdup(&cs->arena, name);
-    {
-        /* Python ID.mangled = f"{MANGLE_CHR}{name}" (_id.py:60); MANGLE_CHR
-         * = "_" (global_.py:167). */
-        size_t nl = strlen(name);
-        char *m = arena_alloc(&cs->arena, nl + 2);
-        m[0] = '_';
-        memcpy(m + 1, name, nl + 1);
-        node->u.id.mangled = m;
-    }
+    /* Python SymbolTable.declare (symboltable.py:122):
+     *   entry.mangled = make_child_namespace(current_namespace, name)
+     * The global scope's namespace is "" so make_child_namespace("",name)
+     * == "_name" — identical to the prior MANGLE_CHR+name for every
+     * global entry. Only a nested-scope declaration (current namespace
+     * non-empty, e.g. a SUB defined inside another SUB) differs:
+     * "_parent.child" instead of "_child" — the faithful nested-sub
+     * mangle rule (opt2_labelinfunc4/5, paramstr5). */
+    node->u.id.mangled =
+        make_child_namespace(cs, st->current_scope->namespace_, name);
     node->u.id.class_ = class_;
     node->u.id.scope = (st->current_scope->level == 0) ? SCOPE_global : SCOPE_local;
     node->u.id.convention = CONV_unknown;

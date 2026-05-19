@@ -45,13 +45,42 @@ static bool ptr_seen_or_add(AstPtrVec *set, AstNode *n) {
 /* Python _get_calls_from_children + the .entry.accessed mark
  * (optimize.py:164-171/183-184): for every CALL/FUNCCALL anywhere under
  * `node`, mark its callee (children[0] — the shared symbol-table entry)
- * accessed. Own visited set (Python filter_inorder's, ast.py:63-69). */
+ * accessed. Own visited set (Python filter_inorder's, ast.py:63-69).
+ *
+ * TRANSITIVE CASCADE (the load-bearing part). Python's
+ * _get_calls_from_children is filter_inorder(node, token in
+ * {CALL,FUNCCALL}) (optimize.py:164-165). A CALL/FUNCCALL Symbol's
+ * children are [FUNCTION_entry, ARGLIST] (call.py:57-83), and the
+ * FUNCTION entry (a SymbolID) exposes children == [PARAMLIST, body]
+ * (funcref.py:27,50-60 — `.ref.body` IS children[1]). So filter_inorder,
+ * descending node.children[::-1], walks INTO the callee FUNCTION entry
+ * and through its body, reaching every transitively-reachable call. A
+ * single global call therefore marks the whole reachable call-graph
+ * accessed (verified: pararray11 `CALL func3` -> [func3,func2,func1]).
+ *
+ * In the C AST a CALL/FUNCCALL's children[0] is the callee AST_ID; the
+ * body is not an ID child but the entry-owned u.id.body handle (set in
+ * parse_sub_or_func_decl, the faithful analogue of Python
+ * entry.ref.body). To port filter_inorder's descent faithfully, when a
+ * CALL/FUNCCALL is reached, after marking the callee accessed also
+ * descend the callee FUNCTION entry's two "children" — its PARAMLIST
+ * (u.id.params) and its body (u.id.body) — exactly the [PARAMLIST,
+ * body] pair Python's FUNCTION SymbolID exposes. The shared visited set
+ * bounds the recursive/mutual call graph (Python filter_inorder's own
+ * `visited`). */
 static void collect_and_mark(AstNode *node, AstPtrVec *seen) {
     if (!node || ptr_seen_or_add(seen, node))
         return;
     if (node->tag == AST_CALL || node->tag == AST_FUNCCALL) {
-        if (node->child_count > 0 && node->children[0])
-            node->children[0]->u.id.accessed = true; /* symbol.entry.accessed = True */
+        AstNode *callee = node->child_count > 0 ? node->children[0] : NULL;
+        if (callee && callee->tag == AST_ID) {
+            callee->u.id.accessed = true; /* symbol.entry.accessed = True */
+            /* Descend the callee FUNCTION entry's children == [PARAMLIST,
+             * body] (Python funcref.py:27,50-60) — the filter_inorder
+             * step that makes the accessed-mark transitive. */
+            collect_and_mark(callee->u.id.params, seen);
+            collect_and_mark(callee->u.id.body, seen);
+        }
     }
     for (int i = 0; i < node->child_count; i++)
         collect_and_mark(node->children[i], seen);

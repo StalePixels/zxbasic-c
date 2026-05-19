@@ -436,6 +436,14 @@ typedef struct Scope_ {
     HashMap symbols;         /* name -> AstNode* (ID nodes) */
     struct Scope_ *parent;
     int level;               /* 0 = global */
+    /* Python Scope.namespace (scope.py:45) — the mangling prefix. The
+     * global scope's is "" (symboltable.py:54). enter_scope sets a child
+     * scope's to make_child_namespace(parent_namespace, fn_name)
+     * (symboltable.py:228); declare() mangles every entry as
+     * make_child_namespace(current_namespace, name) (symboltable.py:122).
+     * A nested SUB/FUNCTION thus mangles "_procedure.subprocedure" not
+     * "_subprocedure" — the opt2_labelinfunc4/paramstr5 divergence. */
+    const char *namespace_;
     /* S5.7d — per-scope insertion-ordered entry list, mirroring Python's
      * Scope.symbols OrderedDict (scope.py:43-44). The HashMap above is
      * unordered; compute_offsets needs the OrderedDict iteration order
@@ -463,9 +471,18 @@ struct SymbolTable {
 /* Create/destroy symbol table */
 SymbolTable *symboltable_new(CompilerState *cs);
 
-/* Scope management */
-void symboltable_enter_scope(SymbolTable *st, CompilerState *cs);
+/* Scope management. `namespace_name` is the Python enter_scope(namespace)
+ * arg (symboltable.py:228) — the function name whose body scope is being
+ * entered; NULL/"" is tolerated (treated as ""). */
+void symboltable_enter_scope(SymbolTable *st, CompilerState *cs,
+                             const char *namespace_name);
 void symboltable_exit_scope(SymbolTable *st);
+/* Python SymbolTable.make_child_namespace (symboltable.py:140-149):
+ * empty parent -> MANGLE_CHR + child ("_x"); else parent +
+ * NAMESPACE_SEPARATOR + child ("p.x"). MANGLE_CHR="_", SEP="."
+ * (global_.py:167-168). */
+char *make_child_namespace(CompilerState *cs, const char *parent,
+                           const char *child);
 /* S5.7d — compute_offsets (symboltable.py:235-266): assigns per-local
  * +/- IX offsets over the scope's insertion-ordered entries (stable
  * entry_size sort) and returns the total local frame size (locals_size,

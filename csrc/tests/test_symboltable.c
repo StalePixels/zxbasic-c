@@ -252,7 +252,7 @@ TEST(test_enter_scope) {
     SymbolTable *st = cs->symbol_table;
 
     symboltable_declare_variable(st, cs, "a", 10, btyperef(cs, TYPE_integer));
-    symboltable_enter_scope(st, cs);
+    symboltable_enter_scope(st, cs, "");
     ASSERT(st->current_scope != st->global_scope);
 
     /* 'a' undeclared in current scope (though visible via lookup) */
@@ -266,7 +266,7 @@ TEST(test_declare_local_var) {
     CompilerState *cs = new_cs_capture();
     SymbolTable *st = cs->symbol_table;
 
-    symboltable_enter_scope(st, cs);
+    symboltable_enter_scope(st, cs, "");
     symboltable_declare_variable(st, cs, "a", 12, btyperef(cs, TYPE_float));
     ASSERT_TRUE(symboltable_check_is_declared(st, "a", 11, "var", false, cs));
     AstNode *entry = symboltable_get_entry(st, "a");
@@ -338,7 +338,7 @@ TEST(test_declare_local_array) {
     CompilerState *cs = new_cs_capture();
     SymbolTable *st = cs->symbol_table;
 
-    symboltable_enter_scope(st, cs);
+    symboltable_enter_scope(st, cs, "");
 
     AstNode *bounds = ast_new(cs, AST_BOUNDLIST, 1);
     AstNode *bound = ast_new(cs, AST_BOUND, 1);
@@ -363,7 +363,7 @@ TEST(test_declare_local_var_dup) {
     CompilerState *cs = new_cs_capture();
     SymbolTable *st = cs->symbol_table;
 
-    symboltable_enter_scope(st, cs);
+    symboltable_enter_scope(st, cs, "");
     symboltable_declare_variable(st, cs, "a", 12, btyperef(cs, TYPE_float));
     AstNode *dup = symboltable_declare_variable(st, cs, "a", 14, btyperef(cs, TYPE_float));
     ASSERT_NULL(dup);
@@ -379,7 +379,7 @@ TEST(test_leave_scope) {
     CompilerState *cs = new_cs_capture();
     SymbolTable *st = cs->symbol_table;
 
-    symboltable_enter_scope(st, cs);
+    symboltable_enter_scope(st, cs, "");
     symboltable_declare_variable(st, cs, "a", 10, btyperef(cs, TYPE_integer));
     symboltable_exit_scope(st);
     ASSERT_EQ(st->current_scope, st->global_scope);
@@ -392,7 +392,7 @@ TEST(test_local_var_cleaned) {
     CompilerState *cs = new_cs_capture();
     SymbolTable *st = cs->symbol_table;
 
-    symboltable_enter_scope(st, cs);
+    symboltable_enter_scope(st, cs, "");
     symboltable_declare_variable(st, cs, "a", 10, btyperef(cs, TYPE_integer));
     symboltable_exit_scope(st);
 
