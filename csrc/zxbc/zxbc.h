@@ -326,6 +326,11 @@ struct AstNode {
         struct {
             long offset;       /* byte offset (valid iff is_const) */
             bool is_const;     /* all subscripts constant (offset valid) */
+            bool is_load;      /* read context => Python sym.ARRAYLOAD
+                                * (visit_ARRAYLOAD: aload). false => the
+                                * LETARRAY lvalue, Python sym.ARRAYACCESS
+                                * (visit_ARRAYACCESS: just push indices).
+                                * Set from expr_context at construction. */
         } arrayaccess;
 
         /* AST_ARGUMENT */

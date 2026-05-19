@@ -920,6 +920,13 @@ static AstNode *parse_call_or_array(Parser *p, const char *name, int lineno, boo
          * is untouched; the STRSLICE branch takes the identical gate
          * under S5.8a for the same reason — see its comment). */
         AstNode *n = ast_new(p->cs, AST_ARRAYACCESS, lineno);
+        /* Python make_call (zxbparser.py:390) builds sym.ARRAYLOAD for a
+         * READ (expr_context) -> visit_ARRAYLOAD (aload); the LETARRAY
+         * lvalue (make_array_access, :325) builds sym.ARRAYACCESS ->
+         * visit_ARRAYACCESS (push indices only, no aload). expr_context
+         * is the C analogue (false only for the LETARRAY write target,
+         * parser.c:1483). */
+        n->u.arrayaccess.is_load = expr_context;
         if (expr_context)
             entry->u.id.accessed = true;
 
@@ -1174,8 +1181,11 @@ static AstNode *parse_postfix(Parser *p, AstNode *left) {
             n->type_ = p->cs->symbol_table->basic_types[TYPE_string];
             left = n;
         } else {
-            /* Array access or function call on expression result */
+            /* Array access or function call on expression result —
+             * always a READ here (postfix on an expression value) =>
+             * Python sym.ARRAYLOAD. */
             AstNode *n = ast_new(p->cs, AST_ARRAYACCESS, lineno);
+            n->u.arrayaccess.is_load = true;
             ast_add_child(p->cs, n, left);
             for (int i = 0; i < arglist->child_count; i++)
                 ast_add_child(p->cs, n, arglist->children[i]);
@@ -2496,6 +2506,7 @@ static AstNode *parse_statement(Parser *p) {
         advance(p);
         const char *name = p->previous.sval;
         int ln = p->previous.lineno;
+        bool start_array_id = (p->previous.type == BTOK_ARRAY_ID);
         bool was_let = p->cs->let_assignment;
         p->cs->let_assignment = false;
 
@@ -2526,6 +2537,55 @@ static AstNode *parse_statement(Parser *p) {
                 call_node->tag = AST_CALL;
             }
             return call_node;
+        }
+
+        /* Whole-array copy — p_array_copy (zxbparser.py:1137-1179):
+         *   statement : ARRAY_ID EQ ARRAY_ID | LET ARRAY_ID EQ ARRAY_ID
+         * Both the lvalue and rvalue must be array names; build an
+         * ARRAYCOPY sentence [larray, rarray]. Detected BEFORE the scalar
+         * assignment so `gridcopy = grid` is not mis-parsed as a LET.
+         * Peeked: start ARRAY_ID, '=', then a lone ARRAY_ID followed by a
+         * statement terminator. */
+        if (start_array_id && (check(p, BTOK_EQ) || was_let)) {
+            int save_pos = p->lexer.pos;
+            BToken save_cur = p->current;
+            bool consumed_eq = false;
+            if (check(p, BTOK_EQ)) { advance(p); consumed_eq = true; }
+            if ((consumed_eq || was_let) && check(p, BTOK_ARRAY_ID)) {
+                int rln = p->current.lineno;
+                const char *rname =
+                    arena_strdup(&p->cs->arena,
+                                 p->current.sval ? p->current.sval : "");
+                advance(p);   /* consume RHS ARRAY_ID */
+                if (check(p, BTOK_NEWLINE) || check(p, BTOK_EOF) ||
+                    check(p, BTOK_CO)) {
+                    AstNode *larray = symboltable_access_id(
+                        p->cs->symbol_table, p->cs, name, ln, NULL,
+                        CLASS_array);
+                    AstNode *rarray = symboltable_access_id(
+                        p->cs->symbol_table, p->cs, rname, rln, NULL,
+                        CLASS_array);
+                    if (larray == NULL || rarray == NULL)
+                        return make_nop(p);   /* p[0] = None */
+                    if (larray->type_ && rarray->type_ &&
+                        !type_equal(larray->type_, rarray->type_)) {
+                        zxbc_error(p->cs, ln,
+                            "Arrays must have the same element type");
+                        return make_nop(p);
+                    }
+                    /* mark_entry_as_accessed(larray/rarray) */
+                    larray->u.id.accessed = true;
+                    rarray->u.id.accessed = true;
+                    AstNode *s = make_sentence_node(p, "ARRAYCOPY", ln);
+                    ast_add_child(p->cs, s, larray);
+                    ast_add_child(p->cs, s, rarray);
+                    return s;
+                }
+            }
+            /* Not an ARRAY_ID = ARRAY_ID copy — restore & fall through to
+             * the scalar-assignment path below. */
+            p->current = save_cur;
+            p->lexer.pos = save_pos;
         }
 
         /* Simple assignment: ID = expr */

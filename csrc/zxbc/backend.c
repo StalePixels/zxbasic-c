@@ -374,6 +374,16 @@ static int s_log2(long x) { int n = 0; while (x > 1) { x >>= 1; n++; } return n;
 #define RL_MEM_FREE          ZXBC_NAMESPACE ".__MEM_FREE"
 #define RL_ARRAYSTR_FREE_MEM ZXBC_NAMESPACE ".__ARRAYSTR_FREE_MEM"
 
+/* Array element-access RuntimeLabels (runtime/core.py:24-25,58,118;
+ * NAMESPACE == .core). __ARRAY computes the element address from the
+ * indices pushed on the stack + the array base in HL; __ARRAY_PTR is the
+ * indirect (pointer-to-array) variant. STR_ARRAYCOPY is NOT in the .core
+ * namespace prefix in core.py — it is f"{NAMESPACE}.STR_ARRAYCOPY". */
+#define RL_ARRAY      ZXBC_NAMESPACE ".__ARRAY"
+#define RL_ARRAY_PTR  ZXBC_NAMESPACE ".__ARRAY_PTR"
+#define RL_ILOADSTR   ZXBC_NAMESPACE ".__ILOADSTR"
+#define RL_STR_ARRAYCOPY ZXBC_NAMESPACE ".STR_ARRAYCOPY"
+
 /* S5.8bc — string RuntimeLabels (runtime/core.py:16,62-63,68,74,116-127;
  * NAMESPACE == .core). Spelling EXACT per core.py. */
 #define RL_ADDSTR    ZXBC_NAMESPACE ".__ADDSTR"
@@ -601,6 +611,13 @@ static const char *s_required_module(const char *label) {
         return "array/arrayalloc.asm";
     if (strcmp(label, RL_ARRAYSTR_FREE_MEM) == 0) return "array/arraystrfree.asm";
     if (strcmp(label, RL_MEM_FREE)   == 0) return "mem/free.asm";
+    /* Array element-access modules (runtime/core.py:153-154,179,247
+     * REQUIRED_MODULES). array/array.asm self-#include-once's
+     * arith/fmul16.asm + error.asm (resolved by the preprocessor). */
+    if (strcmp(label, RL_ARRAY)      == 0) return "array/array.asm";
+    if (strcmp(label, RL_ARRAY_PTR)  == 0) return "array/array.asm";
+    if (strcmp(label, RL_ILOADSTR)   == 0) return "loadstr.asm";
+    if (strcmp(label, RL_STR_ARRAYCOPY) == 0) return "array/strarraycpy.asm";
     /* S5.8bc — string modules (runtime/core.py:145,179,195,197-198,
      * 245-256 REQUIRED_MODULES; live-verified). */
     if (strcmp(label, RL_ADDSTR)     == 0) return "strcat.asm";
@@ -2639,6 +2656,401 @@ static StrVec emit_pload32(Backend *b, Quad *q) {
     s_pload(b, &out, q_ins(q, 2), 4);
     sv_push(b, &out, "push de");
     sv_push(b, &out, "push hl");
+    return out;
+}
+
+/* ====================================================================
+ * Array element access — _array.py / _parray.py.
+ * __ARRAY computes the element address (HL) from the array base (in HL)
+ * + the index values pushed on the stack.
+ * ==================================================================== */
+
+/* Forward decls — Float helpers are defined further down. */
+static void float_fpush(Backend *b, StrVec *out);
+static StrVec float_get_oper(Backend *b, const char *op1, const char *op2);
+
+/* _array.py:_addr (17-49): common array-address subroutine.  Tries
+ * int(value) & 0xFFFF (immediate); on ValueError, a '_' label loads
+ * directly, anything else (a temp tN) is popped from the stack.  An
+ * indirect ('*') value dereferences [HL] into HL.  Then call __ARRAY. */
+static void s_array_addr(Backend *b, StrVec *out, const char *value) {
+    bool indirect = (value[0] == '*');
+    if (indirect) value++;
+
+    if (s_is_int(value)) {
+        long v = s_int_val(value) & 0xFFFF;
+        if (indirect)
+            sv_pushf(b, out, "ld hl, (%ld)", v);
+        else
+            sv_pushf(b, out, "ld hl, %ld", v);
+    } else if (value[0] == '_') {
+        sv_pushf(b, out, "ld hl, %s", value);
+        if (indirect) {
+            sv_push(b, out, "ld c, (hl)");
+            sv_push(b, out, "inc hl");
+            sv_push(b, out, "ld h, (hl)");
+            sv_push(b, out, "ld l, c");
+        }
+    } else {
+        sv_push(b, out, "pop hl");
+        if (indirect) {
+            sv_push(b, out, "ld c, (hl)");
+            sv_push(b, out, "inc hl");
+            sv_push(b, out, "ld h, (hl)");
+            sv_push(b, out, "ld l, c");
+        }
+    }
+    sv_push(b, out, s_runtime_call(b, RL_ARRAY));
+}
+
+/* _aaddr (_array.py:52-58): _addr(ins[2]) ; push hl */
+static StrVec emit_aaddr(Backend *b, Quad *q) {
+    StrVec out = sv_new();
+    s_array_addr(b, &out, q_ins(q, 2));
+    sv_push(b, &out, "push hl");
+    return out;
+}
+/* _aload8 (_array.py:61-69) */
+static StrVec emit_aload8(Backend *b, Quad *q) {
+    StrVec out = sv_new();
+    s_array_addr(b, &out, q_ins(q, 2));
+    sv_push(b, &out, "ld a, (hl)");
+    sv_push(b, &out, "push af");
+    return out;
+}
+/* _aload16 (_array.py:72-83) */
+static StrVec emit_aload16(Backend *b, Quad *q) {
+    StrVec out = sv_new();
+    s_array_addr(b, &out, q_ins(q, 2));
+    sv_push(b, &out, "ld e, (hl)");
+    sv_push(b, &out, "inc hl");
+    sv_push(b, &out, "ld d, (hl)");
+    sv_push(b, &out, "ex de, hl");
+    sv_push(b, &out, "push hl");
+    return out;
+}
+/* _aload32 (_array.py:86-96) */
+static StrVec emit_aload32(Backend *b, Quad *q) {
+    StrVec out = sv_new();
+    s_array_addr(b, &out, q_ins(q, 2));
+    sv_push(b, &out, s_runtime_call(b, RL_ILOAD32));
+    sv_push(b, &out, "push de");
+    sv_push(b, &out, "push hl");
+    return out;
+}
+/* _aloadf (_array.py:99-108) */
+static StrVec emit_aloadf(Backend *b, Quad *q) {
+    StrVec out = sv_new();
+    s_array_addr(b, &out, q_ins(q, 2));
+    sv_push(b, &out, s_runtime_call(b, RL_LOADF));
+    float_fpush(b, &out);
+    return out;
+}
+/* _aloadstr (_array.py:111-118) */
+static StrVec emit_aloadstr(Backend *b, Quad *q) {
+    StrVec out = sv_new();
+    s_array_addr(b, &out, q_ins(q, 2));
+    sv_push(b, &out, s_runtime_call(b, RL_ILOADSTR));
+    sv_push(b, &out, "push hl");
+    return out;
+}
+/* _astore8 (_array.py:121-167) */
+static StrVec emit_astore8(Backend *b, Quad *q) {
+    StrVec out = sv_new();
+    s_array_addr(b, &out, q_ins(q, 1));
+    const char *op = q_ins(q, 2);
+    bool indirect = op[0] == '*';
+    if (indirect) op++;
+    bool immediate = op[0] == '#';
+    if (immediate) op++;
+
+    if (s_is_int(op)) {
+        char ibuf[24];
+        if (indirect) {
+            if (immediate) {
+                snprintf(ibuf, sizeof(ibuf), "%ld", s_int_val(op) & 0xFFFF);
+                sv_pushf(b, &out, "ld a, (%s)", ibuf);
+            } else {
+                sv_pushf(b, &out, "ld de, (%s)", op);
+                sv_push(b, &out, "ld a, (de)");
+            }
+        } else {
+            snprintf(ibuf, sizeof(ibuf), "%ld", s_int_val(op) & 0xFF);
+            sv_pushf(b, &out, "ld (hl), %s", ibuf);
+            return out;
+        }
+    } else if (op[0] == '_') {
+        if (indirect) {
+            if (immediate) {
+                sv_pushf(b, &out, "ld a, (%s)", op);
+            } else {
+                sv_pushf(b, &out, "ld de, (%s)", op);
+                sv_push(b, &out, "ld a, (de)");
+            }
+        } else {
+            if (immediate)
+                sv_pushf(b, &out, "ld a, %s", op);
+            else
+                sv_pushf(b, &out, "ld a, (%s)", op);
+        }
+    } else {
+        sv_push(b, &out, "pop af");
+    }
+    sv_push(b, &out, "ld (hl), a");
+    return out;
+}
+/* _astore16 (_array.py:170-221) */
+static StrVec emit_astore16(Backend *b, Quad *q) {
+    StrVec out = sv_new();
+    s_array_addr(b, &out, q_ins(q, 1));
+    const char *op = q_ins(q, 2);
+    bool indirect = op[0] == '*';
+    if (indirect) op++;
+    bool immediate = op[0] == '#';
+    if (immediate) op++;
+
+    if (s_is_int(op)) {
+        long v = s_int_val(op) & 0xFFFF;
+        char ibuf[24];
+        snprintf(ibuf, sizeof(ibuf), "%ld", v);
+        if (indirect) {
+            if (immediate) {
+                sv_pushf(b, &out, "ld de, (%s)", ibuf);
+            } else {
+                sv_pushf(b, &out, "ld de, (%s)", ibuf);
+                sv_push(b, &out, s_runtime_call(b, RL_LOAD_DE_DE));
+            }
+        } else {
+            long H = v >> 8, L = v & 0xFF;
+            sv_pushf(b, &out, "ld (hl), %ld", L);
+            sv_push(b, &out, "inc hl");
+            sv_pushf(b, &out, "ld (hl), %ld", H);
+            return out;
+        }
+    } else if (op[0] == '_') {
+        if (indirect) {
+            if (immediate) {
+                sv_pushf(b, &out, "ld de, (%s)", op);
+            } else {
+                sv_pushf(b, &out, "ld de, (%s)", op);
+                sv_push(b, &out, s_runtime_call(b, RL_LOAD_DE_DE));
+            }
+        } else {
+            if (immediate)
+                sv_pushf(b, &out, "ld de, %s", op);
+            else
+                sv_pushf(b, &out, "ld de, (%s)", op);
+        }
+    } else {
+        sv_push(b, &out, "pop de");
+    }
+    sv_push(b, &out, "ld (hl), e");
+    sv_push(b, &out, "inc hl");
+    sv_push(b, &out, "ld (hl), d");
+    return out;
+}
+/* _astore32 (_array.py:224-254) */
+static StrVec emit_astore32(Backend *b, Quad *q) {
+    StrVec out = sv_new();
+    s_array_addr(b, &out, q_ins(q, 1));
+    const char *value = q_ins(q, 2);
+    bool indirect = (value[0] == '*');
+    if (indirect) value++;
+
+    if (s_is_int(value)) {
+        long long v = (long long)(strtoll(value, NULL, 10)) & 0xFFFFFFFFLL;
+        if (indirect) {
+            sv_push(b, &out, "push hl");
+            sv_pushf(b, &out, "ld hl, %lld", v & 0xFFFF);
+            sv_push(b, &out, s_runtime_call(b, RL_ILOAD32));
+            sv_push(b, &out, "ld b, h");
+            sv_push(b, &out, "ld c, l");
+            sv_push(b, &out, "pop hl");
+        } else {
+            sv_pushf(b, &out, "ld de, %lld", (v >> 16) & 0xFFFF);
+            sv_pushf(b, &out, "ld bc, %lld", v & 0xFFFF);
+        }
+    } else {
+        StrVec g = bits32_get_oper(b, value, NULL, false, true);
+        for (int i = 0; i < g.len; i++) vec_push(out, g.data[i]);
+    }
+    sv_push(b, &out, s_runtime_call(b, RL_STORE32));
+    return out;
+}
+/* _astoref (_array.py:287-305) */
+static StrVec emit_astoref(Backend *b, Quad *q) {
+    StrVec out = sv_new();
+    s_array_addr(b, &out, q_ins(q, 1));
+    const char *value = q_ins(q, 2);
+    bool indirect = (value[0] == '*');
+    const char *vraw = q_ins(q, 2);
+    if (indirect) value++;
+    if (indirect) {
+        sv_push(b, &out, "push hl");
+        StrVec g = float_get_oper(b, vraw, NULL);
+        for (int i = 0; i < g.len; i++) vec_push(out, g.data[i]);
+        sv_push(b, &out, "pop hl");
+    } else {
+        StrVec g = float_get_oper(b, vraw, NULL);
+        for (int i = 0; i < g.len; i++) vec_push(out, g.data[i]);
+    }
+    sv_push(b, &out, s_runtime_call(b, RL_STOREF));
+    return out;
+}
+
+/* _parray.py:_paddr (17-46): the IX-relative element-address helper.
+ * Like _paddr (params) but ends with a __ARRAY/__ARRAY_PTR call. */
+static void s_parray_addr(Backend *b, StrVec *out, const char *offset) {
+    bool indirect = (offset[0] == '*');
+    if (indirect) offset++;
+    long i = s_int_val(offset);
+    if (i >= 0) i += 4;  /* Return Address + "push IX" */
+    sv_push(b, out, "push ix");
+    sv_push(b, out, "pop hl");
+    sv_pushf(b, out, "ld de, %ld", i);
+    sv_push(b, out, "add hl, de");
+    if (indirect)
+        sv_push(b, out, s_runtime_call(b, RL_ARRAY_PTR));
+    else
+        sv_push(b, out, s_runtime_call(b, RL_ARRAY));
+}
+/* _paaddr (_parray.py:49-54) */
+static StrVec emit_paaddr(Backend *b, Quad *q) {
+    StrVec out = sv_new();
+    s_parray_addr(b, &out, q_ins(q, 2));
+    sv_push(b, &out, "push hl");
+    return out;
+}
+/* _paload8 (_parray.py:57-65) */
+static StrVec emit_paload8(Backend *b, Quad *q) {
+    StrVec out = sv_new();
+    s_parray_addr(b, &out, q_ins(q, 2));
+    sv_push(b, &out, "ld a, (hl)");
+    sv_push(b, &out, "push af");
+    return out;
+}
+/* _paload16 (_parray.py:68-79) */
+static StrVec emit_paload16(Backend *b, Quad *q) {
+    StrVec out = sv_new();
+    s_parray_addr(b, &out, q_ins(q, 2));
+    sv_push(b, &out, "ld e, (hl)");
+    sv_push(b, &out, "inc hl");
+    sv_push(b, &out, "ld d, (hl)");
+    sv_push(b, &out, "ex de, hl");
+    sv_push(b, &out, "push hl");
+    return out;
+}
+/* _paload32 (_parray.py:82-92) */
+static StrVec emit_paload32(Backend *b, Quad *q) {
+    StrVec out = sv_new();
+    s_parray_addr(b, &out, q_ins(q, 2));
+    sv_push(b, &out, s_runtime_call(b, RL_ILOAD32));
+    sv_push(b, &out, "push de");
+    sv_push(b, &out, "push hl");
+    return out;
+}
+/* _paloadf (_parray.py:95-101) */
+static StrVec emit_paloadf(Backend *b, Quad *q) {
+    StrVec out = sv_new();
+    s_parray_addr(b, &out, q_ins(q, 2));
+    sv_push(b, &out, s_runtime_call(b, RL_LOADF));
+    float_fpush(b, &out);
+    return out;
+}
+/* _paloadstr (_parray.py:104-110) */
+static StrVec emit_paloadstr(Backend *b, Quad *q) {
+    StrVec out = sv_new();
+    s_parray_addr(b, &out, q_ins(q, 2));
+    sv_push(b, &out, s_runtime_call(b, RL_ILOADSTR));
+    sv_push(b, &out, "push hl");
+    return out;
+}
+/* _pastore8 (_parray.py:113-141) */
+static StrVec emit_pastore8(Backend *b, Quad *q) {
+    StrVec out = sv_new();
+    s_parray_addr(b, &out, q_ins(q, 1));
+    const char *value = q_ins(q, 2);
+    bool indirect = (value[0] == '*');
+    if (indirect) value++;
+    if (s_is_int(value)) {
+        long v = s_int_val(value) & 0xFFFF;
+        if (indirect) {
+            sv_pushf(b, &out, "ld a, (%ld)", v);
+            sv_push(b, &out, "ld (hl), a");
+        } else {
+            sv_pushf(b, &out, "ld (hl), %ld", v & 0xFF);
+        }
+    } else {
+        sv_push(b, &out, "pop af");
+        sv_push(b, &out, "ld (hl), a");
+    }
+    return out;
+}
+/* _pastore16 (_parray.py:144-165) */
+static StrVec emit_pastore16(Backend *b, Quad *q) {
+    StrVec out = sv_new();
+    s_parray_addr(b, &out, q_ins(q, 1));
+    const char *value = q_ins(q, 2);
+    bool indirect = (value[0] == '*');
+    if (indirect) value++;
+    if (s_is_int(value)) {
+        long v = s_int_val(value) & 0xFFFF;
+        sv_pushf(b, &out, "ld de, %ld", v);
+        if (indirect)
+            sv_push(b, &out, s_runtime_call(b, RL_LOAD_DE_DE));
+    } else {
+        sv_push(b, &out, "pop de");
+    }
+    sv_push(b, &out, "ld (hl), e");
+    sv_push(b, &out, "inc hl");
+    sv_push(b, &out, "ld (hl), d");
+    return out;
+}
+/* _pastore32 (_parray.py:168-194) */
+static StrVec emit_pastore32(Backend *b, Quad *q) {
+    StrVec out = sv_new();
+    s_parray_addr(b, &out, q_ins(q, 1));
+    const char *value = q_ins(q, 2);
+    bool indirect = (value[0] == '*');
+    if (indirect) value++;
+    if (s_is_int(value)) {
+        long long v = (long long)strtoll(value, NULL, 10) & 0xFFFFFFFFLL;
+        if (indirect) {
+            sv_push(b, &out, "push hl");
+            sv_pushf(b, &out, "ld hl, %lld", v & 0xFFFF);
+            sv_push(b, &out, s_runtime_call(b, RL_ILOAD32));
+            sv_push(b, &out, "ld b, h");
+            sv_push(b, &out, "ld c, l");
+            sv_push(b, &out, "pop hl");
+        } else {
+            sv_pushf(b, &out, "ld de, %lld", (v >> 16) & 0xFFFF);
+            sv_pushf(b, &out, "ld bc, %lld", v & 0xFFFF);
+        }
+    } else {
+        sv_push(b, &out, "pop bc");
+        sv_push(b, &out, "pop de");
+    }
+    sv_push(b, &out, s_runtime_call(b, RL_STORE32));
+    return out;
+}
+
+/* _exchg (generic.py:55-61): exchange ALL registers. */
+static StrVec emit_exchg(Backend *b, Quad *q) {
+    (void)q;
+    StrVec out = sv_new();
+    sv_push(b, &out, "ex af, af'");
+    sv_push(b, &out, "exx");
+    return out;
+}
+
+/* _memcopy (generic.py:539-550): block copy param2 -> param1, len param3. */
+static StrVec emit_memcopy(Backend *b, Quad *q) {
+    StrVec out = bits16_get_oper(b, q_ins(q, 3), NULL, false);
+    sv_push(b, &out, "ld b, h");
+    sv_push(b, &out, "ld c, l");
+    StrVec g = bits16_get_oper(b, q_ins(q, 1), q_ins(q, 2), true);
+    for (int i = 0; i < g.len; i++) vec_push(out, g.data[i]);
+    sv_push(b, &out, "ldir");
     return out;
 }
 
@@ -4838,6 +5250,33 @@ static StrVec quad_emit(Backend *b, Quad *q) {
     if (strcmp(I, "ploadi8")  == 0 || strcmp(I, "ploadu8")  == 0) return emit_pload8(b, q);
     if (strcmp(I, "ploadi16") == 0 || strcmp(I, "ploadu16") == 0) return emit_pload16(b, q);
     if (strcmp(I, "ploadi32") == 0 || strcmp(I, "ploadu32") == 0) return emit_pload32(b, q);
+
+    /* Array element access (main.py:430-478,504-528,585 ICInfo). f16
+     * array load maps to _aload32 (main.py:476); astore/pastore f16 use
+     * the Fixed16 path — not registered (no fixture in scope). */
+    if (strcmp(I, "aaddr")     == 0) return emit_aaddr(b, q);
+    if (strcmp(I, "aloadi8")   == 0 || strcmp(I, "aloadu8")  == 0) return emit_aload8(b, q);
+    if (strcmp(I, "aloadi16")  == 0 || strcmp(I, "aloadu16") == 0) return emit_aload16(b, q);
+    if (strcmp(I, "aloadi32")  == 0 || strcmp(I, "aloadu32") == 0 ||
+        strcmp(I, "aloadf16")  == 0) return emit_aload32(b, q);
+    if (strcmp(I, "aloadf")    == 0) return emit_aloadf(b, q);
+    if (strcmp(I, "aloadstr")  == 0) return emit_aloadstr(b, q);
+    if (strcmp(I, "astorei8")  == 0 || strcmp(I, "astoreu8") == 0) return emit_astore8(b, q);
+    if (strcmp(I, "astorei16") == 0 || strcmp(I, "astoreu16")== 0) return emit_astore16(b, q);
+    if (strcmp(I, "astorei32") == 0 || strcmp(I, "astoreu32")== 0) return emit_astore32(b, q);
+    if (strcmp(I, "astoref")   == 0) return emit_astoref(b, q);
+    if (strcmp(I, "paaddr")    == 0) return emit_paaddr(b, q);
+    if (strcmp(I, "paloadi8")  == 0 || strcmp(I, "paloadu8")  == 0) return emit_paload8(b, q);
+    if (strcmp(I, "paloadi16") == 0 || strcmp(I, "paloadu16") == 0) return emit_paload16(b, q);
+    if (strcmp(I, "paloadi32") == 0 || strcmp(I, "paloadu32") == 0 ||
+        strcmp(I, "paloadf16") == 0) return emit_paload32(b, q);
+    if (strcmp(I, "paloadf")   == 0) return emit_paloadf(b, q);
+    if (strcmp(I, "paloadstr") == 0) return emit_paloadstr(b, q);
+    if (strcmp(I, "pastorei8")  == 0 || strcmp(I, "pastoreu8") == 0) return emit_pastore8(b, q);
+    if (strcmp(I, "pastorei16") == 0 || strcmp(I, "pastoreu16")== 0) return emit_pastore16(b, q);
+    if (strcmp(I, "pastorei32") == 0 || strcmp(I, "pastoreu32")== 0) return emit_pastore32(b, q);
+    if (strcmp(I, "memcopy")   == 0) return emit_memcopy(b, q);
+    if (strcmp(I, "exchg")     == 0) return emit_exchg(b, q);
 
     /* Python KeyErrors here; an unported IC reaching this point is a real
      * gap, not silence (later S5.x add entries). */

@@ -27,6 +27,8 @@ static void tr_ic_pload(Translator *tr, const TypeInfo *type_,
                         const char *t1, const char *offset);
 static void tr_ic_pstore(Translator *tr, const TypeInfo *type_,
                          const char *offset, const char *t);
+/* tr_bound_val (defined further below) — used by tr_visit_arraycopy. */
+static long tr_bound_val(AstNode *n);
 /* tr_ic_vard is defined below (its first historical caller was the S5.7d
  * bound-table flush); translator_emit_strings calls it earlier. */
 static void tr_ic_vard(Translator *tr, const char *name,
@@ -296,6 +298,16 @@ static AstNode *tr_visit_var(Visitor *v, AstNode *node) {
         node->t = (char *)tr_constref_t(tr, value); /* ConstRef.t */
         return node;
     }
+    /* Python dispatches by node.token: a CLASS.array id has token
+     * "VARARRAY" (arrayref.py:31-33) and routes to
+     * Translator.visit_VARARRAY (translator.py:133-134) which is a bare
+     * `pass` — NO IC, NO child descent. The C visitor keys on AST_ID, so
+     * reproduce the split: a VARARRAY reached as a node (e.g. generic
+     * descent of ARRAYDECL, or a whole-array ARGUMENT value) must emit
+     * nothing and not recurse — emitting the scalar ic_pload below for a
+     * local/parameter array slot is the spurious `ld a,(ix-N)/push af`. */
+    if (node->u.id.class_ == CLASS_array)
+        return node;                          /* visit_VARARRAY: pass */
     const char *t = node->t;
     const char *mangled = node->u.id.mangled;
     if (t && mangled && strcmp(t, mangled) == 0 &&
@@ -324,6 +336,18 @@ static AstNode *tr_visit_var(Visitor *v, AstNode *node) {
         if (node->u.id.scope == SCOPE_local) off = -off;
         char ofs[24];
         snprintf(ofs, sizeof(ofs), "%s%ld", pfx, off);
+        /* Python VarRef.t (varref.py:34-42): for a NON-global, NON-dynamic
+         * scalar it is `self._t` — a per-symbol cached optemp, NOT the
+         * mangled label. The C parser (parser.c:3827-3828) stamps
+         * `.t = mangled` for EVERY id including locals/params; that global
+         * mangle (e.g. `_i`) is wrong for a local — a later
+         * ic_param(value.type_, value.t) would emit `ld hl,(_i)` for what
+         * is really an IX slot. Mirror Python's `_t`: when .t is still the
+         * parser's mangle stamp on a non-global scalar, mint a temp ONCE
+         * and cache it on the shared symbol node (so every reference reads
+         * the same _t, exactly like Python's cached property). */
+        if (node->t && mangled && strcmp(node->t, mangled) == 0)
+            node->t = (char *)compiler_new_temp(tr->cs);
         const char *dst = (node->t && node->t[0]) ? node->t
                         : compiler_new_temp(tr->cs);
         node->t = (char *)dst;
@@ -552,6 +576,20 @@ static void tr_ic_fparam(Translator *tr, const TypeInfo *type_, const char *t) {
     const char *args[1] = { t };
     tr_emit_quad(tr, tr_flow_name(tr, "fparam", type_), 1, args);
 }
+/* ic_exchg (translator_inst_visitor.py:112-113): emit("exchg"). */
+static void tr_ic_exchg(Translator *tr) {
+    tr_emit_quad(tr, "exchg", 0, NULL);
+}
+/* ic_fpload (translator_inst_visitor.py:118-119):
+ * emit(f"fpload{TSUFFIX}", t, offset). */
+static void tr_ic_fpload(Translator *tr, const TypeInfo *type_,
+                         const char *t, const char *offset) {
+    const char *suf = tr_tsuffix(type_);
+    char base[16];
+    snprintf(base, sizeof(base), "fpload%s", suf);
+    const char *args[2] = { t, offset };
+    tr_emit_quad(tr, base, 2, args);
+}
 
 /* ic_load (translator_inst_visitor.py:160-161): emit(f"load{TSUFFIX}",t1,t2).
  * Used by visit_ARGUMENT's byref-global arm: ic_load(uinteger,t,"#"+mangled). */
@@ -599,6 +637,53 @@ static void tr_ic_aaddr(Translator *tr, const char *t1, const char *t2) {
 static void tr_ic_paaddr(Translator *tr, const char *t1, const char *t2) {
     const char *args[2] = { t1, t2 };
     tr_emit_quad(tr, "paaddr", 2, args);
+}
+/* ic_aload (translator_inst_visitor.py:67-68): emit(f"aload{TSUFFIX}",
+ * t1, mangle). Global array element read — mangle == entry.mangled. */
+static void tr_ic_aload(Translator *tr, const TypeInfo *type_,
+                        const char *t1, const char *mangle) {
+    const char *suf = tr_tsuffix(type_);
+    char base[16];
+    snprintf(base, sizeof(base), "aload%s", suf);
+    const char *args[2] = { t1, mangle };
+    tr_emit_quad(tr, base, 2, args);
+}
+/* ic_astore (translator_inst_visitor.py:73-74): emit(f"astore{TSUFFIX}",
+ * addr, t). Global array element store. */
+static void tr_ic_astore(Translator *tr, const TypeInfo *type_,
+                         const char *addr, const char *t) {
+    const char *suf = tr_tsuffix(type_);
+    char base[16];
+    snprintf(base, sizeof(base), "astore%s", suf);
+    const char *args[2] = { addr, t };
+    tr_emit_quad(tr, base, 2, args);
+}
+/* ic_paload (translator_inst_visitor.py:205-206): emit(f"paload{TSUFFIX}",
+ * t, offset). Parameter/local array element read (IX-relative). */
+static void tr_ic_paload(Translator *tr, const TypeInfo *type_,
+                         const char *t, const char *offset) {
+    const char *suf = tr_tsuffix(type_);
+    char base[16];
+    snprintf(base, sizeof(base), "paload%s", suf);
+    const char *args[2] = { t, offset };
+    tr_emit_quad(tr, base, 2, args);
+}
+/* ic_pastore (translator_inst_visitor.py:211-212):
+ * emit(f"pastore{TSUFFIX}", offset, t). Parameter/local array store. */
+static void tr_ic_pastore(Translator *tr, const TypeInfo *type_,
+                          const char *offset, const char *t) {
+    const char *suf = tr_tsuffix(type_);
+    char base[16];
+    snprintf(base, sizeof(base), "pastore%s", suf);
+    const char *args[2] = { offset, t };
+    tr_emit_quad(tr, base, 2, args);
+}
+/* ic_memcopy (translator_inst_visitor.py:172-173):
+ * emit("memcopy", t1, t2, t3). */
+static void tr_ic_memcopy(Translator *tr, const char *t1, const char *t2,
+                          const char *t3) {
+    const char *args[3] = { t1, t2, t3 };
+    tr_emit_quad(tr, "memcopy", 3, args);
 }
 /* S5.7d — ic_paddr / ic_pload / ic_pstore (translator_inst_visitor.py
  * :201-202, :214-215, :218-219). The inside-function parameter/local
@@ -931,10 +1016,52 @@ static AstNode *tr_visit_argument(Visitor *v, AstNode *node) {
         return node;
     }
 
-    /* byref array (`:250-263` ADDRESS UNARY) — needs the @array ADDRESS
-     * lowering (S5.8). Loud residue; do NOT emit wrong code. */
+    /* ByRef ARRAYLOAD/ARRAYACCESS argument — "Must compute Address of
+     * @array(...)" (translator.py:250-263).
+     *
+     *   if value.scope == global_ and O_LEVEL > 1:
+     *       value = BINARY PLUS(UNARY ADDRESS(entry), NUMBER(offset))
+     *   else:
+     *       value = UNARY ADDRESS(ARRAYACCESS.copy_from(value))
+     *   yield value
+     *
+     * Both reduce to: push the index args, then take the element address
+     * (ic_aaddr global / ic_paaddr param|local — visit_ADDRESS,
+     * unary_op_translator.py:29-37). The O>1-global BINARY-PLUS form
+     * folds, through the same peephole, to the identical static
+     * `<data_label> (+N)` the else-form's aaddr collapses to for a const
+     * index — so the single aaddr/paaddr lowering is faithful to both.
+     * NB: visit_ADDRESS does NOT ic_param afterwards; aaddr/paaddr's
+     * `push hl` IS the ByRef pointer arg. */
+    if (value && value->tag == AST_ARRAYACCESS) {
+        AstNode *aent = value->child_count > 0 ? value->children[0] : NULL;
+        Scope ascope = aent ? aent->u.id.scope : SCOPE_global;
+        /* visit_ADDRESS `yield node.operand` == visit_ARRAYACCESS:
+         * push the index ARGUMENT children in reverse (NO aload). */
+        for (int i = value->child_count - 1; i >= 1; i--)
+            visitor_visit(v, value->children[i]);
+        const char *at = (node->t && node->t[0]) ? node->t
+                       : compiler_new_temp(tr->cs);
+        if (ascope == SCOPE_global) {
+            tr_ic_aaddr(tr, at, aent ? (aent->u.id.mangled
+                                        ? aent->u.id.mangled : "") : "");
+        } else if (ascope == SCOPE_parameter) {
+            char ob[24];
+            snprintf(ob, sizeof(ob), "*%ld",
+                     aent ? (long)aent->u.id.offset : 0);
+            tr_ic_paaddr(tr, at, ob);
+        } else { /* local */
+            char ob[24];
+            snprintf(ob, sizeof(ob), "%ld",
+                     aent ? -(long)aent->u.id.offset : 0);
+            tr_ic_paaddr(tr, at, ob);
+        }
+        return node;
+    }
+
+    /* Other byref array shapes (whole-array etc.) — loud residue. */
     fprintf(stderr,
-        "zxbc: visit_ARGUMENT byref array — @array ADDRESS is S5.8 "
+        "zxbc: visit_ARGUMENT byref array — non-ARRAYACCESS shape "
         "residue\n");
     if (value) visitor_visit(v, value);
     return node;
@@ -1531,7 +1658,16 @@ static AstNode *tr_visit_unary(Visitor *v, AstNode *node) {
     if (strcmp(opr, "ADDRESS") == 0) {
         Scope scope = operand ? operand->u.id.scope : SCOPE_global;
         if (operand && operand->tag == AST_ARRAYACCESS) {
-            visitor_visit(v, operand);
+            /* visit_ADDRESS (unary_op_translator.py:29-37): `yield
+             * node.operand`. Python's @array always wraps a freshly
+             * SymbolARRAYACCESS.copy_from'd node (translator.py:260) →
+             * token "ARRAYACCESS" → visit_ARRAYACCESS (push the index
+             * args only, NO aload), regardless of whether the source
+             * was an ARRAYLOAD read. Reproduce that by pushing the index
+             * ARGUMENT children in reverse here (do NOT visitor_visit the
+             * node — that would re-enter the ARRAYLOAD value path). */
+            for (int i = operand->child_count - 1; i >= 1; i--)
+                visitor_visit(v, operand->children[i]);
             AstNode *entry = operand->child_count > 0 ? operand->children[0]
                                                       : NULL;
             if (node->t == NULL) node->t = compiler_new_temp(tr->cs);
@@ -2355,6 +2491,17 @@ static AstNode *tr_visit_arrayaccess(Visitor *v, AstNode *node) {
     bool global = entry && entry->tag == AST_ID &&
                   entry->u.id.scope == SCOPE_global;
 
+    /* visit_ARRAYACCESS (translator.py:448-449): `yield node.arglist`.
+     * This is the LETARRAY store-target node (Python sym.ARRAYACCESS, not
+     * ARRAYLOAD): it ONLY pushes the index values (in reverse, via the
+     * ARGUMENT children) — NO aload/ic_load. The visit_LETARRAY dynamic
+     * arm `yield arr` reaches here. */
+    if (!node->u.arrayaccess.is_load) {
+        for (int i = node->child_count - 1; i >= 1; i--)
+            visitor_visit(v, node->children[i]);
+        return node;
+    }
+
     if (is_const && global && entry) {
         /* translator.py:278-280 (const, global):
          *   ic_load(node.type_, node.entry.t, "%s + %i" % (entry.t, off))
@@ -2373,10 +2520,74 @@ static AstNode *tr_visit_arrayaccess(Visitor *v, AstNode *node) {
         return node;
     }
 
-    /* Out-of-subset (dynamic / param / local) — preserve the pre-existing
-     * default: recurse the index children exactly as the unregistered
-     * tag would have. No new bytes, no regression. */
-    visitor_generic(v, node);
+    /* visit_ARRAYLOAD (translator.py:265-289). scope = node.entry.scope.
+     * node.t is the lazy result temp; ensure it exists (consumer reads
+     * it). The index args were typecast to BOUND_TYPE (uinteger) at
+     * parse; visiting them in REVERSE (visit_ARGLIST translator.py:210-
+     * 212) emits paramu16 pushes — the C parser flattened the ARGLIST
+     * ARGUMENT children into node->children[1..]. */
+    if (node->t == NULL)
+        node->t = compiler_new_temp(tr->cs);
+
+    const TypeInfo *ptr_t =
+        tr->cs->symbol_table->basic_types[TYPE_uinteger]; /* gl.PTR_TYPE */
+    int ptr_size = 2;                                     /* uinteger size */
+    bool is_param = entry && entry->tag == AST_ID &&
+                    entry->u.id.scope == SCOPE_parameter;
+    bool is_local = entry && entry->tag == AST_ID &&
+                    entry->u.id.scope == SCOPE_local;
+    long eoff = entry ? entry->u.id.offset : 0;
+
+    if (!is_const) {
+        /* :268-273 — yield node.args (the index ARGUMENT children, in
+         * reverse); then scope-dispatched aload/paload. */
+        for (int i = node->child_count - 1; i >= 1; i--)
+            visitor_visit(v, node->children[i]);
+
+        if (global && entry) {
+            const char *dlabel = tr_array_data_label(tr, entry);
+            tr_ic_aload(tr, node->type_, dlabel,
+                        entry->u.id.mangled ? entry->u.id.mangled : "");
+        } else if (is_param) {
+            char ofs[24];
+            snprintf(ofs, sizeof(ofs), "*%ld", eoff);
+            tr_ic_paload(tr, node->type_, node->t, ofs);
+        } else if (is_local) {
+            char ofs[24];
+            snprintf(ofs, sizeof(ofs), "%ld", -eoff);
+            tr_ic_paload(tr, node->type_, node->t, ofs);
+        } else {
+            visitor_generic(v, node);
+        }
+        return node;
+    }
+
+    /* Constant offset, non-global (:275-289). offset == arrayaccess.offset.
+     * NB: Python does NOT yield node.args on the const path. */
+    long offset = node->u.arrayaccess.offset;
+    if (is_param) {
+        /* :283-284 ic_pload(node.type_, node.t, node.entry.offset-offset). */
+        char ofs[24];
+        snprintf(ofs, sizeof(ofs), "%ld", eoff - offset);
+        tr_ic_pload(tr, node->type_, node->t, ofs);
+    } else if (is_local) {
+        /* :285-289:
+         *   ic_pload(PTR_TYPE, t1, -entry.offset + PTR_TYPE.size)
+         *   ic_add(PTR_TYPE, t2, t1, offset)
+         *   ic_load(node.type_, t3, f"*${t2}") */
+        const char *t1 = compiler_new_temp(tr->cs);
+        const char *t2 = compiler_new_temp(tr->cs);
+        const char *t3 = compiler_new_temp(tr->cs);
+        char p1[24], a3[24], l2[40];
+        snprintf(p1, sizeof(p1), "%ld", -eoff + ptr_size);
+        tr_ic_pload(tr, ptr_t, t1, p1);
+        snprintf(a3, sizeof(a3), "%ld", offset);
+        tr_ic_arith(tr, "add", ptr_t, t2, t1, a3);
+        snprintf(l2, sizeof(l2), "*$%s", t2);
+        tr_ic_load(tr, node->type_, t3, l2);
+    } else {
+        visitor_generic(v, node);
+    }
     return node;
 }
 
@@ -2473,25 +2684,173 @@ static AstNode *tr_visit_letarray(Visitor *v, AstNode *node) {
      * (ic_astore / ic_pastore / runtime) are not yet ported; for those
      * the pre-existing default (visitor_generic) is preserved so nothing
      * regresses. */
-    if (acc && acc->tag == AST_ARRAYACCESS && acc->u.arrayaccess.is_const) {
+    if (acc && acc->tag == AST_ARRAYACCESS) {
         AstNode *aent = acc->child_count > 0 ? acc->children[0] : NULL;
-        if (aent && aent->tag == AST_ID &&
-            aent->u.id.scope == SCOPE_global) {
+        bool a_global = aent && aent->tag == AST_ID &&
+                        aent->u.id.scope == SCOPE_global;
+        bool a_param  = aent && aent->tag == AST_ID &&
+                        aent->u.id.scope == SCOPE_parameter;
+        bool a_local  = aent && aent->tag == AST_ID &&
+                        aent->u.id.scope == SCOPE_local;
+        long a_eoff = aent ? aent->u.id.offset : 0;
+        const char *rt;
+
+        if (!acc->u.arrayaccess.is_const) {
+            /* :334-342 dynamic store:
+             *   yield children[1]   (RHS)
+             *   yield arr           (ARRAYACCESS — push indices)
+             *   global: ic_astore(type_, entry.mangled, rhs.t)
+             *   param : ic_pastore(type_, f"*{entry.offset}", rhs.t)
+             *   local : ic_pastore(type_, -entry.offset, rhs.t)
+             * rhs.t is read AFTER visiting (visit_NUMBER sets it to the
+             * literal string, symbol_.t lazily mints a temp, etc.). */
+            if (rhs) visitor_visit(v, rhs);
+            rt = (rhs && rhs->t) ? rhs->t : "";
+            visitor_visit(v, acc);                 /* yield arr */
+            if (a_global) {
+                tr_ic_astore(tr, acc->type_,
+                             aent->u.id.mangled ? aent->u.id.mangled : "",
+                             rt);
+            } else if (a_param) {
+                char ofs[24];
+                snprintf(ofs, sizeof(ofs), "*%ld", a_eoff);
+                tr_ic_pastore(tr, acc->type_, ofs, rt);
+            } else if (a_local) {
+                char ofs[24];
+                snprintf(ofs, sizeof(ofs), "%ld", -a_eoff);
+                tr_ic_pastore(tr, acc->type_, ofs, rt);
+            } else {
+                visitor_generic(v, node);
+            }
+            return node;
+        }
+
+        /* Constant offset (:343-362). name = arr.entry.data_label. */
+        long aoff = acc->u.arrayaccess.offset;
+        if (a_global) {
             const char *name = tr_array_data_label(tr, aent);
             size_t need = strlen(name) + 32;
             char *addr = arena_alloc(&tr->cs->arena, need);
-            snprintf(addr, need, "%s + %ld", name,
-                     acc->u.arrayaccess.offset);
+            snprintf(addr, need, "%s + %ld", name, aoff);
             if (rhs) visitor_visit(v, rhs);          /* yield RHS */
-            tr_ic_store(tr, acc->type_, addr,
-                        (rhs && rhs->t) ? rhs->t : "");
+            rt = (rhs && rhs->t) ? rhs->t : "";
+            tr_ic_store(tr, acc->type_, addr, rt);
             return node;
         }
+        if (a_local) {
+            /* :353-362:
+             *   ic_pload(PTR, t1, -(entry.offset - PTR.size))
+             *   ic_add(PTR, t2, t1, arr.offset)
+             *   yield children[1]   (RHS)
+             *   string -> ic_store(type_, f"*{t2}", rhs.t)
+             *   else   -> ic_store(type_, t2, rhs.t) */
+            const TypeInfo *ptr_t =
+                tr->cs->symbol_table->basic_types[TYPE_uinteger];
+            int ptr_size = 2;
+            const char *t1 = compiler_new_temp(tr->cs);
+            const char *t2 = compiler_new_temp(tr->cs);
+            char p1[24], a3[24];
+            snprintf(p1, sizeof(p1), "%ld", -(a_eoff - ptr_size));
+            tr_ic_pload(tr, ptr_t, t1, p1);
+            snprintf(a3, sizeof(a3), "%ld", aoff);
+            tr_ic_arith(tr, "add", ptr_t, t2, t1, a3);
+            if (rhs) visitor_visit(v, rhs);          /* yield RHS */
+            rt = (rhs && rhs->t) ? rhs->t : "";
+            if (acc->type_ && type_is_string(acc->type_)) {
+                char st[40];
+                snprintf(st, sizeof(st), "*$%s", t2);
+                tr_ic_store(tr, acc->type_, st, rt);
+            } else {
+                tr_ic_store(tr, acc->type_, t2, rt);
+            }
+            return node;
+        }
+        /* scope == parameter with const offset: Python raises
+         * InternalError (translator.py:363-364) — never reached for a
+         * valid program; fall to generic to avoid wrong code. */
     }
 
-    /* Out-of-subset — faithful `yield (yield generic_visit(node))`:
-     * preserve the pre-existing default so the dynamic/param/local
-     * array-store cluster members stay DIVERGE exactly as before. */
+    /* Out-of-subset — faithful `yield (yield generic_visit(node))`. */
+    visitor_generic(v, node);
+    return node;
+}
+
+/* ArrayRef.count (arrayref.py:40-42): product of every bound's count. */
+static long tr_arrayref_count(AstNode *id_) {
+    AstNode *bl = id_ ? id_->u.id.arr_boundlist : NULL;
+    if (!bl || bl->child_count == 0) return 0;
+    long c = 1;
+    for (int i = 0; i < bl->child_count; i++) {
+        AstNode *bd = bl->children[i];
+        long lo = tr_bound_val(bd && bd->child_count > 0 ? bd->children[0]
+                                                          : NULL);
+        long hi = tr_bound_val(bd && bd->child_count > 1 ? bd->children[1]
+                                                          : NULL);
+        c *= (hi - lo + 1);
+    }
+    return c;
+}
+
+/* _emit_arraycopy_child (translator.py:294-305): returns the t for one
+ * side of a (non-string) array copy. global => "#<data_label>"; param /
+ * local => ic_pload(PTR, t, offset-adjusted) and returns that temp. */
+static const char *tr_emit_arraycopy_child(Translator *tr, AstNode *id_) {
+    int ptr_size = 2;                          /* TYPE.size(PTR_TYPE) */
+    if (id_ && id_->u.id.scope == SCOPE_global) {
+        const char *dl = tr_array_data_label(tr, id_);
+        size_t n = strlen(dl) + 2;
+        char *s = arena_alloc(&tr->cs->arena, n);
+        s[0] = '#';
+        memcpy(s + 1, dl, strlen(dl) + 1);
+        return s;
+    }
+    const char *t = compiler_new_temp(tr->cs);
+    const TypeInfo *ptr_t =
+        tr->cs->symbol_table->basic_types[TYPE_uinteger];
+    long off = id_ ? id_->u.id.offset : 0;
+    char ofs[24];
+    if (id_ && id_->u.id.scope == SCOPE_parameter)
+        snprintf(ofs, sizeof(ofs), "%ld", off - ptr_size);
+    else                                       /* local */
+        snprintf(ofs, sizeof(ofs), "%ld", -(off - ptr_size));
+    tr_ic_pload(tr, ptr_t, t, ofs);
+    return t;
+}
+
+/* visit_ARRAYCOPY (translator.py:307-327). C "ARRAYCOPY" SENTENCE:
+ * children[0] = dest array ID, children[1] = source array ID
+ * (parser.c p_array_copy → make_sentence("ARRAYCOPY", larray, rarray)).
+ * Only the non-string (block-copy) arm is in scope here:
+ *   t1 = _emit_arraycopy_child(t_dest)
+ *   t2 = _emit_arraycopy_child(t_source)
+ *   ic_load(BOUND_TYPE, t, str(t_source.size))   # size = count*elem
+ *   ic_memcopy(t1, t2, t)
+ * The string arm (STR_ARRAYCOPY runtime) is left to generic (no string
+ * arraycopy fixture is in the owned cluster). */
+static AstNode *tr_visit_arraycopy(Visitor *v, AstNode *node) {
+    Translator *tr = v->ctx;
+    AstNode *t_dest   = node->child_count > 0 ? node->children[0] : NULL;
+    AstNode *t_source = node->child_count > 1 ? node->children[1] : NULL;
+    if (!t_dest || !t_source) { visitor_generic(v, node); return node; }
+
+    bool src_string = t_source->type_ && type_is_string(t_source->type_);
+    if (!src_string) {
+        const char *t1 = tr_emit_arraycopy_child(tr, t_dest);
+        const char *t2 = tr_emit_arraycopy_child(tr, t_source);
+        /* t_source.size = count * elem_size (non-parameter). */
+        long cnt = tr_arrayref_count(t_source);
+        long esz = t_source->type_ ? type_size(t_source->type_) : 1;
+        long sz  = (t_source->u.id.scope == SCOPE_parameter)
+                       ? 2 /* TYPE.size(PTR_TYPE) */ : cnt * esz;
+        const TypeInfo *bound_t =
+            tr->cs->symbol_table->basic_types[TYPE_uinteger];
+        const char *t = compiler_new_temp(tr->cs);
+        char ssz[24];
+        snprintf(ssz, sizeof(ssz), "%ld", sz);
+        tr_ic_load(tr, bound_t, t, ssz);
+        tr_ic_memcopy(tr, t1, t2, t);
+        return node;
+    }
     visitor_generic(v, node);
     return node;
 }
@@ -2932,6 +3291,7 @@ static void tr_register_handlers(Visitor *v) {
      * GATE (the llc fix) and routes the string case to LETSUBSTR
      * semantics. STRSLICE is a tag node. ACTIVE. */
     visitor_on_sentence(v, "LETARRAY", tr_visit_letarray);
+    visitor_on_sentence(v, "ARRAYCOPY", tr_visit_arraycopy);
     /* visit_ARRAYLOAD / visit_ARRAYACCESS (translator.py:265-289,448-449).
      * The C parser builds AST_ARRAYACCESS for every array access; this
      * handler ports the constant-offset GLOBAL value-read branch and
@@ -3425,7 +3785,115 @@ static void tr_visit_function(Translator *tr, AstNode *fdecl) {
         tr_ic_label(tr, lv);
     }
 
-    /* :122-164 stdcall teardown — OUT OF SCOPE (S5.7b/c). */
+    /* :122-164 stdcall teardown — free local strings & local arrays.
+     * Python gates on `node.convention == CONVENTION.stdcall`. The C
+     * parser leaves an un-annotated function's convention CONV_unknown
+     * (Python's p_convention default is CONVENTION.stdcall), and every
+     * other convention read already treats unknown == stdcall (only
+     * CONV_fastcall is special). So gate on !fastcall — faithful to
+     * Python's stdcall default. preserve_hl: ic_exchg() emitted at most
+     * once before the first free and once after the loop. */
+    if (!fastcall) {
+        const TypeInfo *ptr_t =
+            tr->cs->symbol_table->basic_types[TYPE_uinteger]; /* PTR_TYPE */
+        const TypeInfo *str_t =
+            tr->cs->symbol_table->basic_types[TYPE_string];
+        int ptr_size = 2;
+        bool preserve_hl = false;
+        for (int li = 0; li < entry->u.id.local_entries_count; li++) {
+            AstNode *lv = entry->u.id.local_entries[li];
+            if (!lv) continue;
+            SymbolClass c = lv->u.id.class_;
+            int scope = lv->u.id.scope;
+            bool is_str = lv->type_ && type_is_string(lv->type_);
+            bool free_scope =
+                scope == SCOPE_local ||
+                (scope == SCOPE_parameter && !lv->u.id.byref);
+
+            if (is_str) {
+                /* :126-149 string locals / string-array locals. */
+                if (c == CLASS_const || c == CLASS_function ||
+                    c == CLASS_sub)
+                    continue;
+                if (c != CLASS_array) {
+                    if (free_scope) {
+                        if (!preserve_hl) {
+                            preserve_hl = true;
+                            tr_ic_exchg(tr);
+                        }
+                        long off = (scope == SCOPE_local)
+                                       ? -lv->u.id.offset
+                                       : lv->u.id.offset;
+                        char ofs[24];
+                        snprintf(ofs, sizeof(ofs), "%ld", off);
+                        const char *lt =
+                            (lv->t && lv->t[0]) ? lv->t
+                                                : compiler_new_temp(tr->cs);
+                        tr_ic_fpload(tr, str_t, lt, ofs);
+                        tr_runtime_call(tr, ".core.__MEM_FREE", 0);
+                    }
+                } else {
+                    if (free_scope) {
+                        if (!preserve_hl) {
+                            preserve_hl = true;
+                            tr_ic_exchg(tr);
+                        }
+                        /* :147-149 ic_param(BOUND_TYPE, count);
+                         * _local_array_load; ARRAYSTR_FREE_MEM. */
+                        long cnt = 1;
+                        AstNode *bl = lv->u.id.arr_boundlist;
+                        if (bl) {
+                            for (int bi = 0; bi < bl->child_count; bi++) {
+                                AstNode *bd = bl->children[bi];
+                                long lo = tr_bound_val(
+                                    bd && bd->child_count > 0
+                                        ? bd->children[0] : NULL);
+                                long hi = tr_bound_val(
+                                    bd && bd->child_count > 1
+                                        ? bd->children[1] : NULL);
+                                cnt *= (hi - lo + 1);
+                            }
+                        }
+                        char cs[24];
+                        snprintf(cs, sizeof(cs), "%ld", cnt);
+                        tr_ic_param(tr, ptr_t, cs);
+                        const char *t2 = compiler_new_temp(tr->cs);
+                        long la = lv->u.id.offset - ptr_size;
+                        char lo2[24];
+                        snprintf(lo2, sizeof(lo2), "%ld",
+                                 (scope == SCOPE_parameter) ? la : -la);
+                        tr_ic_pload(tr, ptr_t, t2, lo2);
+                        tr_ic_fparam(tr, ptr_t, t2);
+                        tr_runtime_call(tr,
+                            ".core.__ARRAYSTR_FREE_MEM", 0);
+                    }
+                }
+            }
+
+            if (c == CLASS_array && !is_str && free_scope) {
+                /* :151-161 non-string local/param array -> MEM_FREE. */
+                if (!preserve_hl) {
+                    preserve_hl = true;
+                    tr_ic_exchg(tr);
+                }
+                /* _local_array_load (function_translator.py:34-41):
+                 *   t2 = new_t()
+                 *   param: ic_pload(PTR, t2, offset - PTR.size)
+                 *   local: ic_pload(PTR, t2, -(offset - PTR.size))
+                 *   ic_fparam(PTR, t2) */
+                const char *t2 = compiler_new_temp(tr->cs);
+                long la = lv->u.id.offset - ptr_size;
+                char lo2[24];
+                snprintf(lo2, sizeof(lo2), "%ld",
+                         (scope == SCOPE_parameter) ? la : -la);
+                tr_ic_pload(tr, ptr_t, t2, lo2);
+                tr_ic_fparam(tr, ptr_t, t2);
+                tr_runtime_call(tr, ".core.__MEM_FREE", 0);
+            }
+        }
+        if (preserve_hl)
+            tr_ic_exchg(tr);
+    }
 
     /* :166-169 ic_leave */
     if (fastcall) {
