@@ -1918,14 +1918,39 @@ static void process_line(PreprocState *pp, const char *line)
             return;
         }
 
-        /* Content line: macro-expand IDs only; comments (`;`+body) and
-         * all whitespace pass through verbatim (expand_macros_in_text
-         * copies non-ID chars char-for-char, including `;`, the comment
-         * body, spaces and tabs). NO comment strip, NO whitespace
-         * collapse, NO block-comment handling. */
-        char *expanded = expand_macros_in_text(pp, line);
-        strbuf_append(&pp->output, expanded);
-        if (strchr(expanded, '\n') != NULL) {
+        /* Content line: macro-expand IDs only on the instruction portion;
+         * any `;`-comment tail (zxbasmpplex.py:92-101: t_INITIAL_COMMENT
+         * pushes "asmcomment" state, t_asmcomment_TOKEN matches `.+` as a
+         * single TOKEN that is returned verbatim and never lexed as ID —
+         * so IDs inside the comment are NOT macro-expanded) is appended
+         * verbatim. Whitespace also passes through (expand_macros_in_text
+         * copies non-ID chars char-for-char). NO comment strip, NO
+         * whitespace collapse, NO block-comment handling. */
+        const char *semi = NULL;
+        {
+            const char *p = line;
+            bool in_str = false;
+            while (*p) {
+                if (*p == '"') {
+                    in_str = !in_str;
+                } else if (!in_str && *p == ';') {
+                    semi = p;
+                    break;
+                }
+                p++;
+            }
+        }
+        char *expanded;
+        if (semi) {
+            char *head = arena_strndup(&pp->arena, line, (size_t)(semi - line));
+            expanded = expand_macros_in_text(pp, head);
+            strbuf_append(&pp->output, expanded);
+            strbuf_append(&pp->output, semi); /* `;` + comment body verbatim */
+        } else {
+            expanded = expand_macros_in_text(pp, line);
+            strbuf_append(&pp->output, expanded);
+        }
+        if (expanded && strchr(expanded, '\n') != NULL) {
             strbuf_printf(&pp->output, "\n#line %d", pp->current_line + 1);
         }
         strbuf_append_char(&pp->output, '\n');
