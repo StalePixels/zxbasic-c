@@ -750,11 +750,23 @@ AstNode *make_typecast(CompilerState *cs, TypeInfo *new_type, AstNode *node, int
         return NULL;
     }
 
-    /* If it's a CONSTEXPR, cast the inner expression */
+    /* If it's a CONSTEXPR, cast the inner expression. Python's
+     * SymbolCONSTEXPR.type_ is a @property returning self.expr.type_
+     * (constexpr.py:36-38), so the outer node's effective type tracks
+     * the inner expression. The C AST stores type_ as a fixed field —
+     * mirror the property by writing the cast's new_type back onto the
+     * CONSTEXPR after re-typing the inner expr; without this, downstream
+     * visitors (e.g. visit_POKE -> ic_store(ch1.type_, ...)) read the
+     * stale pre-cast type and pick the wrong store-width
+     * (storeu16 vs storeu32 for ulong-cast values). */
     if (check_is_CONST(node)) {
         if (node->child_count > 0) {
             node->children[0] = make_typecast(cs, new_type, node->children[0], lineno);
         }
+        if (node->child_count > 0 && node->children[0])
+            node->type_ = node->children[0]->type_;
+        else
+            node->type_ = new_type;
         return node;
     }
 
@@ -1115,11 +1127,23 @@ AstNode *symboltable_access_id(SymbolTable *st, CompilerState *cs,
 
     AstNode *result = symboltable_lookup(st, lookup_name);
     if (!result) {
-        /* Implicit declaration */
+        /* Implicit declaration. Python access_id (symboltable.py:349-350)
+         * uses DEFAULT_IMPLICIT_TYPE (= TYPE.unknown) when no default_type
+         * is given AND default_class is CLASS_unknown (the @X path); for
+         * CLASS_var / CLASS_function reads in `default_class != unknown`
+         * contexts the existing cs->default_type fallback continues to
+         * fire (p_id_expr promotes auto→DEFAULT_TYPE separately in
+         * Python). Narrow gate avoids the read-side regression that the
+         * blanket TYPE_unknown change caused. */
         if (suffix_type) {
             default_type = suffix_type;
         } else if (!default_type) {
-            default_type = type_new_ref(cs, cs->default_type, lineno, true);
+            if (default_class == CLASS_unknown)
+                default_type = type_new_ref(cs,
+                                            st->basic_types[TYPE_unknown],
+                                            lineno, true);
+            else
+                default_type = type_new_ref(cs, cs->default_type, lineno, true);
         }
         /* Strict mode: error if type was implicitly inferred */
         if (cs->opts.strict && default_type && default_type->implicit) {

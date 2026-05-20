@@ -159,7 +159,13 @@ static AstNode *make_number(Parser *p, double value, int lineno, TypeInfo *type)
             else
                 n->type_ = st->basic_types[TYPE_float];
         } else {
-            n->type_ = st->basic_types[TYPE_float];
+            /* src/symbols/number.py:41-45 — a non-integer literal whose
+             * value is in the fixed-point range (-32768.0, 32767) infers
+             * TYPE.fixed; otherwise TYPE.float_. */
+            if (value > -32768.0 && value < 32767.0)
+                n->type_ = st->basic_types[TYPE_fixed];
+            else
+                n->type_ = st->basic_types[TYPE_float];
         }
     }
     return n;
@@ -764,10 +770,38 @@ AstNode *parse_primary(Parser *p) {
             /* If class is still unknown, set it to var */
             if (entry->u.id.class_ == CLASS_unknown)
                 entry->u.id.class_ = CLASS_var;
-            /* Function with 0 args — treat as call (matching Python p_id_expr) */
+            /* Function with 0 args — treat as call (matching Python p_id_expr).
+             * Python also has `bexpr : ID bexpr` (zxbparser.py:2839-2852)
+             * for the parenless single-arg form (e.g. `LET c = xx 1`):
+             * if the next token starts a bexpr, consume one bexpr and
+             * pass it as the single argument. Only fires when the entry
+             * has already been resolved to a FUNCTION (Python's grammar
+             * never reaches make_call for VAR/STRSLICE here — :2846 just
+             * marks-accessed). */
             if (entry->u.id.class_ == CLASS_function) {
-                AstNode *call = ast_new(p->cs, AST_FUNCCALL, lineno);
                 AstNode *args = ast_new(p->cs, AST_ARGLIST, lineno);
+                /* Inline expr-start predicate: tokens that can begin a
+                 * bexpr per parse_primary. We exclude EQ/COMMA/NEWLINE/
+                 * EOF/CO/RP/THEN/TO/STEP/etc. so the bare-ID 0-arg call
+                 * is unaffected when no expression follows. */
+                BTokenType nt = p->current.type;
+                bool starts_expr =
+                    (nt == BTOK_NUMBER || nt == BTOK_STRC || nt == BTOK_PI ||
+                     nt == BTOK_MINUS  || nt == BTOK_PLUS  || nt == BTOK_NOT ||
+                     nt == BTOK_BNOT   || nt == BTOK_ADDRESSOF ||
+                     nt == BTOK_LP     || nt == BTOK_ID    || nt == BTOK_ARRAY_ID ||
+                     nt == BTOK_LABEL);
+                if (starts_expr) {
+                    AstNode *arg_expr = parse_expression(p, PREC_NONE + 1);
+                    if (arg_expr) {
+                        AstNode *arg = ast_new(p->cs, AST_ARGUMENT,
+                                                arg_expr->lineno);
+                        ast_add_child(p->cs, arg, arg_expr);
+                        arg->type_ = arg_expr->type_;
+                        ast_add_child(p->cs, args, arg);
+                    }
+                }
+                AstNode *call = ast_new(p->cs, AST_FUNCCALL, lineno);
                 ast_add_child(p->cs, call, entry);
                 ast_add_child(p->cs, call, args);
                 call->type_ = entry->type_;

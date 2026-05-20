@@ -3555,7 +3555,8 @@ static StrVec emit_loadf16(Backend *b, Quad *q) {
     return out;
 }
 /* storef16 (_f16.py:428-441): rewrite immediate float -> packed int,
- * then delegate to Bits32.store32. */
+ * then delegate to Bits32.store32. ins[2] (Python 1-based incl instr)
+ * == q->args[1] (C, instruction excluded == q_ins(q, 2)). */
 static StrVec emit_storef16(Backend *b, Quad *q) {
     const char *value = q_ins(q, 2);
     if (s_is_float(value)) {
@@ -3567,7 +3568,7 @@ static StrVec emit_storef16(Backend *b, Quad *q) {
         r->args = arena_alloc(b->arena, (size_t)q->nargs * sizeof(char *));
         for (int i = 0; i < q->nargs; i++) r->args[i] = q->args[i];
         char buf[24]; snprintf(buf, sizeof(buf), "%lu", packed);
-        if (q->nargs >= 3) r->args[2] = arena_strdup(b->arena, buf);
+        if (q->nargs >= 2) r->args[1] = arena_strdup(b->arena, buf);
         q = r;
     }
     return emit_store32(b, q);
