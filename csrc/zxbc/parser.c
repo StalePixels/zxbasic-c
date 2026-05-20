@@ -770,6 +770,22 @@ AstNode *parse_primary(Parser *p) {
             /* If class is still unknown, set it to var */
             if (entry->u.id.class_ == CLASS_unknown)
                 entry->u.id.class_ = CLASS_var;
+            /* Python p_id_expr (zxbparser.py:2649-2651): when the existing
+             * entry has TYPE.unknown/auto, promote it to DEFAULT_TYPE and
+             * emit warning_implicit_type. Without this, a `LET a = a + 1`
+             * with `a` newly auto-declared (TYPE_unknown via the new LET
+             * pre-access below) leaves the RHS read at TYPE_unknown, so
+             * the later LET-store sees var.type_==unknown and emits no
+             * meaningful store IC. Faithful net effect: an undeclared
+             * scalar read promotes to DEFAULT_TYPE on first read. */
+            if (entry->type_ && entry->type_->final_type &&
+                entry->type_->final_type->basic_type == TYPE_unknown) {
+                TypeInfo *promoted = type_new_ref(p->cs, p->cs->default_type,
+                                                  lineno, true);
+                entry->type_ = promoted;
+                warn_implicit_type(p->cs, lineno, name,
+                                   p->cs->default_type->name);
+            }
             /* Function with 0 args — treat as call (matching Python p_id_expr).
              * Python also has `bexpr : ID bexpr` (zxbparser.py:2839-2852)
              * for the parenless single-arg form (e.g. `LET c = xx 1`):
@@ -949,8 +965,50 @@ static AstNode *parse_call_or_array(Parser *p, const char *name, int lineno, boo
             id_node->u.id.class_ != CLASS_const)
             id_node->u.id.accessed = true;
         ast_add_child(p->cs, n, id_node);
-        for (int i = 0; i < arglist->child_count; i++)
-            ast_add_child(p->cs, n, arglist->children[i]);
+        /* Python STRSLICE.make_node (symbols/strslice.py:74-83) wraps
+         * each bound in TYPECAST(STR_INDEX_TYPE=uinteger), AFTER
+         * subtracting OPTIONS.string_base.  The MINUS folds to a no-op
+         * when base==0, but the TYPECAST is unconditionally applied —
+         * and it is THAT typecast which catches the `a$(a TO b)` case
+         * (50/51) where `a`/`b` resolve via deprecated-suffix sharing
+         * to a string-typed entry and trigger "Cannot convert string to
+         * a value. Use VAL() function".  The C built each `lower TO
+         * upper` pair as an inner AST_STRSLICE in `arglist` (lines
+         * 880-895 and 919-929 above) with raw bound exprs as children
+         * — typecast those children now so the error surfaces at parse
+         * time exactly as Python.  Single-index callers (the second
+         * STRSLICE site below at line ~1196) already apply the
+         * typecast in their own loop. */
+        TypeInfo *str_idx = p->cs->symbol_table->basic_types[TYPE_uinteger];
+        for (int i = 0; i < arglist->child_count; i++) {
+            AstNode *inner = arglist->children[i];
+            if (inner && inner->tag == AST_STRSLICE) {
+                for (int j = 0; j < inner->child_count; j++) {
+                    AstNode *bound = inner->children[j];
+                    if (!bound) continue;
+                    /* Python passes the strslice lineno — the line the
+                     * substring expression appeared on, not the line
+                     * the bound's symbol was first declared on.  The
+                     * inner STRSLICE was created with `arg_expr->lineno`
+                     * (which is the bound *symbol*'s lineno = declaration
+                     * line) so use the OUTER parse_call_or_array
+                     * `lineno` (the source line where `name(` opened)
+                     * to match Python (e.g. fixture 50: error at line
+                     * 2, the substring site, not line 1, where `a$` was
+                     * first declared). */
+                    AstNode *cast = make_typecast(p->cs, str_idx, bound,
+                                                  lineno);
+                    /* make_typecast returns NULL on type error and
+                     * already emitted the message; leave the child
+                     * untouched in that case so downstream code does
+                     * not deref NULL.  On success it returns either the
+                     * same node (type already matches) or a fresh
+                     * TYPECAST wrapper. */
+                    if (cast) inner->children[j] = cast;
+                }
+            }
+            ast_add_child(p->cs, n, inner);
+        }
         n->type_ = p->cs->symbol_table->basic_types[TYPE_string];
         return n;
     }
@@ -2904,6 +2962,24 @@ static AstNode *parse_statement(Parser *p) {
             if (p->previous.type != BTOK_EQ) {
                 consume(p, BTOK_EQ, "Expected '=' in assignment");
             }
+            /* Python p_lexpr (zxbparser.py:1119-1134) fires BEFORE the RHS
+             * is parsed and calls `access_id(name, lineno)` with NO
+             * default_type — implicitly declaring the lvalue when it
+             * doesn't yet exist.  p_assignment (:1100) then re-calls
+             * access_id with default_type=RHS.type_, but for an
+             * already-existing entry the default_type is ignored.  Net
+             * Python behaviour: a newly-auto-declared LET lvalue takes
+             * the DEFAULT_IMPLICIT_TYPE (unknown), NOT the RHS type.  The
+             * subsequent re-access updates the unknown type from RHS.type_
+             * with the bool→ubyte coercion (symboltable.py:359-364 ===
+             * compiler.c:1158-1169).  Without this pre-access, `LET c =
+             * (a$ = b$)` would type c as `boolean` (rhs.type_), emitting
+             * an unknown `storebool` IC and losing the assignment; and
+             * `LET a = a + 1` would leave `a` unknown for the RHS read
+             * (p_id_expr promotes unknown→DEFAULT_TYPE only when the
+             * entry was already declared).  Mirror p_lexpr explicitly. */
+            symboltable_access_id(p->cs->symbol_table, p->cs, name, ln,
+                                  NULL, CLASS_unknown);
             /* Python p_assignment parses the RHS first, then resolves the
              * lvalue with default_type = RHS.type_ (zxbparser.py:1100) and
              * casts the RHS to the lvalue type (:1115). Parse-order and
