@@ -1091,8 +1091,76 @@ static AstNode *parse_call_or_array(Parser *p, const char *name, int lineno, boo
         if (expr_context)
             entry->u.id.accessed = true;
         ast_add_child(p->cs, n, entry);
-        for (int i = 0; i < arglist->child_count; i++)
-            ast_add_child(p->cs, n, arglist->children[i]);
+        /* OPTIONS.string_base adjustment — STRSLICE.make_node
+         * (symbols/strslice.py:74-83) always wraps each slice bound in
+         * `MINUS <idx> <base>` (base=OPTIONS.string_base) before
+         * TYPECAST(STR_INDEX_TYPE).  For default base==0 the C port
+         * already produces matching asm without the MINUS (BINARY x-0
+         * folds at make_binary_node; non-numeric x-0 is also a no-op
+         * at the IR level in Python — verified empirically against
+         * `a$(k)` with default base).  Only when base!=0 do we apply
+         * the MINUS at parse time so the index NUMBER folds to
+         * `idx - base` (e.g. strbase: `a$(1)` -> NUMBER(0) when
+         * string_base=1).  Gating on base!=0 keeps the default corpus
+         * (every passing strslice fixture) byte-identical and the
+         * pragma-set corpus correct.  Single-index shape (`a$(idx)`,
+         * no TO): the arglist holds one ARGUMENT(idx); for the WRITE
+         * lvalue (LET a$(idx) = rhs) Python's p_substr_assignment
+         * (zxbparser.py:1297-1304) also subtracts base from idx once
+         * and uses it as both lower and upper — exact match for the
+         * single-child STRSLICE the C builds at this site for both
+         * read AND write contexts. */
+        int strbase = p->cs->opts.string_base;
+        TypeInfo *str_idx = p->cs->symbol_table->basic_types[TYPE_uinteger];
+        for (int i = 0; i < arglist->child_count; i++) {
+            AstNode *ch = arglist->children[i];
+            if (strbase != 0 && ch) {
+                /* Unwrap ARGUMENT to find the index expr; subtract
+                 * base; wrap result in TYPECAST(STR_INDEX_TYPE) so the
+                 * downstream ic_param sees the correct type.  Mirrors
+                 * STRSLICE.make_node (symbols/strslice.py:74-83):
+                 *   base = NUMBER(string_base)
+                 *   lower = TYPECAST(STR_INDEX_TYPE,
+                 *                    MINUS(lower, base))
+                 * make_binary_node folds when both operands are
+                 * numbers (returns NUMBER(idx-base)); the wrapping
+                 * make_typecast then short-circuits the TYPECAST when
+                 * the value already has the target type — but we want
+                 * the type promoted from ubyte (auto-typed from small
+                 * value) to uinteger so visit_NUMBER → ic_param emits
+                 * the uinteger (`ld hl, N; push hl`) shape Python's
+                 * READ STRSLICE also takes.  Without the explicit
+                 * typecast, C emits the ubyte (`xor a; push af`) shape
+                 * — diverges from Python on `b$ = a$(N)`. */
+                AstNode *idx = ch;
+                AstNode *parent = NULL;
+                int parent_idx = -1;
+                if (ch->tag == AST_ARGUMENT && ch->child_count > 0) {
+                    idx = ch->children[0];
+                    parent = ch;
+                    parent_idx = 0;
+                }
+                AstNode *base = make_number(p, strbase, lineno, str_idx);
+                AstNode *minus = make_binary_node(p->cs, "MINUS", idx,
+                                                  base, lineno, NULL);
+                AstNode *cast = make_typecast(p->cs, str_idx, minus, lineno);
+                AstNode *replacement = cast ? cast : minus;
+                if (replacement) {
+                    if (parent) {
+                        parent->children[parent_idx] = replacement;
+                        /* Keep ARGUMENT.type_ in sync with its child
+                         * (parser.c:835 / :1241 set arg.type_ = arg_
+                         * expr.type_ at creation; replacing the child
+                         * must propagate the new type so visit_ARGUMENT
+                         * emits the right param_<TSUFFIX>). */
+                        parent->type_ = replacement->type_;
+                    } else {
+                        ch = replacement;
+                    }
+                }
+            }
+            ast_add_child(p->cs, n, ch);
+        }
         n->type_ = p->cs->symbol_table->basic_types[TYPE_string];
         return n;
     }
@@ -4869,17 +4937,96 @@ void parser_init(Parser *p, CompilerState *cs, const char *input) {
 AstNode *parser_parse(Parser *p) {
     AstNode *program = make_block_node(p, 1);
 
+    /* enable_break: track last CHKBREAK lineno to suppress duplicates on
+     * the same source line — faithful to zxbparser.py:101 last_brk_linenum
+     * gating in make_break (zxbparser.py:461-471).  CHKBREAK is emitted
+     * AFTER each program_line that contains real code (Python's
+     * p_program: `make_block(p[1], p[2], make_break(p.lineno(2), p[2]))`,
+     * gated by `not is_null(p[2])`).  In the C recursive-descent parser
+     * a program_line corresponds to one or more statements terminated
+     * by NEWLINE (BTOK_CO between statements on the SAME line never
+     * starts a new program_line; that's why Python's make_break runs
+     * per program_line, not per statement).  A label-only statement
+     * (Python's `label_line_co : label %prec CO` route) does NOT
+     * trigger CHKBREAK in Python — verified empirically against
+     * break_label0.bas where the label on a line of its own has no
+     * CHKBREAK before/at it; only the next non-label program_line
+     * does.  Detected by AST_SENTENCE kind=="LABEL". */
+    int last_brk_linenum = 0;
+
     while (!check(p, BTOK_EOF)) {
         /* Skip blank lines */
         if (match(p, BTOK_NEWLINE)) continue;
 
+        int stmt_lineno = p->current.lineno;
         AstNode *stmt = parse_statement(p);
         if (stmt && stmt->tag != AST_NOP) {
-            ast_add_child(p->cs, program, stmt);
+            /* Python's SymbolBLOCK.append (block.py:44-51) flattens a
+             * child BLOCK into its parent and skips null children — so
+             * Python's top-level `program` is one flat BLOCK of
+             * statements with no nesting.  The C parser builds
+             * compound statements (e.g. `label: stmt` on the same
+             * line, parser.c:1395-1404) as an AST_BLOCK; without
+             * flattening here, the program ends up with nested BLOCKs
+             * that hide the "LABEL immediately followed by CHKBREAK"
+             * pattern from OptimizerVisitor.visit_BLOCK
+             * (api/optimize.py:113-121 → passes/unreachable.c uc_visit_
+             * block).  Flatten ONLY at the top program level (where
+             * Python flattens unconditionally via make_block / BLOCK.
+             * append); compound statements inside FOR / IF / SUB etc.
+             * still keep their own BLOCKs because visit_BLOCK descends
+             * recursively.  CHKBREAK-suppression of label-only and
+             * decl-only program_lines (`10 DIM a as ubyte` → BLOCK[
+             * LABEL_10] alone) depends on this flat shape. */
+            if (stmt->tag == AST_BLOCK) {
+                for (int i = 0; i < stmt->child_count; i++) {
+                    AstNode *gc = stmt->children[i];
+                    if (gc && gc->tag != AST_NOP)
+                        ast_add_child(p->cs, program, gc);
+                }
+            } else {
+                ast_add_child(p->cs, program, stmt);
+            }
         }
 
-        /* Consume end of statement */
-        while (match(p, BTOK_NEWLINE) || match(p, BTOK_CO)) {}
+        /* Consume end-of-statement terminators; remember whether we
+         * crossed a NEWLINE (program_line boundary) vs just a CO
+         * (statement-on-same-line separator). */
+        bool crossed_newline = false;
+        while (check(p, BTOK_NEWLINE) || check(p, BTOK_CO)) {
+            if (check(p, BTOK_NEWLINE)) crossed_newline = true;
+            advance(p);
+        }
+        if (check(p, BTOK_EOF)) crossed_newline = true;
+
+        /* Emit CHKBREAK sentence after program_line if enable_break is
+         * on and the line carried a real (non-label-only) statement.
+         * Faithful to make_break (zxbparser.py:461-471):
+         *   - skip if !OPTIONS.enable_break
+         *   - skip if lineno == last_brk_linenum (same-line dedupe)
+         *   - skip if is_null(p[2]) (statement absent/NOP)
+         * Adds: skip label-only statements (LABEL-sentence shape) so
+         *   break_label0.bas matches Python (label-only line carries
+         *   no CHKBREAK; the next non-label line's CHKBREAK fires).
+         * Adds: skip non-statement contributions (#pragma, #require,
+         *   #init, #line — all return AST_NOP, already filtered above). */
+        bool stmt_real = stmt && stmt->tag != AST_NOP;
+        bool stmt_is_label_only =
+            stmt_real && stmt->tag == AST_SENTENCE && stmt->u.sentence.kind &&
+            strcmp(stmt->u.sentence.kind, "LABEL") == 0;
+        if (crossed_newline && p->cs->opts.enable_break && stmt_real &&
+            !stmt_is_label_only && stmt_lineno != last_brk_linenum) {
+            /* make_sentence(lineno, "CHKBREAK",
+             *               make_number(lineno, lineno, TYPE.uinteger))
+             * (zxbparser.py:471). */
+            TypeInfo *uint_t =
+                p->cs->symbol_table->basic_types[TYPE_uinteger];
+            AstNode *brk = make_sentence_node(p, "CHKBREAK", stmt_lineno);
+            ast_add_child(p->cs, brk,
+                make_number(p, stmt_lineno, stmt_lineno, uint_t));
+            ast_add_child(p->cs, program, brk);
+            last_brk_linenum = stmt_lineno;
+        }
 
         if (p->panic_mode) synchronize(p);
     }

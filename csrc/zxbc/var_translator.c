@@ -508,7 +508,14 @@ static void vt_visit_arraydecl(Translator *tr, AstNode *node) {
     bool is_dynamically_accessed = entry->u.id.is_dynamically_accessed;
     bool lbound_used = entry->u.id.lbound_used;
     bool ubound_used = entry->u.id.ubound_used;
-    bool array_check = false;
+    /* OPTIONS.array_check (config.py:222 / var_translator.py:61): when
+     * set, the global array's __DATA__.__PTR__ bound_ptrs[1] is forced
+     * to point at __UBOUND__ (and the __UBOUND__ vard table is emitted)
+     * even when no static UBOUND reference (entry.ubound_used) drove
+     * it.  Faithful to var_translator.py:61's `if entry.ubound_used or
+     * OPTIONS.array_check`. Owned by `#pragma array_check = true`
+     * (arrcheck.bas). */
+    bool array_check = tr->cs->opts.array_check;
 
     char *bound_ptrs[2] = { "0", "0" };
     if (!is_zero_based && (is_dynamically_accessed || lbound_used))

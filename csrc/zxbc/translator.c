@@ -1283,6 +1283,11 @@ static AstNode *tr_visit_chkbreak(Visitor *v, AstNode *node) {
         strcmp(tr->prev_token, "CHKBREAK") != 0) {
         AstNode *child = node->child_count > 0 ? node->children[0] : NULL;
         translator_ic_inline(tr, "push hl");
+        /* Python relies on Symbol.t being a lazy property; the C port
+         * computes node->t at visit time, so visit the child first to
+         * materialise its t-text.  Number children just stringify their
+         * value (tr_visit_number). */
+        if (child) visitor_visit(v, child);
         const TypeInfo *ptr = tr->cs->symbol_table->basic_types[TYPE_uinteger];
         tr_ic_fparam(tr, ptr, (child && child->t) ? child->t : "0");
         tr_runtime_call(tr, ".core.CHECK_BREAK", 0);
@@ -2921,6 +2926,43 @@ static AstNode *tr_visit_letarray(Visitor *v, AstNode *node) {
         return node;
     }
 
+    /* String substring assignment — STRSLICE-shape lvalue (the other
+     * C parser path for `LET a$(idx) = rhs` when `a$` is already a
+     * declared CLASS_var string; parser.c:1066-1098 builds an
+     * AST_STRSLICE with children [VAR, ARGUMENT(idx)] or [VAR, lower,
+     * upper]).  Python's p_substr_assignment (zxbparser.py:1248-1305)
+     * always produces a LETSUBSTR for this shape — including the
+     * `string_base` MINUS adjustment that has already been applied to
+     * the index in make_strslice / parse_call_or_array (mirroring
+     * STRSLICE.make_node, symbols/strslice.py:74-83).  Route to
+     * tr_letsubstr_emit so the runtime call lands.  Without this the
+     * default visitor_generic descends into the STRSLICE and emits a
+     * READ slice (__STRSLICE) — the strbase / strbase2 S1-DIVERGE. */
+    if (entry && entry->type_ && type_is_string(entry->type_) &&
+        acc && acc->tag == AST_STRSLICE) {
+        /* STRSLICE children: [string_id, index...] (read shape) or
+         * [string_id, lower, upper] (TO-shape). For a write target
+         * (LET a$(idx)=rhs), p_substr_assignment with a single index
+         * produces lower==upper==idx (zxbparser.py:1278-1281). The C
+         * STRSLICE for `a$(idx)` (no TO) has a single index child;
+         * use it for both lower and upper. */
+        AstNode *lower = NULL, *upper = NULL;
+        if (acc->child_count >= 3) {
+            /* TO-shape: [str, lower, upper] */
+            lower = acc->children[1];
+            upper = acc->children[2];
+        } else if (acc->child_count == 2) {
+            /* Single-index shape: [str, idx-or-ARGUMENT(idx)] */
+            AstNode *c1 = acc->children[1];
+            if (c1 && c1->tag == AST_ARGUMENT && c1->child_count > 0)
+                lower = upper = c1->children[0];
+            else
+                lower = upper = c1;
+        }
+        tr_letsubstr_emit(v, node, entry, lower, upper, rhs);
+        return node;
+    }
+
     /* Non-string array element — visit_LETARRAY (translator.py:329-364).
      * arr = node.children[0] (the ARRAYACCESS lvalue), scope = arr.scope.
      *
@@ -3126,6 +3168,29 @@ static AstNode *tr_visit_strslice(Visitor *v, AstNode *node) {
     AstNode *str_  = node->child_count > 0 ? node->children[0] : NULL;
     AstNode *lower = node->child_count > 1 ? node->children[1] : NULL;
     AstNode *upper = node->child_count > 2 ? node->children[2] : NULL;
+    /* Single-index shape `a$(idx)` — the C parser
+     * (parse_call_or_array, parser.c:1090-1158) builds a 2-child
+     * STRSLICE [VAR, ARGUMENT(idx)] (or [VAR, idx_expr] post-string_
+     * base unwrap).  Python's STRSLICE always has lower AND upper as
+     * direct expressions, with lower==upper for a single-index call
+     * (make_strslice callers at zxbparser.py:411, :2549, :2564 etc.).
+     * Mirror that here: treat the lone index as both lower and upper;
+     * unwrap ARGUMENT (its visitor would emit an extra param, doubling
+     * the count vs Python).  This is the (pre-existing-bug) reason
+     * strbase2's `LET b$ = a$(2)` diverged after the LETSUBSTR routing
+     * fix exposed the READ path. */
+    if (lower && upper == NULL) {
+        if (lower->tag == AST_ARGUMENT && lower->child_count > 0)
+            lower = lower->children[0];
+        upper = lower;
+    } else if (lower && lower->tag == AST_ARGUMENT &&
+               lower->child_count > 0) {
+        lower = lower->children[0];
+    }
+    if (upper && upper != lower && upper->tag == AST_ARGUMENT &&
+        upper->child_count > 0) {
+        upper = upper->children[0];
+    }
 
     /* :452 yield node.string */
     if (str_) visitor_visit(v, str_);
