@@ -2686,38 +2686,112 @@ static void tr_letsubstr_emit(Visitor *v, AstNode *node, AstNode *str_var,
         tr_ic_param(tr, ubyte, "0");
     }
 
-    /* :379-383 yield a; ic_param(PTR,a.t); yield b; ic_param(PTR,b.t) */
+    /* :379-383 yield a; ic_param(PTR,a.t); yield b; ic_param(PTR,b.t).
+     * Python p_substr_assignment (zxbparser.py:1297-1305) wraps each
+     * index in BINARY MINUS(idx, string_base) — for a runtime idx the
+     * MINUS does NOT fold (make_binary's func) and emits a `subu16
+     * ttemp idx.t base` quad whose backend output (a `pop hl; push hl`
+     * pair on strbase==0) is part of byte-identical parity.
+     *
+     * The C parser pre-wraps the STRSLICE's children in MINUS(idx,
+     * base) ONLY when string_base != 0 (parser.c:1205, with the
+     * deliberate empirical "x-0 folds at IR level" comment, which is
+     * true for the READ path but NOT for the WRITE / LETSUBSTR path —
+     * `pop hl;push hl` survives the IR but matters at the asm). When
+     * the parser already did the rewrite, visiting `lower` runs the
+     * BINARY MINUS and produces the temp; we just ic_param it. When
+     * the parser skipped (strbase==0), we emit the missing subu16
+     * here so the IR matches Python's. */
+    bool parser_did_rewrite = (tr->cs->opts.string_base != 0);
+    const char *base_s = NULL;
+    if (!parser_did_rewrite) {
+        char base_buf[16];
+        snprintf(base_buf, sizeof(base_buf), "%d",
+                 tr->cs->opts.string_base);
+        base_s = arena_strdup(&tr->cs->arena, base_buf);
+    }
     if (lower) visitor_visit(v, lower);
-    tr_ic_param(tr, ptr, (lower && lower->t) ? lower->t : "0");
+    const char *lower_t;
+    if (parser_did_rewrite) {
+        lower_t = (lower && lower->t) ? lower->t : "0";
+    } else {
+        const char *lt = (lower && lower->t) ? lower->t : "0";
+        if (lower && lower->tag == AST_NUMBER) {
+            char folded[24];
+            long lv = (long)lower->u.number.value;
+            snprintf(folded, sizeof(folded), "%ld",
+                     lv - tr->cs->opts.string_base);
+            lower_t = arena_strdup(&tr->cs->arena, folded);
+        } else {
+            const char *t14 = compiler_new_temp(tr->cs);
+            tr_ic_arith(tr, "sub", ptr, t14, lt, base_s);
+            lower_t = t14;
+        }
+    }
+    tr_ic_param(tr, ptr, lower_t);
     if (upper) visitor_visit(v, upper);
-    tr_ic_param(tr, ptr, (upper && upper->t) ? upper->t : "0");
+    const char *upper_t;
+    if (parser_did_rewrite) {
+        upper_t = (upper && upper->t) ? upper->t : "0";
+    } else {
+        const char *ut = (upper && upper->t) ? upper->t : "0";
+        if (upper && upper->tag == AST_NUMBER) {
+            char folded[24];
+            long uv = (long)upper->u.number.value;
+            snprintf(folded, sizeof(folded), "%ld",
+                     uv - tr->cs->opts.string_base);
+            upper_t = arena_strdup(&tr->cs->arena, folded);
+        } else {
+            const char *t15 = compiler_new_temp(tr->cs);
+            tr_ic_arith(tr, "sub", ptr, t15, ut, base_s);
+            upper_t = t15;
+        }
+    }
+    tr_ic_param(tr, ptr, upper_t);
 
-    /* :385-400 load x$ by scope. C scope/offset/byref on the VAR id. */
+    /* :385-400 load x$ by scope. C scope/offset/byref on the VAR id.
+     * For a NON-global string scalar/param, Python VarRef.t returns
+     * f"${self._t}" (varref.py:38-42) — a per-symbol cached optemp with
+     * the '$' prefix. The parser stamps .t = mangled on every id; for a
+     * local/parameter that mangle is wrong (a later ic_fparam would
+     * emit `ld hl,(_mangled)` reading global storage). Mirror the
+     * caching logic from tr_visit_var (translator.c:350-367): if .t is
+     * still the parser mangle, mint a temp; if dynamic and no '$'
+     * prefix, prepend it. Cache once so every reference matches. */
     Scope scope = str_var->u.id.scope;
-    const char *svt = str_var->t ? str_var->t : str_var->u.id.mangled;
+    const char *mangled = str_var->u.id.mangled;
+    if (scope != SCOPE_global) {
+        if (str_var->t && mangled && strcmp(str_var->t, mangled) == 0)
+            str_var->t = (char *)compiler_new_temp(tr->cs);
+        const char *dst = (str_var->t && str_var->t[0]) ? str_var->t
+                        : compiler_new_temp(tr->cs);
+        if (str_var->type_ && type_is_dynamic(str_var->type_) &&
+            dst[0] != '$') {
+            char *ds = arena_alloc(&tr->cs->arena, strlen(dst) + 2);
+            ds[0] = '$';
+            strcpy(ds + 1, dst);
+            dst = ds;
+        }
+        str_var->t = (char *)dst;
+    }
+    const char *svt = str_var->t ? str_var->t : mangled;
     if (scope == SCOPE_global) {
         tr_ic_fparam(tr, ptr, svt ? svt : "");
     } else if (scope == SCOPE_local) {
         char ofs[24];
         snprintf(ofs, sizeof(ofs), "%ld", -(long)str_var->u.id.offset);
-        const char *dst = (svt && svt[0]) ? svt
-                        : compiler_new_temp(tr->cs);
-        str_var->t = (char *)dst;
-        tr_ic_pload(tr, ptr, dst, ofs);
-        tr_ic_fparam(tr, ptr, dst);
+        tr_ic_pload(tr, ptr, svt, ofs);
+        tr_ic_fparam(tr, ptr, svt);
     } else if (scope == SCOPE_parameter) {
         char ofs[24];
         snprintf(ofs, sizeof(ofs), "%ld", (long)str_var->u.id.offset);
-        const char *dst = (svt && svt[0]) ? svt
-                        : compiler_new_temp(tr->cs);
-        str_var->t = (char *)dst;
-        tr_ic_pload(tr, ptr, dst, ofs);
+        tr_ic_pload(tr, ptr, svt, ofs);
         if (str_var->u.id.byref) {
             char ind[32];
-            snprintf(ind, sizeof(ind), "*%s", dst);
+            snprintf(ind, sizeof(ind), "*%s", svt);
             tr_ic_fparam(tr, ptr, arena_strdup(&tr->cs->arena, ind));
         } else {
-            tr_ic_fparam(tr, ptr, dst);
+            tr_ic_fparam(tr, ptr, svt);
         }
     } else {
         fprintf(stderr, "zxbc: visit_LETSUBSTR invalid scope %d\n",
