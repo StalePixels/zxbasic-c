@@ -5020,6 +5020,41 @@ static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function, bool is_decl
      * forward-DECLARE path returns early above and never reaches here, so
      * (like Python's leave_scope(show_warnings=False) discarding the
      * return at zxbparser.py:2929) a declare computes no sizes. */
+    /* SymbolTable.leave_scope (symboltable.py:268-277): every parameter
+     * that was never accessed in the body is force-marked accessed —
+     * "Parameters must always be present even if not used!". This is
+     * load-bearing for codegen: visit_LETARRAY / visit_ARRAYLOAD /
+     * emit_var_assign all gate on `entry.accessed` at O>1
+     * (optimize.py:309/322/344, translator.py:330/980); without this a
+     * write-only array/scalar PARAMETER (e.g. `q` in
+     * FUNCTION test(q() as UInteger): q(3)=7) is pruned and its whole
+     * body vanishes at the default O2. Mark BEFORE exit_scope so the
+     * shared symbol nodes the translator later reads carry it; CRITICALLY
+     * also BEFORE compute_offsets, because Python orders it identically
+     * (symboltable.py:270-283: param accessed-mark on line 274 precedes
+     * compute_offsets on line 283) and compute_offsets' Scope.values(
+     * filter_by_opt=True) drops the un-accessed at O>1 — otherwise a
+     * never-read parameter would lose its frame slot. (Warnings are
+     * intentionally not reproduced here — Python's leave_scope is called
+     * show_warnings=False on this path, zxbparser.py:2929.) */
+    {
+        Scope_ *bs = p->cs->symbol_table->current_scope;
+        for (int si = 0; si < bs->ordered_count; si++) {
+            AstNode *e = bs->ordered[si];
+            if (e && e->tag == AST_ID &&
+                e->u.id.scope == SCOPE_parameter && !e->u.id.accessed)
+                e->u.id.accessed = true;
+        }
+    }
+
+    /* S5.7d — capture the body scope's insertion-ordered entries onto the
+     * function ID (Python func.ref.local_symbol_table = current_scope,
+     * zxbparser.py:2910, taken BEFORE leave_scope pops the table) and run
+     * compute_offsets (symboltable.py:283) to assign per-local +/- IX
+     * offsets and the total locals_size (the ic_enter operand). The
+     * forward-DECLARE path returns early above and never reaches here, so
+     * (like Python's leave_scope(show_warnings=False) discarding the
+     * return at zxbparser.py:2929) a declare computes no sizes. */
     {
         Scope_ *body_scope = p->cs->symbol_table->current_scope;
         int oc = body_scope->ordered_count;
@@ -5032,29 +5067,8 @@ static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function, bool is_decl
             id_node->u.id.local_entries_count = oc;
         }
         id_node->u.id.local_size =
-            symboltable_compute_offsets(p->cs->symbol_table, body_scope);
-    }
-
-    /* SymbolTable.leave_scope (symboltable.py:268-277): every parameter
-     * that was never accessed in the body is force-marked accessed —
-     * "Parameters must always be present even if not used!". This is
-     * load-bearing for codegen: visit_LETARRAY / visit_ARRAYLOAD /
-     * emit_var_assign all gate on `entry.accessed` at O>1
-     * (optimize.py:309/322/344, translator.py:330/980); without this a
-     * write-only array/scalar PARAMETER (e.g. `q` in
-     * FUNCTION test(q() as UInteger): q(3)=7) is pruned and its whole
-     * body vanishes at the default O2. Mark BEFORE exit_scope so the
-     * shared symbol nodes the translator later reads carry it. (Warnings
-     * are intentionally not reproduced here — Python's leave_scope is
-     * called show_warnings=False on this path, zxbparser.py:2929.) */
-    {
-        Scope_ *bs = p->cs->symbol_table->current_scope;
-        for (int si = 0; si < bs->ordered_count; si++) {
-            AstNode *e = bs->ordered[si];
-            if (e && e->tag == AST_ID &&
-                e->u.id.scope == SCOPE_parameter && !e->u.id.accessed)
-                e->u.id.accessed = true;
-        }
+            symboltable_compute_offsets(p->cs->symbol_table, body_scope,
+                                        p->cs->opts.optimization_level);
     }
 
     /* Exit scope */

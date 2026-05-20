@@ -185,12 +185,24 @@ static int s_entry_size(SymbolTable *st, AstNode *e) {
     return 2 * (3 + (e->u.id.ubound_used ? 1 : 0));
 }
 
-int symboltable_compute_offsets(SymbolTable *st, Scope_ *scope) {
-    int n = scope->ordered_count;
+int symboltable_compute_offsets(SymbolTable *st, Scope_ *scope, int opt_level) {
+    int n_raw = scope->ordered_count;
+    /* Python Scope.values(filter_by_opt=True) at O>1 (scope.py:63-66):
+     * un-accessed entries are excluded from the offset-assignment pass
+     * (and therefore from locals_size). leave_scope force-marks params
+     * accessed before calling compute_offsets (symboltable.py:270-277),
+     * so the filter only ever drops LOCAL CLASS_var/array entries that
+     * the program never read — the const7 / opt2_func_call shape. */
+    AstNode **a = arena_alloc(st->arena, (size_t)(n_raw ? n_raw : 1) * sizeof(AstNode *));
+    int n = 0;
+    for (int i = 0; i < n_raw; i++) {
+        AstNode *e = scope->ordered[i];
+        if (opt_level > 1 && e && e->tag == AST_ID && !e->u.id.accessed)
+            continue;
+        a[n++] = e;
+    }
     /* Stable sort ascending by entry_size (insertion order tie-break).
      * Insertion sort keeps it stable and n is tiny (locals per function). */
-    AstNode **a = arena_alloc(st->arena, (size_t)(n ? n : 1) * sizeof(AstNode *));
-    for (int i = 0; i < n; i++) a[i] = scope->ordered[i];
     for (int i = 1; i < n; i++) {
         AstNode *key = a[i];
         int ksz = s_entry_size(st, key);

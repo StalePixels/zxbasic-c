@@ -493,7 +493,11 @@ char *make_child_namespace(CompilerState *cs, const char *parent,
  * +/- IX offsets over the scope's insertion-ordered entries (stable
  * entry_size sort) and returns the total local frame size (locals_size,
  * the ic_enter operand). Called at function scope-exit before the pop. */
-int symboltable_compute_offsets(SymbolTable *st, Scope_ *scope);
+/* opt_level mirrors OPTIONS.optimization_level so compute_offsets can
+ * apply Python Scope.values(filter_by_opt=True) — at O>1, un-accessed
+ * locals are dropped from the offset list (symboltable.py:283 /
+ * scope.py:63-66). Pass cs->opts.optimization_level. */
+int symboltable_compute_offsets(SymbolTable *st, Scope_ *scope, int opt_level);
 
 /* Symbol operations */
 AstNode *symboltable_declare(SymbolTable *st, CompilerState *cs,

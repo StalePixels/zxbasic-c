@@ -3973,6 +3973,16 @@ static void tr_visit_function(Translator *tr, AstNode *fdecl) {
     for (int li = 0; li < entry->u.id.local_entries_count; li++) {
         AstNode *lv = entry->u.id.local_entries[li];
         if (!lv) continue;
+        /* Python local_symbol_table.values() applies Scope.values(
+         * filter_by_opt=True) at O>1 (scope.py:63-66): un-accessed
+         * locals are dropped from the prologue init walk
+         * (function_translator.py:58). Mirrors the filter in
+         * compute_offsets (compiler.c) so the offsets and the per-local
+         * init emission stay consistent — without this, a const7-shape
+         * unused-local DIM with a static initializer would still emit
+         * its lvard image despite locals_size having been folded to 0. */
+        if (tr->cs->opts.optimization_level > 1 && !lv->u.id.accessed)
+            continue;
         SymbolClass c = lv->u.id.class_;
         /* :65-66 skip const OR parameter */
         if (c == CLASS_const || lv->u.id.scope == SCOPE_parameter)
