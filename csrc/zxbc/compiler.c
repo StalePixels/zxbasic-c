@@ -1038,10 +1038,32 @@ AstNode *make_unary_node(CompilerState *cs, const char *operator, AstNode *opera
         return operand;
     }
 
+    /* Type of the result (mirrors src/symbols/unary.py:make_node 73-83):
+     *   - default: operand.type_
+     *   - MINUS over an unsigned operand: type promotes to signed and the
+     *     operand is wrapped in a TYPECAST to that signed type
+     *   - NOT: boolean
+     * Without the MINUS promotion, ic_neg later emits e.g. 'negbool'
+     * which has no QUAD_TABLE entry; with it, MINUS over boolean/ubyte
+     * emits 'negi8' (the byte signed neg) — matching Python. */
+    TypeInfo *result_type = operand->type_;
+    if (strcmp(operator, "MINUS") == 0 && operand->type_) {
+        BasicType obt = resolve_basic_type(operand->type_);
+        if (basictype_is_unsigned(obt)) {
+            BasicType sbt = basictype_to_signed(obt);
+            TypeInfo *signed_t = cs->symbol_table->basic_types[sbt];
+            operand = make_typecast(cs, signed_t, operand, lineno);
+            if (!operand) return NULL;
+            result_type = signed_t;
+        }
+    } else if (strcmp(operator, "NOT") == 0) {
+        result_type = cs->symbol_table->basic_types[TYPE_boolean];
+    }
+
     AstNode *n = ast_new(cs, AST_UNARY, lineno);
     n->u.unary.operator = arena_strdup(&cs->arena, operator);
     ast_add_child(cs, n, operand);
-    n->type_ = operand->type_;
+    n->type_ = result_type;
     return n;
 }
 
@@ -1738,16 +1760,47 @@ bool check_pending_calls(CompilerState *cs) {
                      * preserve the funcnoparm FALSE_POS gate documented
                      * above. */
                     if (al->child_count < pl->child_count) {
-                        for (int pi = al->child_count;
-                             pi < pl->child_count; pi++) {
+                        /* Named-args dict mirror (api/check.py:104, 125-135).
+                         * Positional args have NULL names — back-fill from
+                         * the paired param so the "param already supplied"
+                         * check works for both positional and y:=expr
+                         * named-arg call sites. WITHOUT this back-fill the
+                         * inline branch's default-fill is purely positional
+                         * (pi = al->child_count) and a `test(y:=213)` on a
+                         * 2-param signature fills slot pi=1 (y) with y's
+                         * default — pushing y's default into x's slot
+                         * (keyword_arg2). */
+                        int izip = al->child_count < pl->child_count
+                                     ? al->child_count : pl->child_count;
+                        for (int z = 0; z < izip; z++) {
+                            AstNode *arg = al->children[z];
+                            AstNode *pm  = pl->children[z];
+                            if (!arg || arg->tag != AST_ARGUMENT) continue;
+                            if (arg->u.argument.name == NULL && pm)
+                                arg->u.argument.name = (char *)pm->u.argument.name;
+                        }
+                        /* Walk params in order; skip those already supplied
+                         * by name; stop at first missing-with-no-default. */
+                        for (int pi = 0; pi < pl->child_count; pi++) {
                             AstNode *pm = pl->children[pi];
-                            if (!pm) break;
+                            if (!pm) continue;
+                            const char *pn = pm->u.argument.name;
+                            bool already = false;
+                            for (int a = 0; a < al->child_count; a++) {
+                                AstNode *ag = al->children[a];
+                                if (ag && ag->tag == AST_ARGUMENT &&
+                                    ag->u.argument.name && pn &&
+                                    strcmp(ag->u.argument.name, pn) == 0) {
+                                    already = true; break;
+                                }
+                            }
+                            if (already) continue;
                             AstNode *defv = (pm->child_count >= 1)
                                               ? pm->children[0] : NULL;
                             if (defv == NULL) break;
                             AstNode *arg = ast_new(cs, AST_ARGUMENT,
                                                     call->lineno);
-                            arg->u.argument.name = (char *)pm->u.argument.name;
+                            arg->u.argument.name = (char *)pn;
                             arg->u.argument.byref = false;
                             ast_add_child(cs, arg, defv);
                             arg->type_ = defv->type_;

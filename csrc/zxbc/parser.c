@@ -546,6 +546,22 @@ static AstNode *parse_builtin_func(Parser *p, const char *fname, BTokenType kw) 
              * they fall to default → arg->type_ (the element type). */
             n->type_ = st->basic_types[TYPE_uinteger];
             break;
+        case BTOK_IN:
+            /* IN returns a byte from a 16-bit port address — Python
+             * zxbparser.py:3307-3314 p_expr_in: make_typecast(uinteger,
+             * arg) on the operand, type_=ubyte on the result. Without
+             * the result-side ubyte, the default branch picks up the
+             * operand's type (uinteger) and the LET-store later inserts
+             * a uinteger->ubyte narrowing (`ld h, a; ld a, l`) after
+             * the `in a, (c)`. */
+            if (arg && n->child_count > 0) {
+                AstNode *cast = make_typecast(p->cs,
+                                              st->basic_types[TYPE_uinteger],
+                                              arg, lineno);
+                if (cast) n->children[0] = cast;
+            }
+            n->type_ = st->basic_types[TYPE_ubyte];
+            break;
         default:
             n->type_ = arg->type_;
             break;
@@ -2913,7 +2929,39 @@ static AstNode *parse_statement(Parser *p) {
                       e->u.id.class_ == CLASS_unknown)) {
                 /* make_label(p[1], lineno): a label reference. Same
                  * statement shape the label-definition path emits
-                 * (parser.c:978-983) so ast-dump stays identical. */
+                 * (parser.c:978-983) so ast-dump stays identical.
+                 *
+                 * Python p_statement_call (zxbparser.py:1077) routes
+                 * here for entry.class_ in (label, unknown) and calls
+                 * make_label, which itself calls declare_label — i.e.
+                 * the call is also a DEFINITION when no prior label
+                 * declaration exists. Without that promotion the
+                 * later check_pending_labels rejects this AST_ID
+                 * (class still CLASS_unknown after parse) as an
+                 * undeclared label (opt3_lcd6: `@overlay` creates a
+                 * CLASS_unknown entry before `overlay:` at column 0).
+                 * Mirror via access_label, which check_is_undeclared
+                 * 's so a repeat-define still errors faithfully. */
+                if (e->u.id.class_ == CLASS_unknown) {
+                    AstNode *ln_e = symboltable_access_label(
+                        p->cs->symbol_table, p->cs, name, ln);
+                    if (ln_e && ln_e->u.id.class_ == CLASS_label) {
+                        ln_e->u.id.declared = true;
+                        ln_e->type_ =
+                            p->cs->symbol_table->basic_types[TYPE_uinteger];
+                    }
+                } else if (e->u.id.class_ == CLASS_label && e->u.id.declared) {
+                    /* Python declare_label (symboltable.py:592-603):
+                     * check_is_undeclared (re-declaration) returns the
+                     * existing entry with a syntax error. Mirror that
+                     * here so a duplicate label-def (opt2_labelinfunc2:
+                     * `label1:` at column 0 twice) is rejected — the
+                     * BTOK_LABEL path at parser.c:1458 already does
+                     * this for the lex-classified-LABEL case. */
+                    zxbc_error(p->cs, ln,
+                               "Label '%s' already used at %s:%d",
+                               name, p->cs->current_file, e->lineno);
+                }
                 AstNode *ls = make_sentence_node(p, "LABEL", ln);
                 AstNode *lid = ast_new(p->cs, AST_ID, ln);
                 lid->u.id.name = arena_strdup(&p->cs->arena, name);

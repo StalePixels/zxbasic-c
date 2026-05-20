@@ -1173,16 +1173,22 @@ static BToken lex_initial(BLexer *lex) {
                 return t;
             }
 
-            /* Regular identifier */
-            /* Check if it's a label */
-            if (is_label(lex, tok_pos, BTOK_ID, id)) {
-                return make_str_tok(lex, BTOK_LABEL, id);
-            }
-
-            /* Check if it's an array variable */
+            /* Regular identifier
+             *
+             * Mirror the Python lexer's symbol-table-aware ID rule
+             * (src/zxbc/zxblex.py:t_ID 606-626): only promote to LABEL
+             * when *no* existing entry exists for this name. If an entry
+             * exists, it stays ID (or becomes ARRAY_ID for arrays). This
+             * is what lets `SUB p / p:p` parse as three calls to p (the
+             * column-0 `p` is a known SUB so the lexer keeps it as ID,
+             * and `p_statement_call` makes a sub-call); without it the
+             * column-0 `p` is wrongly classified as a LABEL definition. */
             AstNode *entry = symboltable_get_entry(lex->cs->symbol_table, id);
             if (entry && entry->tag == AST_ID && entry->u.id.class_ == CLASS_array) {
                 return make_str_tok(lex, BTOK_ARRAY_ID, id);
+            }
+            if (!entry && is_label(lex, tok_pos, BTOK_ID, id)) {
+                return make_str_tok(lex, BTOK_LABEL, id);
             }
 
             return make_str_tok(lex, BTOK_ID, id);
