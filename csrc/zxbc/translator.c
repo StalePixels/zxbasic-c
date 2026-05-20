@@ -2408,20 +2408,89 @@ static AstNode *tr_visit_read(Visitor *v, AstNode *node) {
 
     /* :506-529  store the read value. */
     if (tgt && tgt->tag == AST_ARRAYACCESS) {
-        /* :506-527  array-element store. Python computes arr.offset /
-         * arr.scope then ic_astore/ic_pastore/ic_store/ic_pstore. The C
-         * AST_ARRAYACCESS scope/offset model and the ic_astore/ic_pastore
-         * byte backend are the array-IC sprint's domain — exactly the
-         * boundary tr_visit_letarray draws ("the dedicated array-store IC
-         * is out of scope; the existing array sprints own ARRAYACCESS").
-         * Python's first action when arr.offset is None is `yield arr`
-         * (visit the access so the index codegen runs); reproduce that
-         * generic descent. The READ runtime call above IS emitted (READ
-         * semantics are not stubbed); only the element store-back is
-         * deferred to the array sprint. The lone corpus fixture that
-         * reaches here (read4) is Phase-7-runtime-#include-gated → no
-         * meter movement either way. */
-        visitor_generic(v, tgt);
+        /* :506-527  array-element store-back of the __READ result.  This
+         * mirrors visit_LETARRAY's dynamic store branch (translator.py
+         * :334-342, ported at translator.c LETARRAY around the
+         * AST_ARRAYACCESS / offset_is_none path).  Python's translator.py
+         * :511-519:
+         *   t = optemps.new_t()
+         *   if arr.offset is None:
+         *       yield arr                              # push indices
+         *       global    : ic_astore (type_, entry.mangled, t)
+         *       parameter : ic_pastore(type_, entry.offset, t)
+         *       local     : ic_pastore(type_, -entry.offset, t)
+         *   else:                                      # const offset
+         *       global    : ic_store  (type_, "name + N", t)
+         *       parameter : ic_pstore (type_, entry.offset - N, t)
+         *       local     : ic_pstore (type_, -(entry.offset - N), t)
+         * `t` is the read value — there is no RHS expression to visit.
+         * Faithful to visit_LETARRAY's existing arr.offset-is-None
+         * resolution (param-scope OR'd in: arrayaccess.py:77-78 returns
+         * None when scope == SCOPE.parameter). */
+        AstNode *aent = tgt->child_count > 0 ? tgt->children[0] : NULL;
+        bool a_global = aent && aent->tag == AST_ID &&
+                        aent->u.id.scope == SCOPE_global;
+        bool a_param  = aent && aent->tag == AST_ID &&
+                        aent->u.id.scope == SCOPE_parameter;
+        bool a_local  = aent && aent->tag == AST_ID &&
+                        aent->u.id.scope == SCOPE_local;
+        long a_eoff = aent ? aent->u.id.offset : 0;
+        char *t = compiler_new_temp(cs);
+        bool offset_is_none = !tgt->u.arrayaccess.is_const || a_param;
+
+        if (offset_is_none) {
+            /* Python wraps the parsed ARRAYLOAD target in a fresh
+             * SymbolARRAYACCESS (zxbparser.py:1821-1828): the write-side
+             * shape that visit_ARRAYACCESS (translator.py:448-449)
+             * resolves to `yield node.arglist` only — push the index
+             * values, NO aload.  The C parser only ever builds the
+             * is_load=true ARRAYACCESS for an expression-context
+             * subscript (parser.c:1060) and the READ statement reuses
+             * that node, so a plain visitor_visit here would dispatch
+             * to the is_load branch and emit a __LOADF/__LOAD readback
+             * we don't want.  Replicate the non-load arm directly
+             * (translator.c:2908-2912 — push children in reverse). */
+            for (int i = tgt->child_count - 1; i >= 1; i--)
+                visitor_visit(v, tgt->children[i]);
+            if (a_global) {
+                tr_ic_astore(tr, tgt->type_,
+                             aent->u.id.mangled ? aent->u.id.mangled : "",
+                             t);
+            } else if (a_param) {
+                char ofs[24];
+                snprintf(ofs, sizeof(ofs), "*%ld", a_eoff);
+                tr_ic_pastore(tr, tgt->type_, ofs, t);
+            } else if (a_local) {
+                char ofs[24];
+                snprintf(ofs, sizeof(ofs), "%ld", -a_eoff);
+                tr_ic_pastore(tr, tgt->type_, ofs, t);
+            } else {
+                /* Unknown scope — fall back to generic descent (preserve
+                 * pre-port behaviour for any case the array-store IC
+                 * doesn't yet cover; never silently swallow). */
+                visitor_generic(v, tgt);
+            }
+        } else {
+            /* Constant offset (:520-527).  name = arr.entry.data_label. */
+            long aoff = tgt->u.arrayaccess.offset;
+            if (a_global) {
+                const char *name = tr_array_data_label(tr, aent);
+                size_t need = strlen(name) + 32;
+                char *addr = arena_alloc(&tr->cs->arena, need);
+                snprintf(addr, need, "%s + %ld", name, aoff);
+                tr_ic_store(tr, tgt->type_, addr, t);
+            } else if (a_param) {
+                char ofs[24];
+                snprintf(ofs, sizeof(ofs), "%ld", a_eoff - aoff);
+                tr_ic_pstore(tr, tgt->type_, ofs, t);
+            } else if (a_local) {
+                char ofs[24];
+                snprintf(ofs, sizeof(ofs), "%ld", -(a_eoff - aoff));
+                tr_ic_pstore(tr, tgt->type_, ofs, t);
+            } else {
+                visitor_generic(v, tgt);
+            }
+        }
     } else if (tgt) {
         /* :529  emit_var_assign(node.args[0], t=optemps.new_t()) */
         tr_emit_var_assign(tr, tgt, compiler_new_temp(cs));

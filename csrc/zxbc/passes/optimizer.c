@@ -118,6 +118,7 @@ typedef VEC(AstNode *) AstPtrVec;
 typedef struct {
     AstPtrVec visited;  /* UniqueVisitor.self.visited (node identity) */
     AstNode *nop;       /* shared NOP for all prunes (Python self.NOP) */
+    bool bound_status_changed; /* any in-visit opt_bound_status_helper flip */
 } OptCtx;
 
 static bool ptr_seen_or_add(AstPtrVec *set, AstNode *n) {
@@ -549,17 +550,22 @@ static AstNode *opt_param_body_sym(const AstNode *callee, const char *pname) {
  * shared symbol-table node VarTranslator.visit_ARRAYDECL reads
  * (var_translator.c:496-505) — so the descriptor's __LBOUND__/__UBOUND__
  * slot + trailing bound table now emit for lbound13's global _x. */
-static void opt_bound_status_helper(AstNode *node) {
+/* Returns true if any flag was newly set (lbound_used / ubound_used /
+ * is_dynamically_accessed) on any argument array entry.  Caller uses this
+ * to drive the post-pass fixed-point iteration that mirrors Python's
+ * transitive `requires` graph propagation (symbol_.py:50-58). */
+static bool opt_bound_status_helper_changed(AstNode *node) {
+    bool changed = false;
     if (!node || node->child_count < 2)
-        return;
+        return false;
     AstNode *callee = node->children[0];
     AstNode *arglist = node->children[1];
     if (!callee || callee->tag != AST_ID || !arglist ||
         arglist->tag != AST_ARGLIST)
-        return;
+        return false;
     AstNode *params = callee->u.id.params;
     if (!params || params->tag != AST_PARAMLIST)
-        return;
+        return false;
 
     int zipn = arglist->child_count < params->child_count
                    ? arglist->child_count : params->child_count;
@@ -584,10 +590,14 @@ static void opt_bound_status_helper(AstNode *node) {
             continue;
         /* _update_bound_status: arg_ref.lbound_used |= p.ref.lbound_used;
          *                       arg_ref.ubound_used |= p.ref.ubound_used */
-        if (psym->u.id.lbound_used)
+        if (psym->u.id.lbound_used && !argval->u.id.lbound_used) {
             argval->u.id.lbound_used = true;
-        if (psym->u.id.ubound_used)
+            changed = true;
+        }
+        if (psym->u.id.ubound_used && !argval->u.id.ubound_used) {
             argval->u.id.ubound_used = true;
+            changed = true;
+        }
         /* call.py:49-55 propagation of is_dynamically_accessed. Python
          * does this at CALL construction (FuncRef args/params zipped).
          * The C symbol-table construction does not see the param body's
@@ -598,9 +608,17 @@ static void opt_bound_status_helper(AstNode *node) {
          * caller `test array` then must propagate that onto the global
          * `array` so var_translator (var_translator.c:521) emits the
          * `_array.__LBOUND__` descriptor slot + label. */
-        if (psym->u.id.is_dynamically_accessed)
+        if (psym->u.id.is_dynamically_accessed &&
+            !argval->u.id.is_dynamically_accessed) {
             argval->u.id.is_dynamically_accessed = true;
+            changed = true;
+        }
     }
+    return changed;
+}
+
+static void opt_bound_status_helper(AstNode *node) {
+    (void)opt_bound_status_helper_changed(node);
 }
 
 /* ----------------------------------------------------------------
@@ -616,7 +634,8 @@ static AstNode *opt_visit_call(Visitor *v, AstNode *node) {
         return node;
     if (node->child_count > 1)
         node->children[1] = visitor_visit(v, node->children[1]);
-    opt_bound_status_helper(node);
+    if (opt_bound_status_helper_changed(node))
+        c->bound_status_changed = true;
     return node;
 }
 
@@ -903,6 +922,61 @@ static AstNode *opt_visit_for(Visitor *v, AstNode *node) {
  * (capture §1 / mismatch #3). VariableVisitor (post-490) is NOT
  * Phase-2 pass 3 — out of scope (capture §1 / mismatch #5). */
 
+/* Post-pass collector: gather all AST_CALL/AST_FUNCCALL and AST_FUNCDECL
+ * nodes (depth-first, unique). The fixed-point bound-status sweep needs
+ * to re-touch every call node after the main visit, and the
+ * locals_size recompute walks every funcdecl. */
+static void opt_collect_calls_decls(AstNode *n, AstPtrVec *calls,
+                                    AstPtrVec *decls, AstPtrVec *seen) {
+    if (!n) return;
+    if (ptr_seen_or_add(seen, n)) return;
+    if (n->tag == AST_CALL || n->tag == AST_FUNCCALL)
+        vec_push(*calls, n);
+    if (n->tag == AST_FUNCDECL)
+        vec_push(*decls, n);
+    /* Do NOT descend into AST_ID children — they are symbol-table nodes
+     * shared across uses; descending hits cycles via funcref->body
+     * cycling through the same nodes.  The function bodies are reachable
+     * from AST_FUNCDECL->children[2] (body) without traversing the ID. */
+    for (int i = 0; i < n->child_count; i++) {
+        AstNode *c = n->children[i];
+        if (!c) continue;
+        if (n->tag == AST_FUNCDECL && i == 0) continue; /* skip entry ID */
+        opt_collect_calls_decls(c, calls, decls, seen);
+    }
+}
+
+/* Post-pass locals_size recompute for a single FUNCDECL.  Mirrors
+ * Python optimize.py:486-489's `arg.scope_ref.owner.locals_size =
+ * compute_offsets(arg.scope_ref)` side-effect of _update_bound_status:
+ * when a LOCAL CLASS_array's lbound_used/ubound_used flips during
+ * optimization, its memsize (arrayref.py:230-233: ptr_size *
+ * (3 + ubound_used)) changes, and the function's frame size with it.
+ * The C parser computed locals_size at end-of-body when those flags
+ * were still false; recompute now using a synthetic Scope_ whose
+ * `ordered` is the FUNCDECL's captured local_entries (parser.c:5189-
+ * 5194, same source compute_offsets used at parse time). */
+static void opt_recompute_locals_size(CompilerState *cs, AstNode *decl) {
+    if (!decl || decl->tag != AST_FUNCDECL || decl->child_count < 1)
+        return;
+    AstNode *entry = decl->children[0];
+    if (!entry || entry->tag != AST_ID)
+        return;
+    if (entry->u.id.local_entries_count <= 0)
+        return;
+    /* fastcall functions emit ic_enter("__fastcall__") and ignore
+     * local_size; skip them (translator.c:4046-4053). */
+    if (entry->u.id.convention == CONV_fastcall)
+        return;
+    Scope_ syn;
+    memset(&syn, 0, sizeof(syn));
+    syn.ordered = entry->u.id.local_entries;
+    syn.ordered_count = entry->u.id.local_entries_count;
+    int new_size = symboltable_compute_offsets(cs->symbol_table, &syn,
+                                               cs->opts.optimization_level);
+    entry->u.id.local_size = new_size;
+}
+
 void optimizer_run(CompilerState *cs, AstNode *ast) {
     /* Master O-gate — Python visit() override (optimize.py:201-205):
      * at O0 every node is returned unvisited ⇒ the whole pass is a
@@ -916,6 +990,7 @@ void optimizer_run(CompilerState *cs, AstNode *ast) {
     OptCtx ctx;
     vec_init(ctx.visited);
     ctx.nop = ast_new(cs, AST_NOP, ast ? ast->lineno : 0);
+    ctx.bound_status_changed = false;
     v.ctx = &ctx;
 
     visitor_on_tag(&v, AST_UNARY, opt_visit_unary);
@@ -934,6 +1009,53 @@ void optimizer_run(CompilerState *cs, AstNode *ast) {
     visitor_on_sentence(&v, "FOR", opt_visit_for);
 
     visitor_visit(&v, ast);
+
+    /* ----------------------------------------------------------------
+     * Post-pass: transitive `requires`-graph closure of
+     * _update_bound_status (api/optimize.py:471-489, driven by
+     * symbol_.py:50-58 add_required_symbol's transitive update through
+     * `other.requires`).  The single in-order visit above only
+     * propagates one CALL deep — when a CALL's argval depends on a
+     * param whose body symbol itself only gains its bound flags via a
+     * NESTED CALL visited LATER (test3->test2->test1 pattern of
+     * ubound11/12 / lbound12), the outer arg never sees the flag.
+     *
+     * The C has no symbol-graph `requires` field, so emulate it by
+     * iterating opt_bound_status_helper_changed over every CALL/FUNCCALL
+     * in the AST until no flag changes (monotonic: flags only flip
+     * false->true, bounded by 3*|args|).  Then refresh the LOCALS_SIZE
+     * on every FUNCDECL whose local CLASS_array's just gained lbound/
+     * ubound (Python's "if scope == local and not byref: locals_size =
+     * compute_offsets(scope_ref)" side-effect of _update_bound_status).
+     * Globals do not need re-anything: var_translator reads the flag
+     * directly when emitting the ARRAYDECL descriptor.
+     * ---------------------------------------------------------------- */
+    AstPtrVec calls;     vec_init(calls);
+    AstPtrVec decls;     vec_init(decls);
+    AstPtrVec coll_seen; vec_init(coll_seen);
+    opt_collect_calls_decls(ast, &calls, &decls, &coll_seen);
+
+    bool any_changed = ctx.bound_status_changed;
+    bool changed = true;
+    int safety = 0;
+    while (changed && safety++ < 1024) {
+        changed = false;
+        for (int i = 0; i < calls.len; i++) {
+            if (opt_bound_status_helper_changed(calls.data[i])) {
+                changed = true;
+                any_changed = true;
+            }
+        }
+    }
+
+    if (any_changed) {
+        for (int i = 0; i < decls.len; i++)
+            opt_recompute_locals_size(cs, decls.data[i]);
+    }
+
+    vec_free(calls);
+    vec_free(decls);
+    vec_free(coll_seen);
 
     vec_free(ctx.visited);
 }
