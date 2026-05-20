@@ -1043,10 +1043,14 @@ AstNode *make_unary_node(CompilerState *cs, const char *operator, AstNode *opera
                          int lineno) {
     if (!operand) return NULL;
 
-    /* Constant folding for MINUS */
+    /* Constant folding for MINUS — src/symbols/unary.py:67-69 returns a
+     * fresh SymbolNUMBER(func(value)) whose type_ is re-inferred from the
+     * NEW value (the SymbolNUMBER ctor auto-types). Just flipping the
+     * sign in place keeps the OLD type — so MINUS(NUMBER(1) as ubyte)
+     * stays ubyte instead of becoming byte, mistyping DATA -1 (readokup
+     * / readokdown DEFB 3 vs 2) and any downstream TSUFFIX-keyed quad. */
     if (strcmp(operator, "MINUS") == 0 && operand->tag == AST_NUMBER) {
-        operand->u.number.value = -operand->u.number.value;
-        return operand;
+        return ast_number(cs, -operand->u.number.value, lineno);
     }
 
     /* Constant folding for NOT */

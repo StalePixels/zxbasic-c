@@ -105,5 +105,8 @@ bool z80h_int32(const char *op, unsigned *de, unsigned *hl);
 /* src/api/fp.py immediate_float(x): the ZX 40-bit FP (C, ED, LH) hex
  * operand triple ("0XXh"/"0XXXXh"). Each buffer must hold >= 8 bytes. */
 void z80h_immediate_float(double x, char *C, char *ED, char *LH);
+/* Python's repr/str(float) — shortest decimal that round-trips through
+ * float(). Buffer must hold >= 32 bytes. */
+void z80h_pyfloat_repr(double v, char *buf, int sz);
 
 #endif /* ZXBC_Z80ASM_H */

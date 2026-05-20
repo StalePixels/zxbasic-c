@@ -867,6 +867,10 @@ void z80h_immediate_float(double x, char *C, char *ED, char *LH) {
     snprintf(LH, 8,  "0%s%sh", hm2, hm3);
 }
 
+/* Python repr/str(float) — moved to pyfloat.c so the small test targets
+ * (test_ast/test_symboltable/test_check) need not link the rest of
+ * z80asm.c. */
+
 /* Bits32.int32(op): (int(op) & 0xFFFFFFFF) -> (DE=hi16, HL=lo16).
  * Python int(op) here is fed an integer-valued operand (is_int true) or,
  * for f16/f, a stringified packed int from f16_to_32bit — both decimal. */

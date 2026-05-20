@@ -41,6 +41,7 @@ target_sources(test_ast PRIVATE
     ${CMAKE_SOURCE_DIR}/zxbc/compiler.c
     ${CMAKE_SOURCE_DIR}/zxbc/options.c
     ${CMAKE_SOURCE_DIR}/zxbc/errmsg.c
+    ${CMAKE_SOURCE_DIR}/zxbc/pyfloat.c
 )
 add_test(NAME ast_tests COMMAND test_ast)
 
@@ -53,6 +54,7 @@ target_sources(test_symboltable PRIVATE
     ${CMAKE_SOURCE_DIR}/zxbc/compiler.c
     ${CMAKE_SOURCE_DIR}/zxbc/options.c
     ${CMAKE_SOURCE_DIR}/zxbc/errmsg.c
+    ${CMAKE_SOURCE_DIR}/zxbc/pyfloat.c
 )
 add_test(NAME symboltable_tests COMMAND test_symboltable)
 
@@ -65,6 +67,7 @@ target_sources(test_check PRIVATE
     ${CMAKE_SOURCE_DIR}/zxbc/compiler.c
     ${CMAKE_SOURCE_DIR}/zxbc/options.c
     ${CMAKE_SOURCE_DIR}/zxbc/errmsg.c
+    ${CMAKE_SOURCE_DIR}/zxbc/pyfloat.c
 )
 add_test(NAME check_tests COMMAND test_check)
 

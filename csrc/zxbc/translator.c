@@ -13,6 +13,7 @@
 #include "visitor.h"
 #include "ic.h"
 #include "errmsg.h"  /* S5.8d — err_no_data_defined (visit_READ/RESTORE) */
+#include "z80asm.h"  /* z80h_pyfloat_repr — Python str(float) round-trip */
 
 #include <stdio.h>
 #include <stdint.h>
@@ -179,10 +180,24 @@ static AstNode *tr_visit_number(Visitor *v, AstNode *node) {
     if (node->t == NULL) {
         double value = node->u.number.value;
         char buf[64];
-        if (value == (double)(int64_t)value)
+        /* Python NUMBER.t == str(self.value). For ints kept as Python int
+         * (HEXA/OCTAL/BIN, or where the lexer round-trips X.0 -> X) this
+         * is "X"; for floats it is the shortest-roundtrip decimal incl.
+         * the explicit ".0" on integer-valued floats. We approximate via
+         * the node's type_: int types -> "%lld", float/fixed -> shortest
+         * roundtrip (with "X.0" for integer-valued — matches str(1.0)
+         * == '1.0'). number-typed nodes from arithmetic constant-folding
+         * carry float type and so take the shortest-roundtrip branch
+         * (fixes fporder / read9 / readokup / readokdown PI bytes). */
+        TypeInfo *ty = node->type_;
+        TypeInfo *ft = (ty && ty->final_type) ? ty->final_type : ty;
+        bool is_float_repr =
+            ft && (ft->basic_type == TYPE_float ||
+                   ft->basic_type == TYPE_fixed);
+        if (!is_float_repr && value == (double)(int64_t)value)
             snprintf(buf, sizeof(buf), "%lld", (long long)(int64_t)value);
         else
-            snprintf(buf, sizeof(buf), "%g", value);
+            z80h_pyfloat_repr(value, buf, (int)sizeof(buf));
         Translator *tr = v->ctx;
         node->t = arena_strdup(&tr->cs->arena, buf);
     }

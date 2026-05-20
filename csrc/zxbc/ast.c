@@ -4,6 +4,7 @@
  * Ported from src/ast/tree.py, src/symbols/symbol_.py
  */
 #include "zxbc.h"
+#include "z80asm.h"  /* z80h_pyfloat_repr */
 #include <stdio.h>
 #include <string.h>
 
@@ -68,12 +69,19 @@ AstNode *ast_number(CompilerState *cs, double value, int lineno) {
         n->type_ = st->basic_types[TYPE_float];
     }
 
-    /* Set t to string representation of value */
+    /* Set t to string representation of value (Python str(value)).
+     * Type-aware: int types -> "%lld"; float/fixed -> Python's shortest
+     * roundtrip (incl. "X.0" for integer-valued floats). See
+     * tr_visit_number for the rationale. */
     char buf[64];
-    if (value == (int64_t)value)
+    bool is_float_repr =
+        n->type_ &&
+        (n->type_->basic_type == TYPE_float ||
+         n->type_->basic_type == TYPE_fixed);
+    if (!is_float_repr && value == (int64_t)value)
         snprintf(buf, sizeof(buf), "%lld", (long long)(int64_t)value);
     else
-        snprintf(buf, sizeof(buf), "%g", value);
+        z80h_pyfloat_repr(value, buf, (int)sizeof(buf));
     n->t = arena_strdup(&cs->arena, buf);
 
     return n;

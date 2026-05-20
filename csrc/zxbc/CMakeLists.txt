@@ -28,6 +28,7 @@ add_library(zxbc_parser_lib STATIC
     translator.c
     var_translator.c
     z80asm.c
+    pyfloat.c
     peephole/memcell.c
     peephole/pattern.c
     peephole/template.c
