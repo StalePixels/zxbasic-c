@@ -1063,6 +1063,35 @@ static AstNode *parse_call_or_array(Parser *p, const char *name, int lineno, boo
         return n;
     }
 
+    /* Python make_call (zxbparser.py:386-388):
+     *   if entry.class_ is CLASS.unknown and entry.type_ == TYPE.string
+     *      and len(args) == 1 and is_numeric(args[0]):
+     *       entry = entry.to_var()  # A scalar variable. e.g a$(expr)
+     *
+     * `<name>$(expr)` where <name>$ is undeclared: access_call's
+     * underlying access_id created a CLASS_unknown entry with
+     * type_=string (suffix-driven, compiler.c:1033-1042). With a single
+     * numeric arg, Python promotes it to a string scalar variable so
+     * make_call's CLASS_var-string branch (zxbparser.py:399-411) builds
+     * a STRSLICE.  Without this transition the C falls through to the
+     * generic FUNCCALL branch and the auto-declared string never lands
+     * in data_ast — the W101 `_character: DEFB 00, 00` storage row that
+     * Python emits is silently dropped (strsigil's S1-DIVERGE). The
+     * accessed=true that the STRSLICE READ branch will set (next block,
+     * expr_context gate) feeds VarTranslator.visit_VARDECL so the
+     * auto-declared global stays in data_ast at O>1. */
+    if (entry && entry->u.id.class_ == CLASS_unknown &&
+        type_is_string(entry->type_) &&
+        arglist->child_count == 1) {
+        AstNode *a0 = arglist->children[0];
+        AstNode *a0v = (a0 && a0->tag == AST_ARGUMENT && a0->child_count > 0)
+                          ? a0->children[0] : a0;
+        if (a0v && a0v->type_ && type_is_numeric(a0v->type_)) {
+            entry->u.id.class_ = CLASS_var;
+            entry->u.id.declared = true;
+        }
+    }
+
     if (entry && entry->u.id.class_ == CLASS_var && type_is_string(entry->type_)) {
         /* String slicing: name(expr).  S5.8a: STRSLICE-node construction
          * does NOT mark the string accessed in Python.  The substring
@@ -4121,6 +4150,23 @@ static AstNode *parse_dim_statement(Parser *p) {
             zxbc_error(p->cs, lineno, "Variable '%s' already declared at %s:%d",
                        name, p->cs->current_file, id_node->lineno);
         }
+        /* Python declare_variable (symboltable.py:501-510): if a prior
+         * forward reference (e.g. `@name` via p_addr_of_id -> access_id,
+         * default_class=CLASS.unknown) created a CLASS.unknown entry,
+         * declare_variable retrieves THE SAME entry and transitions it
+         * via to_var/to_const (_id.py:115-141), which PRESERVES the
+         * accessed flag (line 132/151). symboltable_declare here returns
+         * the shared entry; without the class transition the entry stays
+         * CLASS_unknown and the codegen data_ast filter
+         * (class_==CLASS_var) drops it — losing the `_a:` DEFB row
+         * (and the `_radians EQU _a` alias that traverse_const resolves
+         * through it). The accessed/has_address flags set by the prior
+         * @name access are already on this entry; we only need the class
+         * promotion + declared=true. (Faithful to declare_variable:529.) */
+        if (id_node->u.id.class_ == CLASS_unknown)
+            id_node->u.id.class_ = cls;
+        id_node->u.id.declared = true;
+        id_node->lineno = lineno;
         id_node->type_ = type;
         /* Python ID.t delegates to the ref: a global var's VarRef.t is
          * entry.mangled (varref.py:36-37). symboltable_declare (the
@@ -4137,6 +4183,7 @@ static AstNode *parse_dim_statement(Parser *p) {
          * dropped (CLAUDE.md rule 8): S5.3 added the data_ast drain, so
          * the init becomes entry.default_value and AT becomes entry.addr,
          * faithfully recovered by VarTranslator over data_ast. */
+        AstNode *deferred_let = NULL;
         if (init_expr) {
             /* p_var_decl_ini (zxbparser.py:707-711):
              *   value  = make_typecast(typedef, expr)
@@ -4147,8 +4194,36 @@ static AstNode *parse_dim_statement(Parser *p) {
             AstNode *value = make_typecast(p->cs, type, init_expr, lineno);
             bool stat = check_is_static(init_expr);
             bool is_str = value && type_is_string(value->type_);
-            if (stat && !is_str)
+            if (stat && !is_str) {
                 id_node->u.id.default_value_expr = value;
+            } else if (!is_const && value) {
+                /* p_var_decl_ini (zxbparser.py:722-728):
+                 *   if defval is None:  # delayed initialization
+                 *       p[0] = make_sentence("LET",
+                 *                  SYMBOL_TABLE.access_var(idlist[0].name,
+                 *                                          p.lineno(1)),
+                 *                  value)
+                 *
+                 * The init is non-static (RND/USR/IN/function call) so it
+                 * cannot be folded into entry.default_value; emit a LET
+                 * statement instead. The optimizer's visit_LET
+                 * (optimize.py:320-338, ported to passes/optimizer.c
+                 * collect_side_effects) extracts RND/IN/USR/FUNCCALL
+                 * side-effects when the lvalue is unused at O>1 so the
+                 * RND call (and runtime asm) is preserved in
+                 * `DIM a = int(rnd * 4)`.  String-typed init is also
+                 * routed here (defval=None when value.type_==string)
+                 * faithfully to Python.  CONST keyword has no LET path
+                 * (Python errors at :716 if value isn't static_str). */
+                AstNode *var = symboltable_access_var(
+                                   p->cs->symbol_table, p->cs,
+                                   decl_name, lineno, type);
+                if (var) {
+                    deferred_let = make_sentence_node(p, "LET", lineno);
+                    ast_add_child(p->cs, deferred_let, var);
+                    ast_add_child(p->cs, deferred_let, value);
+                }
+            }
         }
         if (at_expr) {
             /* p_var_decl_at (zxbparser.py:672-682) — the three-way branch:
@@ -4201,7 +4276,7 @@ static AstNode *parse_dim_statement(Parser *p) {
                 id_node->u.id.accessed = true; /* mark_entry_as_accessed */
             }
         }
-        return NULL;
+        return deferred_let;
     }
 
     /* Multiple vars. Symbols are registered regardless; a bare multi-var
