@@ -4074,13 +4074,20 @@ static const char *tr_traverse_const(Translator *tr, AstNode *node) {
 
     if (node->tag == AST_ID) {
         /* :233-235 CONST/VAR/LABEL/FUNCTION -> node.t.  A CLASS_label
-         * entry's LabelRef.t == parent.mangled == ".LABEL._<name>"
-         * (labelref.py:20,34). The C symbol-table label entry carries
-         * the plain MANGLE_CHR mangled ("_<name>"); compute the
-         * LabelRef-mangled form exactly as visit_GOTO/LABEL do via
-         * tr_label_mangled. */
-        if (node->u.id.class_ == CLASS_label)
+         * entry's LabelRef.t == parent.mangled (labelref.py:20,34).
+         * For normal user labels parent.mangled == ".LABEL._<name>";
+         * for the root-global '.'-prefixed labels (LOAD/SAVE DATA's
+         * .core.ZXBASIC_USER_DATA{,_LEN} and the .core.__START_PROGRAM
+         * family), declare_label (symboltable.py:616-618) keeps the
+         * verbatim id_ as mangled — Python emits the dotted name
+         * unchanged. So: if the parser stamped node->t (which the
+         * '.'-prefixed access_label path does, after writing the
+         * dotted mangled), trust that; else fall back to the
+         * .LABEL._<name> form built by tr_label_mangled. */
+        if (node->u.id.class_ == CLASS_label) {
+            if (node->t != NULL) return node->t;
             return tr_label_mangled(tr, node);
+        }
         /* CONST id -> its ConstRef.t (the resolved value string). */
         if (node->u.id.class_ == CLASS_const)
             return node->t ? node->t
