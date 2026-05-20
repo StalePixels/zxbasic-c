@@ -245,6 +245,27 @@ static const char *vt_traverse_const_expr(Translator *tr, AstNode *node) {
         return out;
     }
 
+    /* translator_visitor.py:242-243 — ARRAYACCESS:
+     *   return f"({entry.data_label} + {offset})"
+     * arrconst.bas: `DIM p = @a(0,0)` wraps UNARY(ADDRESS, ARRAYACCESS)
+     * in CONSTEXPR (zxbparser:700-702: `not is_static -> wrap UNARY`),
+     * and var_translator's CONSTEXPR-default-value branch routes through
+     * traverse_const. The ADDRESS arm above recurses into operand, so
+     * an ARRAYACCESS lands here. Use the same `(data_label + offset)`
+     * shape Python emits — peephole-folds to a static address. */
+    if (node->tag == AST_ARRAYACCESS) {
+        AstNode *entry = node->child_count > 0 ? node->children[0] : NULL;
+        const char *mangled = (entry && entry->u.id.mangled)
+                                  ? entry->u.id.mangled : "";
+        size_t ml = strlen(mangled);
+        char *dlabel = arena_alloc(&tr->cs->arena, ml + 10);
+        snprintf(dlabel, ml + 10, "%s.__DATA__", mangled);
+        long off = (long)node->u.arrayaccess.offset;
+        char *out = arena_alloc(&tr->cs->arena, ml + 32);
+        snprintf(out, ml + 32, "(%s + %ld)", dlabel, off);
+        return out;
+    }
+
     fprintf(stderr,
             "zxbc: traverse_const unhandled node tag=%d\n", (int)node->tag);
     return node->t ? node->t : "";
@@ -680,8 +701,16 @@ static void vt_visit_vardecl(Translator *tr, AstNode *node) {
 
     AstNode *dv = entry->u.id.default_value_expr;
     if (dv->tag == AST_CONSTEXPR) {
+        /* Python var_translator.py:41 — traverse_const(default_value).
+         * Python's traverse_const is the FULL recursive walk
+         * (translator_visitor.py:177-246). The leaf-only vt_traverse_const
+         * fails past the CONSTEXPR wrapper for shapes like @a(0,0)
+         * (UNARY ADDRESS / ARRAYACCESS), emitting an empty operand.
+         * Use the recursive vt_traverse_const_expr — same call array
+         * var_translator already uses for ic_varx default values, so the
+         * scalar leaf cases (NUMBER/CONST) stay byte-identical. */
         char *one[1];
-        one[0] = (char *)vt_traverse_const(tr, dv);
+        one[0] = (char *)vt_traverse_const_expr(tr, dv);
         vt_ic_varx(tr, entry->u.id.mangled, entry->type_, one, 1);
         return;
     }

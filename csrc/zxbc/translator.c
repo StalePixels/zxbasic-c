@@ -1009,19 +1009,25 @@ static AstNode *tr_visit_argument(Visitor *v, AstNode *node) {
         return node;
     }
 
-    /* ByRef. :229-248 non-array byref: address of the argument. The
-     * global arm (`:236-237` ic_load(uinteger,t,"#"+mangled)) is exact;
-     * the parameter/local arms (`:238-245`) read node.value.offset (the
-     * inside-function stack model S5.7b defers) — loud residue + the
-     * faithful global-shaped fallback (never wrong code). */
+    /* ByRef. :229-248 non-array byref: address of the argument.
+     * Python (:231-234): t = node.t if node.t[0] != "_" else optemps.new_t().
+     * For a global-VAR byref ARGUMENT, node.t == value.t == mangled
+     * ("_name") which starts with "_" → Python ALWAYS mints a fresh temp.
+     * If t is left as the mangled name, the load IC's destination is the
+     * mangled global label itself, so ic_load(PTR,"_v","#_v") lowers as
+     * ld hl,_v / ld (_v),hl and the following ic_param("_v") then emits
+     * ld hl,(_v); push hl — i.e. the extra value-deref byrefbyref.bas
+     * exhibits. Mint a fresh temp like Python. (Also fixes the
+     * parameter/local arm below which already used the correct check.) */
     if (value && value->tag == AST_ID && value->u.id.scope == SCOPE_global) {
         const char *mg = value->u.id.mangled ? value->u.id.mangled : "";
         size_t ml = strlen(mg);
         char *hm = arena_alloc(&tr->cs->arena, ml + 2);
         hm[0] = '#';
         memcpy(hm + 1, mg, ml + 1);
-        const char *t = (value->t && value->t[0]) ? value->t
-                       : compiler_new_temp(tr->cs);
+        const char *nt = node->t;
+        const char *t = (nt && nt[0] && nt[0] != '_')
+                       ? nt : compiler_new_temp(tr->cs);
         tr_ic_load(tr, uint_t, t, hm);          /* :237 */
         tr_ic_param(tr, uint_t, t);             /* :247 */
         return node;

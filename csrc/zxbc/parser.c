@@ -4310,14 +4310,31 @@ static AstNode *parse_dim_statement(Parser *p) {
          * faithfully recovered by VarTranslator over data_ast. */
         AstNode *deferred_let = NULL;
         if (init_expr) {
-            /* p_var_decl_ini (zxbparser.py:707-711):
+            /* p_var_decl_ini (zxbparser.py:700-711):
+             *   if not is_static(expr):
+             *       if isinstance(expr, sym.UNARY):
+             *           expr = make_constexpr(p.lineno(4), expr)
              *   value  = make_typecast(typedef, expr)
              *   defval = value if is_static(expr) and value.type_ != string
              *   declare_variable(..., default_value=defval)
-             * is_static() tests the ORIGINAL expr; defval is the cast value.
-             * (Implicit-typedef→expr.type_ already applied above, :2215.) */
-            AstNode *value = make_typecast(p->cs, type, init_expr, lineno);
-            bool stat = check_is_static(init_expr);
+             *
+             * The UNARY→CONSTEXPR wrap (zxbparser.py:700-702) is what
+             * makes a `DIM p = @a(0,0)` (UNARY ADDRESS of ARRAYACCESS) go
+             * static + emit `DEFW (_a.__DATA__ + 0)` at compile time
+             * instead of falling through to a delayed LET that emits a
+             * runtime __ARRAY call. Mirror the wrap here so the
+             * downstream is_static / default_value branch matches Python.
+             * arrconst.bas covers exactly this shape. */
+            AstNode *expr_for_default = init_expr;
+            if (!check_is_static(init_expr) && init_expr->tag == AST_UNARY) {
+                AstNode *ce = ast_new(p->cs, AST_CONSTEXPR, lineno);
+                ast_add_child(p->cs, ce, init_expr);
+                ce->type_ = init_expr->type_;
+                ce->t = init_expr->t;
+                expr_for_default = ce;
+            }
+            AstNode *value = make_typecast(p->cs, type, expr_for_default, lineno);
+            bool stat = check_is_static(expr_for_default);
             bool is_str = value && type_is_string(value->type_);
             if (stat && !is_str) {
                 id_node->u.id.default_value_expr = value;

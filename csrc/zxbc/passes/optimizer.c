@@ -530,6 +530,18 @@ static void opt_bound_status_helper(AstNode *node) {
             argval->u.id.lbound_used = true;
         if (psym->u.id.ubound_used)
             argval->u.id.ubound_used = true;
+        /* call.py:49-55 propagation of is_dynamically_accessed. Python
+         * does this at CALL construction (FuncRef args/params zipped).
+         * The C symbol-table construction does not see the param body's
+         * arrayaccess (set on `arr` only after the SUB body is parsed),
+         * so the propagation is mechanised here alongside the bound-
+         * status helper. array13.bas: SUB test(arr() As UByte) does
+         * arr(i) with variable i → is_dynamically_accessed set on `arr`;
+         * caller `test array` then must propagate that onto the global
+         * `array` so var_translator (var_translator.c:521) emits the
+         * `_array.__LBOUND__` descriptor slot + label. */
+        if (psym->u.id.is_dynamically_accessed)
+            argval->u.id.is_dynamically_accessed = true;
     }
 }
 
