@@ -1460,7 +1460,19 @@ static void handle_line_directive(PreprocState *pp, const char *rest)
         preproc_error(pp, "expected line number after #line");
         return;
     }
-    pp->current_line = (int)num - 1; /* -1 because it will be incremented */
+    /* Bug C: Python's PLY lex bumps lineno BOTH on INTEGER inside `line`
+     * state (sets lineno=N) AND on the directive's terminating NEWLINE
+     * (lineno += 1) — net effect after a `#line N` directive: lineno =
+     * N + 1. The C process_line loop's post-line `pp->current_line++`
+     * accounts for the NEWLINE bump that follows the directive itself,
+     * so setting current_line = N here (not N-1) leaves it at N+1 after
+     * the post-++; matching Python's "next content line is at N+1"
+     * semantics. The originating `#line N` directives Python emits are
+     * still byte-identical (the directive value N is preserved on
+     * re-emission, preproc.c:1729) — only downstream lineno tracking
+     * shifts to match Python, fixing the trailing-`#line` after-include
+     * off-by-one (print42/print64 / Bug C). */
+    pp->current_line = (int)num;
 
     p = skip_ws(end);
     if (*p == '"') {

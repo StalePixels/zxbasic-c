@@ -1920,7 +1920,21 @@ static AstNode *tr_visit_unary(Visitor *v, AstNode *node) {
         return node;
     }
     if (strcmp(opr, "ADDRESS") == 0) {
-        Scope scope = operand ? operand->u.id.scope : SCOPE_global;
+        /* Bug B: Python `node.operand.scope` reads SCOPE off the OPERAND.
+         * When the operand is an ARRAYACCESS, SymbolARRAYACCESS.scope
+         * delegates to entry.scope (arrayaccess.py). The C union has no
+         * scope on AST_ARRAYACCESS — reading `operand->u.id.scope` when
+         * `operand->tag == AST_ARRAYACCESS` aliases the wrong variant
+         * (always falls in SCOPE_global / undefined). Use the entry ID
+         * (children[0]) scope in that case. */
+        Scope scope;
+        if (operand && operand->tag == AST_ARRAYACCESS) {
+            AstNode *eid = operand->child_count > 0 ? operand->children[0]
+                                                    : NULL;
+            scope = eid ? eid->u.id.scope : SCOPE_global;
+        } else {
+            scope = operand ? operand->u.id.scope : SCOPE_global;
+        }
         if (operand && operand->tag == AST_ARRAYACCESS) {
             /* visit_ADDRESS (unary_op_translator.py:29-37): `yield
              * node.operand`. Python's @array always wraps a freshly

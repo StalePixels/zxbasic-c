@@ -106,6 +106,7 @@
 #include "arena.h"
 
 #include <stdbool.h>
+#include <stdio.h>
 #include <string.h>
 
 /* Single named vector type (VEC(T) is an anonymous struct — see
@@ -235,20 +236,77 @@ static bool addr_operand_is_dynamic(const AstNode *op) {
  * `not chk.is_dynamic(operand)` — i.e. iff the operand is global-scope
  * (or non-ID/unscoped); a non-global-scoped ID is is_dynamic ⇒ NOT
  * wrapped (faithful to Python's short-circuit, see file header).
- * ARRAYACCESS operand: Python needs operand.offset (a cached_property
- * the C AST does not carry) ⇒ the constant-offset rewrite branch is
- * never reachable; fall through to the node unchanged. No recurse
- * (Python does not call generic_visit here).
+ *
+ * ARRAYACCESS operand with const offset & global scope (Bug A): Python
+ * rewrites @arr(c1,c2,...) into BINARY(PLUS,
+ *   UNARY("ADDRESS", entry, type_=PTR_TYPE),
+ *   NUMBER(offset, type_=PTR_TYPE)).
+ * The C AST DOES carry `arrayaccess.offset` / `arrayaccess.is_const`
+ * (zxbc.h:314-323, parser.c:3804-3846 compute_arrayaccess_offset). For
+ * the rewrite to produce the right asm (`ld hl, _<arr>.__DATA__; ld de,
+ * N; add hl, de`) we need the UNARY-ADDRESS scalar branch
+ * (translator.c:1956) to see `operand->t == "_<arr>.__DATA__"` — the
+ * data_label, which is Python's ArrayRef.t for a global array
+ * (arrayref.py:69-78). The C array entry's .t is unset, so build a
+ * detached scalar-shaped AST_ID with .t set to the data_label here.
+ * The original entry in the symbol table is untouched.
+ *
+ * Parameter / local array offsets are None in Python (parameter array
+ * is never constant-foldable, arrayaccess.py:77-78; the C parser
+ * mirrors that, parser.c:3811-3812), so this branch only fires for
+ * global arrays.
  * ---------------------------------------------------------------- */
+static AstNode *opt_visit_address_array_const_global(
+        Visitor *v, AstNode *node, AstNode *acc) {
+    AstNode *entry = acc->child_count > 0 ? acc->children[0] : NULL;
+    if (!entry || entry->tag != AST_ID || !entry->u.id.mangled)
+        return node;
+    CompilerState *cs = v->cs;
+    TypeInfo *ptr_t = cs->symbol_table->basic_types[TYPE_uinteger];
+
+    /* Detached scalar-shaped AST_ID with t = "_<mangled>.__DATA__".
+     * Reuses name/mangled (shared via arena) but is otherwise fresh: the
+     * UNARY-ADDRESS scalar branch reads only .scope/.t (translator.c
+     * :1957-1962), so this carries exactly the data_label string. */
+    AstNode *scalar = ast_new(cs, AST_ID, node->lineno);
+    scalar->u.id.name = entry->u.id.name;
+    scalar->u.id.mangled = entry->u.id.mangled;
+    scalar->u.id.class_ = CLASS_var;
+    scalar->u.id.scope = SCOPE_global;
+    scalar->u.id.declared = true;
+    scalar->u.id.has_address = true;
+    scalar->type_ = ptr_t;
+    size_t ml = strlen(entry->u.id.mangled);
+    char *dlabel = arena_alloc(&cs->arena, ml + 10);
+    snprintf(dlabel, ml + 10, "%s.__DATA__", entry->u.id.mangled);
+    scalar->t = dlabel;
+
+    AstNode *u = make_unary_node(cs, "ADDRESS", scalar, node->lineno);
+    if (!u) return node;
+    u->type_ = ptr_t;
+
+    AstNode *num = ast_number(cs, (double)acc->u.arrayaccess.offset,
+                              acc->lineno);
+    if (!num) return node;
+    num->type_ = ptr_t;
+
+    AstNode *plus = make_binary_node(cs, "PLUS", u, num, node->lineno, ptr_t);
+    return plus ? plus : node;
+}
+
 static AstNode *opt_visit_address(Visitor *v, AstNode *node) {
     AstNode *operand = node->child_count > 0 ? node->children[0] : NULL;
     if (operand && operand->tag != AST_ARRAYACCESS) {
         if (!addr_operand_is_dynamic(operand))
             node = make_constexpr(v->cs, node, node->lineno);
+    } else if (operand && operand->u.arrayaccess.is_const) {
+        AstNode *entry = operand->child_count > 0 ? operand->children[0]
+                                                  : NULL;
+        if (entry && entry->tag == AST_ID &&
+            entry->u.id.scope == SCOPE_global) {
+            node = opt_visit_address_array_const_global(v, node, operand);
+        }
     }
-    /* elif operand.offset is not None: structurally unavailable in the
-     * C AST (offset is a Python cached_property) ⇒ treated as None ⇒
-     * branch not taken. */
     return node;
 }
 
