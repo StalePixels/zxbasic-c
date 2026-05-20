@@ -363,6 +363,12 @@ struct AstNode {
         /* AST_ASM */
         struct {
             char *code;       /* inline assembly text */
+            char *filename;   /* node.filename (zxbparser:255, gl.FILENAME at
+                               * construction). Used by visit_ASM to emit
+                               * the surrounding `#line N "filename"`
+                               * directives — must reflect the file that
+                               * actually contained the ASM block, including
+                               * #include'd files (tap_include_asm_error). */
         } asm_block;
 
         /* AST_CONSTEXPR: child[0] = the constant expression */

@@ -1526,7 +1526,14 @@ static AstNode *tr_visit_circle(Visitor *v, AstNode *node) {
  * count is len(split("\n")) == (#newlines)+1. */
 static AstNode *tr_visit_asm(Visitor *v, AstNode *node) {
     Translator *tr = v->ctx;
-    const char *fn = tr->cs->current_file ? tr->cs->current_file : "";
+    /* Use node->filename (snapshot at parse time of gl.FILENAME) so the
+     * emitted `#line N "..."` reflects the file that contained the ASM
+     * block — including #include'd files
+     * (tap_include_asm_error → extra_chars.bas). Fall back to
+     * cs->current_file if the node has no filename for some reason. */
+    const char *fn = node->u.asm_block.filename
+                       ? node->u.asm_block.filename
+                       : (tr->cs->current_file ? tr->cs->current_file : "");
     const char *code = node->u.asm_block.code ? node->u.asm_block.code : "";
     int nlines = 1;
     for (const char *s = code; *s; s++) if (*s == '\n') nlines++;

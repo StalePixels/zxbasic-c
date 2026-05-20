@@ -187,6 +187,15 @@ static AstNode *make_block_node(Parser *p, int lineno) {
 static AstNode *make_asm_node(Parser *p, const char *code, int lineno) {
     AstNode *n = ast_new(p->cs, AST_ASM, lineno);
     n->u.asm_block.code = arena_strdup(&p->cs->arena, code);
+    /* Capture node.filename at construction (zxbparser:255 →
+     * sym.ASM(..., gl.FILENAME)). visit_ASM (translator.py:963-967) emits
+     * `#line N "node.filename"` — must be the file that *held* the ASM
+     * block, including #include'd files. cs->current_file moves with
+     * each #line directive at parse time; the translator runs *after*
+     * parse and sees only the final value, so snapshot it now. */
+    n->u.asm_block.filename = p->cs->current_file
+        ? arena_strdup(&p->cs->arena, p->cs->current_file)
+        : NULL;
     return n;
 }
 
@@ -2949,6 +2958,19 @@ static AstNode *parse_statement(Parser *p) {
                         ln_e->u.id.declared = true;
                         ln_e->type_ =
                             p->cs->symbol_table->basic_types[TYPE_uinteger];
+                        /* symboltable.access_label scope_owner capture
+                         * (symboltable.py:621-623, mirrored at the BTOK_LABEL
+                         * def-site parser.c:1487). The bare-ID label
+                         * definition path (Python p_statement_call ->
+                         * make_label -> access_label) takes this same
+                         * capture: if `@label` (CLASS_unknown placeholder)
+                         * was taken inside a SUB earlier, the label entry
+                         * already carries accessed=true; capturing
+                         * scope_owner here re-fires the cascade so the
+                         * enclosing SUB(s) are kept alive (atlabel3:
+                         * `Function test2 / b:` defines b inside test2 to
+                         * keep test2.accessed). */
+                        label_capture_scope_owner(p->cs, ln_e);
                     }
                 } else if (e->u.id.class_ == CLASS_label && e->u.id.declared) {
                     /* Python declare_label (symboltable.py:592-603):
