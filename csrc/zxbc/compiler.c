@@ -899,12 +899,42 @@ AstNode *make_binary_node(CompilerState *cs, const char *operator, AstNode *left
         if (check_is_numeric(left, right) &&
             (check_is_const(left) || check_is_number(left)) &&
             (check_is_const(right) || check_is_number(right))) {
-            /* Both are compile-time numbers — fold */
+            /* Both are compile-time numbers — fold. Bug C: a named CONST
+             * is still an AST_ID after make_typecast (line 759-762 only
+             * marks it as numeric-castable; tag stays AST_ID). Python
+             * folds via `a.value` which on a CONST returns the stored
+             * numeric value directly (symbols/binary.py:111). Mirror
+             * faithfully: a CLASS_const id resolves to its NUMBER-valued
+             * default_value_expr (chain through CONSTEXPR if wrapped). */
             AstNode *cl = make_typecast(cs, c_type, left, lineno);
             AstNode *cr = make_typecast(cs, c_type, right, lineno);
-            if (cl && cr && cl->tag == AST_NUMBER && cr->tag == AST_NUMBER) {
+            double lv = 0, rv = 0;
+            bool lvok = false, rvok = false;
+            if (cl && cl->tag == AST_NUMBER) { lv = cl->u.number.value; lvok = true; }
+            else if (cl && cl->tag == AST_ID &&
+                     cl->u.id.class_ == CLASS_const &&
+                     cl->u.id.default_value_expr) {
+                AstNode *dv = cl->u.id.default_value_expr;
+                while (dv && dv->tag == AST_CONSTEXPR && dv->child_count > 0)
+                    dv = dv->children[0];
+                while (dv && dv->tag == AST_TYPECAST && dv->child_count > 0)
+                    dv = dv->children[0];
+                if (dv && dv->tag == AST_NUMBER) { lv = dv->u.number.value; lvok = true; }
+            }
+            if (cr && cr->tag == AST_NUMBER) { rv = cr->u.number.value; rvok = true; }
+            else if (cr && cr->tag == AST_ID &&
+                     cr->u.id.class_ == CLASS_const &&
+                     cr->u.id.default_value_expr) {
+                AstNode *dv = cr->u.id.default_value_expr;
+                while (dv && dv->tag == AST_CONSTEXPR && dv->child_count > 0)
+                    dv = dv->children[0];
+                while (dv && dv->tag == AST_TYPECAST && dv->child_count > 0)
+                    dv = dv->children[0];
+                if (dv && dv->tag == AST_NUMBER) { rv = dv->u.number.value; rvok = true; }
+            }
+            if (lvok && rvok) {
                 double result;
-                if (fold_numeric(operator, cl->u.number.value, cr->u.number.value, &result)) {
+                if (fold_numeric(operator, lv, rv, &result)) {
                     return ast_number(cs, result, lineno);
                 }
             }
@@ -1693,6 +1723,73 @@ bool check_pending_calls(CompilerState *cs) {
                             continue;
                         if (pm->u.argument.byref)
                             arg->u.argument.byref = true;
+                    }
+                    /* Bug B: optional-param default-fill (api/check.py
+                     * :127-135). Python's inline branch (call.py:103) also
+                     * runs check_call_arguments which appends a synthesised
+                     * ARGUMENT(param.default_value, byref=False, name=
+                     * param.name) for every missing optional param (break
+                     * on first missing-with-no-default). The deferred-path
+                     * default-fill at lines 1478-1495 already handles the
+                     * non-inline case; replicate the no-diagnostic subset
+                     * here so a def-first `sub test(x=0): end sub; test()`
+                     * still gets the `push <default>` argument lowering.
+                     * Diagnostics (R3-R10) intentionally not run here to
+                     * preserve the funcnoparm FALSE_POS gate documented
+                     * above. */
+                    if (al->child_count < pl->child_count) {
+                        for (int pi = al->child_count;
+                             pi < pl->child_count; pi++) {
+                            AstNode *pm = pl->children[pi];
+                            if (!pm) break;
+                            AstNode *defv = (pm->child_count >= 1)
+                                              ? pm->children[0] : NULL;
+                            if (defv == NULL) break;
+                            AstNode *arg = ast_new(cs, AST_ARGUMENT,
+                                                    call->lineno);
+                            arg->u.argument.name = (char *)pm->u.argument.name;
+                            arg->u.argument.byref = false;
+                            ast_add_child(cs, arg, defv);
+                            arg->type_ = defv->type_;
+                            ast_add_child(cs, al, arg);
+                        }
+                    }
+                    /* Bug D: arg->param typecast (api/check.py:156) —
+                     * INLINE branch port.  Python's inline check_call
+                     * also calls arg.typecast(param.type_).  ARGUMENT
+                     * .type_ resolves to value.type_, so without this a
+                     * uinteger arg passed to a ubyte FASTCALL param
+                     * keeps type uinteger and emits `push hl` instead
+                     * of the `ld a, l; push af` ubyte-fastcall lowering.
+                     * NARROW the cast to numeric-from-numeric to avoid
+                     * surfacing pre-existing missing warnings (W100/
+                     * W150) on string-to-numeric error fixtures (lcd2,
+                     * typecast2) that we cannot match exactly without
+                     * the warning lowering ported; for these the
+                     * pre-Bug-D FALSE_NEG behaviour is preserved.  The
+                     * deferred path at line 1577-1582 still runs the
+                     * full check (no guard) for non-inline calls. */
+                    int zlim = al->child_count < pl->child_count
+                                 ? al->child_count : pl->child_count;
+                    for (int z = 0; z < zlim; z++) {
+                        AstNode *arg = al->children[z];
+                        AstNode *pm  = pl->children[z];
+                        if (!arg || arg->tag != AST_ARGUMENT ||
+                            arg->child_count < 1 || !pm || !pm->type_)
+                            continue;
+                        AstNode *aval = arg->children[0];
+                        if (!aval || !aval->type_) continue;
+                        /* Narrow: only numeric->numeric to skip string
+                         * conversion errors that we cannot stderr-match. */
+                        if (!type_is_numeric(aval->type_) ||
+                            !type_is_numeric(pm->type_))
+                            continue;
+                        AstNode *casted = make_typecast(cs, pm->type_,
+                                                        aval, call->lineno);
+                        if (casted == NULL) continue;
+                        arg->children[0] = casted;
+                        if (casted->parent != arg) casted->parent = arg;
+                        arg->type_ = casted->type_;
                     }
                 }
             }

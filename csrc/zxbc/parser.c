@@ -3992,6 +3992,27 @@ static AstNode *parse_dim_statement(Parser *p) {
          * silently dropped by visit_ARRAYDECL's O>1 DCE early-out. */
         if (arr_at_expr) id_node->u.id.addr_expr = arr_at_expr;
         decl->type_ = type;
+        /* Bug A: local SUB/FUNCTION array declared AT <const-addr> is
+         * promoted to global (faithful analog of zxbparser.py:785-786 +
+         * symboltable.make_static, symboltable.py:307-320). Python sets
+         * entry.scope = SCOPE.global_ and registers the entry under its
+         * mangled name in the global scope; the C `sym_entries_ordered`
+         * is a single insertion list (compiler.c:260) that codegen.c:435
+         * filters by scope==SCOPE_global to build data_ast for
+         * VarTranslator. Promoting scope here is sufficient:
+         *   • codegen picks the entry up and VarTranslator.visit_ARRAYDECL
+         *     emits the global-style descriptor (mangled `_<sub>.a` namespace
+         *     prefix is already stamped at declare time);
+         *   • FunctionTranslator's local-array ic_larrd branch
+         *     (translator.c:3974) and MEM_FREE dtor branch (translator.c
+         *     :4148, scope==local/parameter gate) auto-skip it;
+         *   • compute_offsets s_entry_size already returns 0 for entries
+         *     with addr_expr (compiler.c:171), so no stack slot is
+         *     allocated either way — but the scope-gate is the load-
+         *     bearing change. */
+        if (arr_at_expr && id_node->u.id.scope == SCOPE_local) {
+            id_node->u.id.scope = SCOPE_global;
+        }
         /* S5.7d — a LOCAL array (inside a SUB/FUNCTION) is allocated on
          * the stack frame; the FunctionTranslator :58-116 walk needs its
          * geometry (bounds + init image + is_zero_based). The global
