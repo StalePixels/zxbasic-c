@@ -2650,6 +2650,34 @@ static AstNode *parse_statement(Parser *p) {
                 AstNode *s = make_sentence_node(p, "LETARRAY", ln);
                 ast_add_child(p->cs, s, call_node);
                 if (expr) ast_add_child(p->cs, s, expr);
+                /* p_let_arr (zxbparser.py:1215-1216): for the LETARRAY
+                 * write target, Python skips the general accessed-mark
+                 * (handled by expr_context=true elsewhere for reads) but
+                 * EXPLICITLY marks the array entry accessed when it has
+                 * an AT-clause address — `if entry.addr is not None:
+                 * mark_entry_as_accessed(entry)`. Without this, a write-
+                 * only `DIM a(...) AS T AT <const>` is dropped at O>1 by
+                 * visit_ARRAYDECL's DCE early-out, taking with it the
+                 * `_a.__DATA__ EQU <addr>` / `_a:` descriptor / data-ptr
+                 * table / `.LABEL.__LABELn:` bounds image AND the
+                 * LET-ARRAY const-subscript store `ld (_a.__DATA__ + N),
+                 * hl` that translator.c emits referencing them.
+                 *
+                 * The C analogue of `entry.addr` is
+                 * `entry->u.id.addr_expr`. The array ID is child[0] of
+                 * the ARRAYACCESS lvalue (call_node). mark_entry_as_
+                 * accessed's FUNCTION_LEVEL guard (zxbparser.py:172) is
+                 * a no-op here — the entry is a CLASS_array, never a
+                 * FUNCTION token. */
+                if (call_node && call_node->tag == AST_ARRAYACCESS &&
+                    call_node->child_count > 0) {
+                    AstNode *array_id = call_node->children[0];
+                    if (array_id && array_id->tag == AST_ID &&
+                        array_id->u.id.class_ == CLASS_array &&
+                        array_id->u.id.addr_expr != NULL) {
+                        array_id->u.id.accessed = true;
+                    }
+                }
                 return s;
             }
 
@@ -3856,6 +3884,16 @@ static AstNode *parse_dim_statement(Parser *p) {
         ast_add_child(p->cs, decl, bounds);
         if (arr_at_expr) ast_add_child(p->cs, decl, arr_at_expr);
         if (init) ast_add_child(p->cs, decl, init);
+        /* Stamp entry.addr on the shared array ID entry (faithful
+         * analogue of Python's `entry.addr = tmp` on the symbol
+         * itself — zxbparser.py p_dim_arr_at/p_dim_arr_addr branches).
+         * The vt_visit_arraydecl walk still reads addr_expr from the
+         * ARRAYDECL's children (unchanged) but p_let_arr's
+         * `if entry.addr is not None: mark_entry_as_accessed(entry)`
+         * (zxbparser.py:1215-1216) at the LETARRAY write target needs
+         * to see it on the entry — otherwise a write-only AT-array is
+         * silently dropped by visit_ARRAYDECL's O>1 DCE early-out. */
+        if (arr_at_expr) id_node->u.id.addr_expr = arr_at_expr;
         decl->type_ = type;
         /* S5.7d — a LOCAL array (inside a SUB/FUNCTION) is allocated on
          * the stack frame; the FunctionTranslator :58-116 walk needs its
