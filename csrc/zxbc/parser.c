@@ -545,7 +545,21 @@ static AstNode *parse_builtin_func(Parser *p, const char *fname, BTokenType kw) 
             }
             break;
         case BTOK_STR:
+            /* p_str (zxbparser.py:3409-3419): the non-constant branch
+             * wraps the arg in make_typecast(TYPE.float, p[2]) so the
+             * later visit_STR's ic_fparam(float, arg.t) reads a float
+             * operand (emit_fparamf consumes 5 bytes as A/DE/BC). For
+             * a UByte/Long/etc. source the typecast pre-emits the
+             * runtime cast (e.g. .core.__U8TOFREG) — without it the
+             * backend reads non-float source bytes as if they were
+             * float (strparam1: `ld de, (_b+1); ld bc, (_b+3)` over a
+             * UByte). */
             n->type_ = st->basic_types[TYPE_string];
+            if (arg && n->child_count > 0) {
+                AstNode *cast = make_typecast(p->cs,
+                    st->basic_types[TYPE_float], arg, lineno);
+                if (cast) n->children[0] = cast;
+            }
             break;
         case BTOK_CHR:
             /* p_chr / p_chr_one (zxbparser.py:3427-3444): every

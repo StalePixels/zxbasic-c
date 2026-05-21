@@ -4369,9 +4369,21 @@ static void tr_visit_function(Translator *tr, AstNode *fdecl) {
             tr->cs->symbol_table->basic_types[TYPE_string];
         int ptr_size = 2;
         bool preserve_hl = false;
+        bool opt_filter = tr->cs->opts.optimization_level > 1;
         for (int li = 0; li < entry->u.id.local_entries_count; li++) {
             AstNode *lv = entry->u.id.local_entries[li];
             if (!lv) continue;
+            /* Scope.values(filter_by_opt=True) at OPTIONS.optimization_
+             * level > 1 filters out un-accessed entries (scope.py:64-66).
+             * function_translator.visit_FUNCTION reads
+             * node.local_symbol_table.values() with that default, so the
+             * stdcall MEM_FREE loop never sees an unaccessed string
+             * local at O>1.  Strparam1's implicit `a$ = s$` writes a
+             * never-read `a$` — Python prunes the second MEM_FREE; the
+             * C loop was iterating raw local_entries and emitted both,
+             * tripling the function-exit cost. */
+            if (opt_filter && !lv->u.id.accessed)
+                continue;
             SymbolClass c = lv->u.id.class_;
             int scope = lv->u.id.scope;
             bool is_str = lv->type_ && type_is_string(lv->type_);
