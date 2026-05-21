@@ -239,6 +239,23 @@ int main(int argc, char *argv[])
         return 1;
     }
 
+    /* Python zxbasm.py:163-164: an empty MEMORY (no emitted bytes and no
+     * declared labels — e.g. an empty `PROC`/`ENDP` unit) is NOT an error.
+     * Warn "Nothing to assemble. Exiting..." at line 0 and return 0
+     * without generating a binary. The "memory_bytes empty" analogue is
+     * the inverse of the non-empty test the memory-map step uses below:
+     * zero global-scope labels AND zero set bytes. */
+    {
+        if (!as.mem.slot_used) {
+            asm_warning(&as, 0, "Nothing to assemble. Exiting...");
+            if (as.err_file && as.err_file != stderr)
+                fclose(as.err_file);
+            asm_destroy(&as);
+            free(default_out);
+            return 0;
+        }
+    }
+
     /* Step 3: Handle #init entries and generate binary */
     /* TODO: #init support (CALL NN for each init label, JP NN at end) */
 

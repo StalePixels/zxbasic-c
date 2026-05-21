@@ -259,6 +259,12 @@ struct Memory {
     uint8_t bytes[MAX_MEM];
     bool byte_set[MAX_MEM]; /* which bytes have been written */
 
+    /* Python's MEMORY.memory_bytes non-empty proxy: set_memory_slot()
+     * (asmparse.py) populates memory_bytes[org]=0 for every emitted byte
+     * AND every non-temporary declared label. zxbasm.py:163 warns
+     * "Nothing to assemble. Exiting..." iff memory_bytes is empty. */
+    bool slot_used;
+
     /* Per-address instruction mapping for second-pass resolution */
     AsmInstr *instr_at[MAX_MEM]; /* which instruction starts at this address */
 

@@ -144,6 +144,112 @@ static const char *reg_name(TokenType t)
     }
 }
 
+/* PLY token-type name for p_error's "[<TYPE>]" field — the names the
+ * Python lexer assigns (src/zxbasm/asmlex.py:17-227): punctuation/
+ * operators have dedicated names (':' -> CO, ')' -> RP, '*' -> MUL, …),
+ * literals are INTEGER/STRING/ID, and registers/flags/instructions carry
+ * their uppercase spelling (reg_name covers the registers and flags).
+ * For an instruction/pseudo-op (rare as an "unexpected" token) the name
+ * is the uppercased mnemonic, written into `buf`. */
+static const char *tok_ply_name(TokenType t, const char *sval,
+                                char *buf, size_t bufsz) {
+    switch (t) {
+    case TOK_NEWLINE: return "NEWLINE";
+    case TOK_COLON:   return "CO";
+    case TOK_COMMA:   return "COMMA";
+    case TOK_PLUS:    return "PLUS";
+    case TOK_MINUS:   return "MINUS";
+    case TOK_MUL:     return "MUL";
+    case TOK_DIV:     return "DIV";
+    case TOK_MOD:     return "MOD";
+    case TOK_POW:     return "POW";
+    case TOK_LSHIFT:  return "LSHIFT";
+    case TOK_RSHIFT:  return "RSHIFT";
+    case TOK_BAND:    return "BAND";
+    case TOK_BOR:     return "BOR";
+    case TOK_BXOR:    return "BXOR";
+    case TOK_LP:      return "LP";
+    case TOK_RP:      return "RP";
+    case TOK_LB:      return "LB";
+    case TOK_RB:      return "RB";
+    case TOK_APO:     return "APO";
+    case TOK_ADDR:    return "ADDR";
+    case TOK_INTEGER: return "INTEGER";
+    case TOK_STRING:  return "STRING";
+    case TOK_ID:      return "ID";
+    default: {
+        const char *rn = reg_name(t);
+        if (rn[0] != '?') return rn;   /* registers + flags */
+        /* instruction / pseudo-op: uppercase the mnemonic spelling */
+        if (sval && buf && bufsz) {
+            size_t i = 0;
+            for (; sval[i] && i + 1 < bufsz; i++)
+                buf[i] = (char)toupper((unsigned char)sval[i]);
+            buf[i] = '\0';
+            return buf;
+        }
+        return "?";
+    }
+    }
+}
+
+/* Display value for p_error's "'<value>'" field — Python prints p.value:
+ * the literal text for punctuation, the decimal value for INTEGER, and
+ * the lexeme for ID/STRING/registers/instructions. */
+static const char *tok_display_value(const Token *tk, char *buf, size_t bufsz) {
+    switch (tk->type) {
+    case TOK_COLON:  return ":";
+    case TOK_COMMA:  return ",";
+    case TOK_PLUS:   return "+";
+    case TOK_MINUS:  return "-";
+    case TOK_MUL:    return "*";
+    case TOK_DIV:    return "/";
+    case TOK_MOD:    return "%";
+    case TOK_POW:    return "^";
+    case TOK_LSHIFT: return "<<";
+    case TOK_RSHIFT: return ">>";
+    case TOK_BAND:   return "&";
+    case TOK_BOR:    return "|";
+    case TOK_BXOR:   return "~";
+    case TOK_LP:     return "(";
+    case TOK_RP:     return ")";
+    case TOK_LB:     return "[";
+    case TOK_RB:     return "]";
+    case TOK_APO:    return "'";
+    case TOK_ADDR:   return "$";
+    case TOK_INTEGER:
+        snprintf(buf, bufsz, "%lld", (long long)tk->ival);
+        return buf;
+    case TOK_ID:
+    case TOK_STRING:
+        return tk->sval ? tk->sval : "";
+    default:
+        /* register / flag / instruction: the matched lexeme (Python's
+         * p.value); fall back to the uppercase name. */
+        if (tk->original_id) return tk->original_id;
+        if (tk->sval) return tk->sval;
+        return reg_name(tk->type);
+    }
+}
+
+/* Centralised PLY p_error (src/zxbasm/asmparse.py:981-986): a NEWLINE/EOF
+ * is "Unexpected end of line [NEWLINE]", anything else is
+ * "Unexpected token '<value>' [<TYPE>]".  Replaces the C parser's
+ * ad-hoc "Expected expression"/"Syntax error"/"Unexpected token" sites
+ * so the diagnostic text and the offending-token report match Python. */
+static void asm_unexpected(Parser *p) {
+    if (p->cur.type == TOK_NEWLINE || p->cur.type == TOK_EOF) {
+        asm_error(p->as, p->cur.lineno,
+                  "Syntax error. Unexpected end of line [NEWLINE]");
+        return;
+    }
+    char nbuf[32], vbuf[32];
+    const char *val = tok_display_value(&p->cur, vbuf, sizeof vbuf);
+    const char *name = tok_ply_name(p->cur.type, p->cur.sval, nbuf, sizeof nbuf);
+    asm_error(p->as, p->cur.lineno,
+              "Syntax error. Unexpected token '%s' [%s]", val, name);
+}
+
 /* ----------------------------------------------------------------
  * Expression parsing (operator precedence)
  * Matches Python precedence from asmparse.py
@@ -198,7 +304,10 @@ static Expr *parse_primary(Parser *p)
         return e;
     }
 
-    asm_error(p->as, lineno, "Expected expression");
+    /* No expression-starting token: PLY's p_error reports the offending
+     * token (or "Unexpected end of line" at a NEWLINE) — e.g. `and :`
+     * (CO) or a missing operand before NEWLINE. */
+    asm_unexpected(p);
     return expr_int(p->as, 0, lineno);
 }
 
@@ -812,7 +921,9 @@ static void parse_asm(Parser *p)
                     instr = make_instr_expr(p, lineno,
                         mnemonic_buf(p, "LD %s,(%s+N)", r, ireg), offset);
                 } else {
-                    asm_error(p->as, lineno, "Unexpected token");
+                    /* `ld r, [<x>]` where <x> is neither HL nor IX/IY:
+                     * PLY reports the offending token (e.g. `.c` [ID]). */
+                    asm_unexpected(p);
                     parser_skip_to_newline(p);
                     return;
                 }
@@ -1435,6 +1546,13 @@ static void parse_asm(Parser *p)
         if (!expr_eval(p->as, bit_expr, &bit, false)) return;
         if (bit < 0 || bit > 7) {
             asm_error(p->as, lineno, "Invalid bit position %d. Must be in [0..7]", (int)bit);
+            /* Python's bit-op action raises this semantic error but the
+             * production still reduces (consuming the rest of the
+             * operands), so no follow-on parse error fires. The C handler
+             * left `, <reg>` unconsumed, which the statement loop then
+             * mis-parsed into a spurious "Unexpected token" — consume to
+             * the line end to match Python's single-error output. */
+            parser_skip_to_newline(p);
             return;
         }
 
@@ -1700,7 +1818,11 @@ static void parse_asm(Parser *p)
 
         if (offset < 0) offset = fsize + offset;
         if (offset < 0 || offset >= fsize) {
-            asm_error(p->as, lineno, "INCBIN offset is out of range");
+            /* Python p_incbin reports this at p.lineno(4) — the offset
+             * EXPR, a PLY non-terminal whose lineno defaults to 0 (unlike
+             * the length errors at p.lineno(4)'s sibling COMMA terminal,
+             * which carry the real line). */
+            asm_error(p->as, 0, "INCBIN offset is out of range");
             fclose(f);
             return;
         }
@@ -1806,24 +1928,36 @@ static void parse_program(Parser *p)
             continue;
         }
 
-        /* Parse one or more instructions separated by colons */
+        /* Parse one or more instructions separated by colons.  A syntax
+         * error inside a statement makes PLY discard the rest of the
+         * logical line (error recovery resyncs on NEWLINE) and emit no
+         * further error for it — so once error_count rises, skip to the
+         * line end instead of mis-parsing the remainder via the colon
+         * loop (which produced the spurious cascade, e.g. `and :` ->
+         * "Unexpected token 'A'"). */
+        int err0 = p->as->error_count;
         parse_asm(p);
 
         /* After an instruction, expect colon (more instructions), newline, or EOF */
-        while (p->cur.type == TOK_COLON) {
+        while (p->as->error_count == err0 && p->cur.type == TOK_COLON) {
             parser_advance(p);
             if (p->cur.type == TOK_NEWLINE || p->cur.type == TOK_EOF)
                 break;
             parse_asm(p);
         }
 
+        if (p->as->error_count > err0) {
+            /* Statement errored — resync on the NEWLINE (no cascade). */
+            parser_skip_to_newline(p);
+            if (p->cur.type == TOK_NEWLINE) parser_advance(p);
+            continue;
+        }
+
         /* Expect newline or EOF */
         if (p->cur.type == TOK_NEWLINE) {
             parser_advance(p);
         } else if (p->cur.type != TOK_EOF) {
-            asm_error(p->as, p->cur.lineno,
-                      "Syntax error. Unexpected token '%s' [%d]",
-                      p->cur.sval ? p->cur.sval : "?", p->cur.type);
+            asm_unexpected(p);
             parser_skip_to_newline(p);
             if (p->cur.type == TOK_NEWLINE) parser_advance(p);
         }

@@ -257,6 +257,12 @@ void mem_declare_label(AsmState *as, const char *label, int lineno,
         hashmap_set(scope, ex_label, lbl);
     }
 
+    /* set_memory_slot() — a non-temporary declared label makes Python's
+     * MEMORY.memory_bytes non-empty (asmparse.py declare_label), so the
+     * unit is not "Nothing to assemble" even with zero emitted bytes
+     * (e.g. asmerror0's LOCAL X). Temporary labels return above. */
+    m->slot_used = true;
+
     /* Note: We do NOT set byte_set here for label-only addresses.
      * In Python, set_memory_slot() does set memory_bytes[org] = 0,
      * but dump() uses an align buffer that drops trailing label-only
@@ -441,6 +447,8 @@ void mem_add_instruction(AsmState *as, AsmInstr *instr)
     Memory *m = &as->mem;
 
     if (as->error_count > 0) return;
+
+    m->slot_used = true;   /* set_memory_slot() — memory_bytes non-empty */
 
     /* Ensure memory slot exists at current org */
     if (!m->byte_set[m->index]) {
