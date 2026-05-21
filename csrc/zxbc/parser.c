@@ -5212,6 +5212,24 @@ static AstNode *parse_print_statement(Parser *p) {
         break;
     }
 
+    /* D1 — PRINT statement node lineno (zxbparser.py:2038): Python builds
+     * the PRINT SENTENCE in p_print_list_elem with `make_sentence(
+     * p.lexer.lineno, "PRINT", ...)` — the LEXER's current line at the
+     * `print_list : print_elem` reduction, NOT the PRINT keyword's line.
+     * For a PRINT terminated by NEWLINE the lexer has already consumed the
+     * NEWLINE, so this is source_line+1; for a PRINT followed by a same-line
+     * `:` (CO) the lexer is still on that line, so it stays source_line.
+     * The C lexer increments lineno before emitting NEWLINE (lexer.c:765),
+     * so the lookahead token `p->current` here carries exactly that value:
+     * NEWLINE -> source_line+1, CO -> source_line, EOF -> last line. Adopt
+     * it so warning_unreachable_code / warning_function_should_return
+     * (optimize.py:146 / the FUNCTION-end check), which read node.lineno,
+     * report Python's line. The PRINT children keep their own (natural)
+     * linenos; only the statement node's is the lexer-position value.
+     * Codegen is unaffected — staged byte-identity is GREEN with either
+     * value, i.e. the PRINT node lineno is not in the byte stream. */
+    s->lineno = p->current.lineno;
+
     return s;
 }
 
