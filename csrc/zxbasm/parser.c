@@ -1661,10 +1661,27 @@ static void parse_asm(Parser *p)
          * reserved for the open/read failure of a file that *was* located
          * (the Python open_file IOError branch, asmparse.py:402). */
         const char *resolved = NULL;
+        char ip_path[1024];
         if (access(path, R_OK) == 0) {
             resolved = path;
         } else if (access(fname, R_OK) == 0) {
             resolved = fname;
+        } else {
+            /* Search the threaded-in include path (arch stdlib/runtime +
+             * -I dirs), mirroring Python's INCBIN -> zxbpp.search_filename
+             * (src/zxbasm/asmparse.py:393).  An absolute fname is never
+             * joined; only relative names are tried under each dir. */
+            bool is_abs = (fname[0] == '/');
+            if (!is_abs) {
+                for (int ip = 0; ip < p->as->include_paths_count; ip++) {
+                    snprintf(ip_path, sizeof(ip_path), "%s/%s",
+                             p->as->include_paths[ip], fname);
+                    if (access(ip_path, R_OK) == 0) {
+                        resolved = ip_path;
+                        break;
+                    }
+                }
+            }
         }
         if (!resolved) {
             asm_error(p->as, lineno, "file '%s' not found", fname);

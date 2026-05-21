@@ -29,17 +29,77 @@
  */
 #include "asm_bridge.h"
 #include "zxbasm.h"
+#include "utils.h"      /* get_executable_dir */
+#include <limits.h>     /* PATH_MAX */
+#include <stdlib.h>     /* realpath */
+#include <string.h>
+
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
+
+/* Build the INCBIN search path on `as`, identical in source and order to
+ * the preprocessor's (codegen.c:596-626 / main.c first pass): the
+ * executable-anchored ABSOLUTE src/lib/arch/<arch>/{stdlib,runtime}
+ * (stdlib first, runtime second), then the colon-split -I dirs.  Stored
+ * in the assembler arena so they outlive this call.  This is the C
+ * analogue of zxbpp.INCLUDEPATH, which Python's INCBIN consults via
+ * zxbpp.search_filename (src/zxbasm/asmparse.py:393). */
+static void asm_set_include_paths(AsmState *as, const char *arch,
+                                  const char *include_path) {
+    /* Count: up to 2 built-in dirs + however many -I segments. */
+    int cap = 2;
+    if (include_path && include_path[0]) {
+        cap++;
+        for (const char *q = include_path; *q; q++)
+            if (*q == ':') cap++;
+    }
+    char **paths = arena_alloc(&as->arena, (size_t)cap * sizeof(char *));
+    int n = 0;
+
+    const char *a = (arch && arch[0]) ? arch : "zx48k";
+    char exe_dir[PATH_MAX], raw_path[PATH_MAX], real_path[PATH_MAX];
+    if (get_executable_dir(NULL, exe_dir, sizeof(exe_dir))) {
+        snprintf(raw_path, sizeof(raw_path),
+                 "%s/../../../src/lib/arch/%s/stdlib", exe_dir, a);
+        if (realpath(raw_path, real_path))
+            paths[n++] = arena_strdup(&as->arena, real_path);
+        snprintf(raw_path, sizeof(raw_path),
+                 "%s/../../../src/lib/arch/%s/runtime", exe_dir, a);
+        if (realpath(raw_path, real_path))
+            paths[n++] = arena_strdup(&as->arena, real_path);
+    }
+
+    if (include_path && include_path[0]) {
+        char ipbuf[PATH_MAX];
+        if (strlen(include_path) < sizeof(ipbuf)) {
+            strcpy(ipbuf, include_path);
+            char *save = NULL;
+            for (char *seg = strtok_r(ipbuf, ":", &save);
+                 seg != NULL && n < cap;
+                 seg = strtok_r(NULL, ":", &save)) {
+                if (seg[0])
+                    paths[n++] = arena_strdup(&as->arena, seg);
+            }
+        }
+    }
+
+    as->include_paths = paths;
+    as->include_paths_count = n;
+}
 
 int zxbc_asm_to_binary(const char *asm_text, const char *out_filename,
                        const char *format, bool use_basic_loader,
                        bool autorun,
                        char **binary_files, int binary_files_count,
                        char **headless_binary_files,
-                       int headless_binary_files_count) {
+                       int headless_binary_files_count,
+                       const char *arch, const char *include_path) {
     AsmState as;
     asm_init(&as);
     as.use_basic_loader = use_basic_loader;
     as.autorun = autorun;
+    asm_set_include_paths(&as, arch, include_path);
 
     int aerr = asm_assemble(&as, asm_text);
     int gerr = 0;

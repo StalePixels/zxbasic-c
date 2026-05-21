@@ -36,12 +36,20 @@
  *
  * Returns 0 on success, nonzero if the assembler or binary dump reported
  * any error (caller maps nonzero -> zxbc rc 5, matching Python's
- * `if gl.has_errors: return 5`). */
+ * `if gl.has_errors: return 5`).
+ *
+ * `arch` (e.g. "zx48k") and `include_path` (the colon-separated -I list,
+ * or NULL/"") let the assembler resolve INCBIN files against the same
+ * search path the preprocessor uses — the executable-anchored
+ * src/lib/arch/<arch>/{stdlib,runtime} dirs plus the -I dirs — mirroring
+ * Python's INCBIN -> zxbpp.search_filename (src/zxbasm/asmparse.py:393,
+ * zxbpp.INCLUDEPATH). */
 int zxbc_asm_to_binary(const char *asm_text, const char *out_filename,
                        const char *format, bool use_basic_loader,
                        bool autorun,
                        char **binary_files, int binary_files_count,
                        char **headless_binary_files,
-                       int headless_binary_files_count);
+                       int headless_binary_files_count,
+                       const char *arch, const char *include_path);
 
 #endif /* ZXBC_ASM_BRIDGE_H */

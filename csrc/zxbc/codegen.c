@@ -835,7 +835,9 @@ int codegen_emit(CompilerState *cs, AstNode *ast) {
                                cs->opts.append_binary,
                                cs->opts.append_binary_count,
                                cs->opts.append_headless_binary,
-                               cs->opts.append_headless_binary_count) != 0)
+                               cs->opts.append_headless_binary_count,
+                               cs->opts.architecture,
+                               cs->opts.include_path) != 0)
             rc = 5;
     }
 

@@ -499,6 +499,23 @@ void mem_add_instruction(AsmState *as, AsmInstr *instr)
         return;
     }
 
+    /* INCBIN data (ASM_DEFB with raw_bytes) can be arbitrarily large —
+     * far past the 256-byte asm_instr_bytes scratch buffer, which would
+     * make it return 0 (nothing emitted, location counter frozen). Emit
+     * the raw bytes directly. */
+    if (instr->type == ASM_DEFB && instr->raw_bytes) {
+        for (int i = 0; i < instr->raw_count; i++) {
+            if (m->index + i >= MAX_MEM) {
+                asm_error(as, instr->lineno, "Memory overflow at address %d", m->index + i);
+                return;
+            }
+            m->bytes[m->index + i] = instr->raw_bytes[i];
+            m->byte_set[m->index + i] = true;
+        }
+        m->index += instr->raw_count;
+        return;
+    }
+
     uint8_t buf[256];
     int n = asm_instr_bytes(as, instr, buf, sizeof(buf));
 
@@ -760,6 +777,15 @@ int mem_dump(AsmState *as, int *org_out, uint8_t **data_out, int *data_len)
             int n = asm_defs_resolve(as, instr, &fill);
             for (int j = 0; j < n && (i + j) < MAX_MEM; j++) {
                 m->bytes[i + j] = fill;
+            }
+            continue;
+        }
+
+        /* INCBIN raw bytes bypass the 256-byte scratch buffer (see the
+         * emit pass above) — overwrite directly from raw_bytes. */
+        if (instr->type == ASM_DEFB && instr->raw_bytes) {
+            for (int j = 0; j < instr->raw_count && (i + j) < MAX_MEM; j++) {
+                m->bytes[i + j] = instr->raw_bytes[j];
             }
             continue;
         }

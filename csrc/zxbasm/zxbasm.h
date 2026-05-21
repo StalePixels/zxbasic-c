@@ -319,6 +319,14 @@ struct AsmState {
     bool autorun;
     char *memory_map_file;
 
+    /* INCBIN search path (mirrors zxbpp.INCLUDEPATH used by
+     * src/zxbasm/asmparse.py:393 zxbpp.search_filename): the arch
+     * stdlib/runtime dirs + any -I dirs, threaded in from the zxbc
+     * pipeline.  NULL/0 for standalone zxbasm (relative-only resolution,
+     * unchanged). */
+    char **include_paths;
+    int include_paths_count;
+
     /* Parser state */
     const char *input;      /* preprocessed input text */
     int pos;                /* current position */
