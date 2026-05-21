@@ -499,12 +499,14 @@ static AstNode *parse_builtin_func(Parser *p, const char *fname, BTokenType kw) 
     ast_add_child(p->cs, n, arg);
 
     /* Handle multi-arg builtins (CHR$, LBOUND, UBOUND, etc.) */
+    int closing_rp_lineno = lineno;
     if (had_paren) {
         while (match(p, BTOK_COMMA)) {
             AstNode *extra = parse_expression(p, PREC_NONE + 1);
             if (extra) ast_add_child(p->cs, n, extra);
         }
         consume(p, BTOK_RP, "Expected ')' after builtin argument");
+        closing_rp_lineno = p->previous.lineno;  /* p.lineno(6) — the RP */
     }
 
     /* p_expr_lbound_expr (zxbparser.py:3335-3378) — LBOUND/UBOUND with an
@@ -553,7 +555,23 @@ static AstNode *parse_builtin_func(Parser *p, const char *fname, BTokenType kw) 
                 num && (arr->u.id.scope == SCOPE_global ||
                         arr->u.id.scope == SCOPE_local) &&
                 check_is_number(num);
-            if (!const_dim) {
+            if (const_dim) {
+                /* Python's constant-propagation branch (zxbparser.py
+                 * :3355-3363): val = num.value; if val < 0 or val >
+                 * len(entry.bounds): error(p.lineno(6), "Dimension out of
+                 * range"); p[0]=None; return. The fold of a VALID dim is
+                 * still left to the unused-LET DCE path (see the comment
+                 * above) — only the OOR rejection is ported here, exactly
+                 * Python's guard. */
+                long val = (long) num->u.number.value;
+                AstNode *bl = arr->u.id.arr_boundlist;
+                int nbounds = bl ? bl->child_count : 0;
+                if (val < 0 || val > nbounds) {
+                    zxbc_error(p->cs, closing_rp_lineno,
+                               "Dimension out of range");
+                    return NULL;
+                }
+            } else {
                 if (kw == BTOK_LBOUND)
                     arr->u.id.lbound_used = true;
                 else
@@ -590,6 +608,28 @@ static AstNode *parse_builtin_func(Parser *p, const char *fname, BTokenType kw) 
             double val = arg->u.number.value;
             return make_number(p, val >= 0 ? val : -val, lineno, NULL);
         }
+    }
+
+    /* p_val / p_code (zxbparser.py:3458 / 3478): the argument must be a
+     * string; otherwise syntax_error_expected_string (errmsg.py:201) at the
+     * keyword line (p.lineno(1)), and p[0]=None. Faithful port of the
+     * `if p[2].type_ != TYPE.string` guard. */
+    if ((kw == BTOK_VAL || kw == BTOK_CODE) && !type_is_string(arg->type_)) {
+        const TypeInfo *aft = (arg->type_ && arg->type_->final_type)
+                                  ? arg->type_->final_type : arg->type_;
+        const char *atn = (aft && aft->tag == AST_BASICTYPE)
+                              ? basictype_to_string(aft->basic_type) : "unknown";
+        err_expected_string(p->cs, lineno, atn);
+        return NULL;
+    }
+
+    /* p_sgn (zxbparser.py:3489): a string argument is rejected with the
+     * literal "Expected a numeric expression, got TYPE.string instead"
+     * (note the verbatim Python enum repr), p[0]=None. */
+    if (kw == BTOK_SGN && type_is_string(arg->type_)) {
+        zxbc_error(p->cs, lineno,
+                   "Expected a numeric expression, got TYPE.string instead");
+        return NULL;
     }
 
     /* Set result type based on function */
@@ -1134,6 +1174,33 @@ static AstNode *parse_call_or_array(Parser *p, const char *name, int lineno, boo
             id_node->u.id.class_ != CLASS_const)
             id_node->u.id.accessed = true;
         ast_add_child(p->cs, n, id_node);
+        /* STRSLICE.make_node (symbols/strslice.py:71): the FIRST semantic
+         * check is check.check_type(lineno, Type.string, s) (check.py:40-55)
+         * — the sliced base `s` must be a string, else
+         * "Wrong expression type '<t>'. Expected 'string'" at the ID line
+         * (make_strslice is called with p.lineno(1)), p[0]=None. An
+         * undeclared name was access_var'd with default_type=string above,
+         * so it is already string and never trips this. Runs BEFORE the
+         * bound TYPECASTs/fold, exactly Python's order.
+         *
+         * GATED on expr_context: only the READ productions
+         * (p_expr_id_substr / p_string_* -> make_strslice -> make_node)
+         * run check_type. The WRITE/lvalue target (`n(i TO j) = rhs`,
+         * p_str_assign zxbparser.py:1308-1335) builds the LETSUBSTR
+         * sentence directly and does NOT call make_node — so Python
+         * ACCEPTS a non-string slice TARGET (verified on the oracle:
+         * `Dim n As Integer : n(1 TO 2)="x"` -> exit 0 + W150). Without
+         * this gate the check fires on the lvalue path and over-rejects
+         * (err_letsubstr_lhs_nonstring FALSE_POS). */
+        if (expr_context && !type_is_string(id_node->type_)) {
+            const TypeInfo *sft = (id_node->type_ && id_node->type_->final_type)
+                                      ? id_node->type_->final_type : id_node->type_;
+            const char *stn = (sft && sft->tag == AST_BASICTYPE)
+                                  ? basictype_to_string(sft->basic_type) : "unknown";
+            zxbc_error(p->cs, lineno,
+                       "Wrong expression type '%s'. Expected 'string'", stn);
+            return NULL;
+        }
         /* Python STRSLICE.make_node (symbols/strslice.py:74-83) wraps
          * each bound in TYPECAST(STR_INDEX_TYPE=uinteger), AFTER
          * subtracting OPTIONS.string_base.  The MINUS folds to a no-op
@@ -3074,7 +3141,49 @@ static AstNode *parse_statement(Parser *p) {
             /* Check if followed by = (assignment to array element or func return) */
             if (match(p, BTOK_EQ) || was_let) {
                 if (p->previous.type != BTOK_EQ) consume(p, BTOK_EQ, "Expected '=' in assignment");
+                int eq_lineno = p->previous.lineno;
                 AstNode *expr = parse_expression(p, PREC_NONE + 1);
+                /* String-slice write targets. The C builds an AST_STRSLICE
+                 * lvalue for both Python productions; they diverge by base
+                 * shape and emit DIFFERENT diagnostics, so split on it:
+                 *
+                 *  - base is an AST_ID  -> scalar p_str_assign
+                 *    (`s(i TO j) = rhs`, zxbparser.py:1308-1335): the RHS
+                 *    must be a string, else syntax_error_expected_string
+                 *    (errmsg.py:201) at p.lineno(EQ). p_str_assign does NOT
+                 *    check the TARGET type (a non-string scalar target is
+                 *    accepted — err_letsubstr_lhs_nonstring), and it does
+                 *    NOT abort (the node is still built) -> single error.
+                 *
+                 *  - base is an AST_ARRAYACCESS -> make_array_substr_assign
+                 *    (`a(i)(j TO k) = rhs`, zxbparser.py:336-338): the array
+                 *    element type must be string, else "Array '%s' is not of
+                 *    type String" at the ARRAY_ID line (p.lineno(i)); this
+                 *    check fires BEFORE the RHS typecast, so the RHS-string
+                 *    diagnostic is NOT also emitted (let_array_substr4). */
+                if (call_node && call_node->tag == AST_STRSLICE &&
+                    call_node->child_count > 0) {
+                    AstNode *base = call_node->children[0];
+                    if (base && base->tag == AST_ID) {
+                        if (expr && !type_is_string(expr->type_)) {
+                            const TypeInfo *rft = (expr->type_ && expr->type_->final_type)
+                                                      ? expr->type_->final_type : expr->type_;
+                            const char *rtn = (rft && rft->tag == AST_BASICTYPE)
+                                                  ? basictype_to_string(rft->basic_type) : "unknown";
+                            err_expected_string(p->cs, eq_lineno, rtn);
+                        }
+                    } else if (base && base->tag == AST_ARRAYACCESS &&
+                               base->child_count > 0) {
+                        AstNode *arr_id = base->children[0];
+                        if (arr_id && !type_is_string(arr_id->type_)) {
+                            const char *anm = (arr_id->tag == AST_ID &&
+                                               arr_id->u.id.name)
+                                                  ? arr_id->u.id.name : "";
+                            zxbc_error(p->cs, ln,
+                                       "Array '%s' is not of type String", anm);
+                        }
+                    }
+                }
                 AstNode *s = make_sentence_node(p, "LETARRAY", ln);
                 ast_add_child(p->cs, s, call_node);
                 if (expr) ast_add_child(p->cs, s, expr);
@@ -3794,8 +3903,22 @@ static AstNode *parse_for_statement(Parser *p) {
     /* NEXT [var] */
     consume(p, BTOK_NEXT, "Expected NEXT");
     if (check(p, BTOK_ID)) {
+        /* p_next1 (zxbparser.py:1571-1585): when NEXT names a variable it
+         * must equal the innermost loop's FOR variable (gl.LOOPS[-1].var),
+         * else syntax_error_wrong_for_var(p.lineno(2), LOOPS[-1].var, p3)
+         * (errmsg.py:209). The comparison is case-SENSITIVE in Boriel
+         * (t_ID keeps t.value's original case; verified on the oracle:
+         * `For I … Next i` -> error), so strcmp matches exactly. p.lineno(2)
+         * is the NEXT-ID token line in the no-label form. */
+        const char *next_var = p->current.sval;
+        int next_lineno = p->current.lineno;
         advance(p);
-        /* Optionally validate var matches */
+        if (next_var && p->cs->loop_stack.len > 0) {
+            const char *forvar =
+                p->cs->loop_stack.data[p->cs->loop_stack.len - 1].var_name;
+            if (forvar && strcmp(forvar, next_var) != 0)
+                err_wrong_for_var(p->cs, next_lineno, forvar, next_var);
+        }
     }
 
     /* Pop loop info */
@@ -3957,13 +4080,34 @@ static AstNode *parse_array_initializer(Parser *p) {
     int lineno = p->current.lineno;
     consume(p, BTOK_LBRACE, "Expected '{'");
     AstNode *init = ast_new(p->cs, AST_ARRAYINIT, lineno);
+    /* p_const_vector_vector_list (zxbparser.py:929-934): in a list of
+     * const_vectors (rows of `{...}`), every row must have the same number
+     * of elements as the FIRST row (len(p[3]) != len(p[1][0])), else "All
+     * rows must have the same number of elements" at p.lineno(2)=the COMMA,
+     * and the const_vector reduces to None — which makes p_arr_decl_initialized
+     * (p[8] is None) return WITHOUT running check_bound. We mirror that:
+     * track the first row's element count, diagnose a mismatched row, and
+     * return NULL so the DIM-level check_bound (the divergent "Mismatched
+     * vector size" message) is skipped and no array is declared. */
+    int first_row_count = -1;
+    bool ragged = false;
 
     if (!check(p, BTOK_RBRACE)) {
         do {
             if (check(p, BTOK_LBRACE)) {
+                int comma_lineno = p->previous.lineno;  /* the COMMA (rows>1) */
                 /* Nested initializer for multi-dim arrays */
                 AstNode *sub = parse_array_initializer(p);
-                if (sub) ast_add_child(p->cs, init, sub);
+                if (sub) {
+                    if (first_row_count < 0) {
+                        first_row_count = sub->child_count;
+                    } else if (sub->child_count != first_row_count && !ragged) {
+                        zxbc_error(p->cs, comma_lineno,
+                                   "All rows must have the same number of elements");
+                        ragged = true;
+                    }
+                    ast_add_child(p->cs, init, sub);
+                }
             } else {
                 AstNode *expr = parse_expression(p, PREC_NONE + 1);
                 if (expr) {
@@ -4030,6 +4174,10 @@ static AstNode *parse_array_initializer(Parser *p) {
         } while (match(p, BTOK_COMMA));
     }
     consume(p, BTOK_RBRACE, "Expected '}'");
+    /* Ragged const-vector -> Python's const_vector reduced to None. Return
+     * NULL so the caller skips check_bound and the array declaration,
+     * exactly as p_arr_decl_initialized's `if ... p[8] is None: return`. */
+    if (ragged) return NULL;
     return init;
 }
 
@@ -4373,15 +4521,26 @@ static AstNode *parse_dim_statement(Parser *p) {
 
         /* Array initializer: => {...} or = {...} */
         AstNode *init = NULL;
+        bool brace_init = false;
         if (match(p, BTOK_RIGHTARROW)) {
+            brace_init = true;
             init = parse_array_initializer(p);
         } else if (match(p, BTOK_EQ)) {
             if (check(p, BTOK_LBRACE)) {
+                brace_init = true;
                 init = parse_array_initializer(p);
             } else {
                 init = parse_expression(p, PREC_NONE + 1);
             }
         }
+
+        /* parse_array_initializer returns NULL only for a ragged const
+         * vector (the error is already emitted). Python's
+         * p_arr_decl_initialized then returns None (p[8] is None) without
+         * declaring the array — mirror that here so no array is declared
+         * and check_bound is skipped (single faithful error). */
+        if (brace_init && !init)
+            return NULL;
 
         /* Port B — p_arr_decl_initialized.check_bound
          * (zxbparser.py:807-838).  Python runs it ONLY for the
@@ -4531,6 +4690,28 @@ static AstNode *parse_dim_statement(Parser *p) {
         if (name_count < 64) names[name_count++] = p->previous.sval;
     }
 
+    /* p_decl_arr (zxbparser.py:791-799): DIM idlist LP bound_list RP typedef.
+     * A single-name array (`DIM a(10)`) took the array path above; reaching
+     * a '(' here means the idlist held >1 name (`DIM a, b(10) AS T`), which
+     * Python rejects with "Array declaration only allows one variable name
+     * at a time" at p.lineno(1)=DIM. Python's grammar still consumes the
+     * bound_list + typedef and reduces the production (no cascade), so skip
+     * the balanced-paren bounds and the trailing typedef before returning. */
+    if (check(p, BTOK_LP)) {
+        zxbc_error(p->cs, lineno,
+                   "Array declaration only allows one variable name at a time");
+        advance(p);  /* ( */
+        int depth = 1;
+        while (depth > 0 && !check(p, BTOK_EOF) && !check(p, BTOK_NEWLINE) &&
+               !check(p, BTOK_CO)) {
+            if (check(p, BTOK_LP)) depth++;
+            else if (check(p, BTOK_RP)) depth--;
+            advance(p);
+        }
+        parse_typedef(p);  /* consume the trailing AS <type>, if present */
+        return NULL;
+    }
+
     TypeInfo *type = parse_typedef(p);
     /* An explicit "AS type" clause yields a non-implicit TYPEREF
      * (parse_type_name -> type_new_ref(..., implicit=false)); the
@@ -4552,6 +4733,28 @@ static AstNode *parse_dim_statement(Parser *p) {
             init_expr = parse_array_initializer(p);
         } else {
             init_expr = parse_expression(p, PREC_NONE + 1);
+        }
+    }
+
+    /* Multi-variable DIM is only valid as a bare `DIM a, b AS T`
+     * (p_var_decl). The AT and initializer forms each require a single
+     * variable; Python errors at p.lineno(1)=DIM and returns (p[0]=None,
+     * no declaration), BEFORE the symboltable.declare suffix/strict checks
+     * below — so return early here too:
+     *   - p_var_decl_at  (zxbparser.py:662-664): `DIM idlist typedef AT expr`
+     *     -> "Only one variable at a time can be declared this way".
+     *   - p_var_decl_ini (zxbparser.py:693-695): `DIM idlist typedef EQ expr`
+     *     -> "Initialized variables must be declared one by one." */
+    if (name_count != 1) {
+        if (at_expr) {
+            zxbc_error(p->cs, lineno,
+                       "Only one variable at a time can be declared this way");
+            return NULL;
+        }
+        if (init_expr) {
+            zxbc_error(p->cs, lineno,
+                       "Initialized variables must be declared one by one.");
+            return NULL;
         }
     }
 
@@ -5086,6 +5289,24 @@ static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function, bool is_decl
                         zxbc_error(p->cs, param_line, "strict mode: missing type declaration for '%s'", param_name);
                 }
 
+                /* An array parameter has NO default-value production:
+                 * `param_def : singleid LP RP typedef` (zxbparser.py:3108)
+                 * vs the scalar `singleid typedef default_arg_value` (:3122).
+                 * A '=' after an array param is therefore a grammar error —
+                 * PLY raises p_error "Syntax Error. Unexpected token '=' <EQ>"
+                 * at the '=' and recovers via `param_decl : LP error RP`
+                 * (:3057, param list -> None). Reproduce: diagnose at the '='
+                 * line, consume to the closing ')', and drop this param
+                 * (err_default_array_arg). */
+                if (is_array && check(p, BTOK_EQ)) {
+                    zxbc_error(p->cs, p->current.lineno,
+                               "Syntax Error. Unexpected token '=' <EQ>");
+                    while (!check(p, BTOK_EOF) && !check(p, BTOK_NEWLINE) &&
+                           !check(p, BTOK_CO) && !check(p, BTOK_RP))
+                        advance(p);
+                    break;
+                }
+
                 /* Default value */
                 AstNode *default_val = NULL;
                 if (match(p, BTOK_EQ)) {
@@ -5165,6 +5386,17 @@ static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function, bool is_decl
                 if (p->cs->opts.strict)
                     zxbc_error(p->cs, lineno, "strict mode: missing type declaration for '%s'", func_name);
             }
+        }
+        /* p_function_def_header (zxbparser.py:2994-2995): a SUB given a
+         * non-implicit (explicit `AS <type>`) return type is rejected with
+         * "SUBs cannot have a return type definition" at the SUB line. An
+         * explicit AS clause yields a non-implicit TYPEREF; a bare SUB has
+         * no AS branch (ret_type stays NULL) and never trips this. Python
+         * sets p[0]=None but the body still parses, so just diagnose and
+         * continue (the SUB keeps parsing; the call site sees 0 params). */
+        if (!is_function && ret_type && !ret_type->implicit) {
+            zxbc_error(p->cs, lineno,
+                       "SUBs cannot have a return type definition");
         }
     }
 
