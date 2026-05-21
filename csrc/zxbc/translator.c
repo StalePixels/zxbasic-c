@@ -3359,13 +3359,21 @@ static const char *tr_emit_arraycopy_child(Translator *tr, AstNode *id_) {
  *   t2 = _emit_arraycopy_child(t_source)
  *   ic_load(BOUND_TYPE, t, str(t_source.size))   # size = count*elem
  *   ic_memcopy(t1, t2, t)
- * The string arm (STR_ARRAYCOPY runtime) is left to generic (no string
- * arraycopy fixture is in the owned cluster). */
+ * String arm (translator.py:317-327): per-element string realloc copy via
+ * the STR_ARRAYCOPY runtime — pload both array data pointers, an extra
+ * ic_load(PTR, new_t, t) for each GLOBAL side (the '#'-immediate must be
+ * materialised into a pushed pointer), then ic_load(BOUND, t, count) and
+ * runtime_call(STR_ARRAYCOPY). */
 static AstNode *tr_visit_arraycopy(Visitor *v, AstNode *node) {
     Translator *tr = v->ctx;
     AstNode *t_dest   = node->child_count > 0 ? node->children[0] : NULL;
     AstNode *t_source = node->child_count > 1 ? node->children[1] : NULL;
     if (!t_dest || !t_source) { visitor_generic(v, node); return node; }
+
+    const TypeInfo *bound_t =
+        tr->cs->symbol_table->basic_types[TYPE_uinteger];
+    const TypeInfo *ptr_t =
+        tr->cs->symbol_table->basic_types[TYPE_uinteger];
 
     bool src_string = t_source->type_ && type_is_string(t_source->type_);
     if (!src_string) {
@@ -3376,8 +3384,6 @@ static AstNode *tr_visit_arraycopy(Visitor *v, AstNode *node) {
         long esz = t_source->type_ ? type_size(t_source->type_) : 1;
         long sz  = (t_source->u.id.scope == SCOPE_parameter)
                        ? 2 /* TYPE.size(PTR_TYPE) */ : cnt * esz;
-        const TypeInfo *bound_t =
-            tr->cs->symbol_table->basic_types[TYPE_uinteger];
         const char *t = compiler_new_temp(tr->cs);
         char ssz[24];
         snprintf(ssz, sizeof(ssz), "%ld", sz);
@@ -3385,7 +3391,22 @@ static AstNode *tr_visit_arraycopy(Visitor *v, AstNode *node) {
         tr_ic_memcopy(tr, t1, t2, t);
         return node;
     }
-    visitor_generic(v, node);
+
+    /* :318-327 string arm. t2 = dest, then GLOBAL-only ic_load to push
+     * the data pointer; t1 = source, same; count load; runtime call. */
+    const char *t2 = tr_emit_arraycopy_child(tr, t_dest);
+    if (t_dest->u.id.scope == SCOPE_global)
+        tr_ic_load(tr, ptr_t, compiler_new_temp(tr->cs), t2);
+    const char *t1 = tr_emit_arraycopy_child(tr, t_source);
+    if (t_source->u.id.scope == SCOPE_global)
+        tr_ic_load(tr, ptr_t, compiler_new_temp(tr->cs), t1);
+
+    long cnt = tr_arrayref_count(t_source);
+    const char *t = compiler_new_temp(tr->cs);
+    char sc[24];
+    snprintf(sc, sizeof(sc), "%ld", cnt);
+    tr_ic_load(tr, bound_t, t, sc);
+    tr_runtime_call(tr, ".core.STR_ARRAYCOPY", 0);
     return node;
 }
 

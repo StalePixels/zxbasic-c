@@ -284,6 +284,22 @@ AstNode *symboltable_lookup(SymbolTable *st, const char *name) {
 }
 
 AstNode *symboltable_get_entry(SymbolTable *st, const char *name) {
+    /* Python get_entry (symboltable.py:76-77) strips a trailing
+     * deprecated suffix ($/%/&) before the table lookup, so `c$`
+     * resolves to the array entry stored under `c`.  symboltable_lookup
+     * uses the raw key; mirror the strip here so the lexer's ARRAY_ID
+     * promotion (lexer.c:1186-1188) fires for a suffixed array name —
+     * without it `c$ = a$` parses as a scalar LET, not ARRAYCOPY
+     * (arraycopy5). */
+    size_t len = name ? strlen(name) : 0;
+    if (len > 0 && is_deprecated_suffix(name[len - 1])) {
+        char buf[256];
+        if (len - 1 < sizeof(buf)) {
+            memcpy(buf, name, len - 1);
+            buf[len - 1] = '\0';
+            return symboltable_lookup(st, buf);
+        }
+    }
     return symboltable_lookup(st, name);
 }
 
