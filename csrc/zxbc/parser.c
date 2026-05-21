@@ -3183,6 +3183,30 @@ static AstNode *parse_statement(Parser *p) {
                                        "Array '%s' is not of type String", anm);
                         }
                     }
+                } else if (call_node && call_node->tag == AST_ARRAYACCESS &&
+                           call_node->child_count > 0 && call_node->children[0] &&
+                           call_node->children[0]->tag == AST_ARRAYACCESS) {
+                    /* Chained single-index substr `a(i)(j) = rhs`
+                     * (p_let_arr_substr_single, zxbparser.py:2746 ->
+                     * make_array_substr_assign, :336): Python routes ANY
+                     * chained-index assignment through the substr production,
+                     * so the array element type must be string, else "Array
+                     * '<a>' is not of type String" at the ARRAY_ID line. A
+                     * string array's element type passes (valid substr); a
+                     * non-string array is always rejected (let_array_substr6).
+                     * The no-TO postfix builds ARRAYACCESS-over-ARRAYACCESS
+                     * (parser.c parse_postfix), distinct from a comma
+                     * multi-subscript `a(i,j)` (single ARRAYACCESS). */
+                    AstNode *inner = call_node->children[0];
+                    AstNode *arr_id = inner->child_count > 0
+                                          ? inner->children[0] : NULL;
+                    if (arr_id && !type_is_string(arr_id->type_)) {
+                        const char *anm = (arr_id->tag == AST_ID &&
+                                           arr_id->u.id.name)
+                                              ? arr_id->u.id.name : "";
+                        zxbc_error(p->cs, ln,
+                                   "Array '%s' is not of type String", anm);
+                    }
                 }
                 AstNode *s = make_sentence_node(p, "LETARRAY", ln);
                 ast_add_child(p->cs, s, call_node);
