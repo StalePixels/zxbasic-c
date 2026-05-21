@@ -4067,6 +4067,24 @@ static AstNode *parse_do_statement(Parser *p) {
     if (p->cs->loop_stack.len > 0)
         vec_pop(p->cs->loop_stack);
 
+    /* p_do_while_loop / p_do_until_loop (src/zxbc/zxbparser.py:1862-1893):
+     * a PRE-test loop (DO WHILE <expr> / DO UNTIL <expr> ... LOOP) warns
+     * W110 when its condition is a constant number — `if is_number(r):
+     * warning_condition_is_always(p.lineno(2), bool(r.value))`. Although the
+     * source cites p.lineno(2) (the body / LOOP position), PLY's
+     * non-terminal lineno tracking resolves it to the DO line in every case
+     * (verified on the oracle: empty body, non-empty body, and a leading-
+     * offset DO all report the DO keyword's line, never the body/LOOP line).
+     * Reproduce the observed behaviour: emit at the DO line (`lineno`). The
+     * pre- and post-test forms are mutually exclusive grammar productions
+     * (DO WHILE ... LOOP UNTIL is a syntax error), so pre_cond and post_cond
+     * never coexist; emit independently of the post-test block below. */
+    if (pre_cond && check_is_number(pre_cond)) {
+        double cv = 0;
+        zxbc_eval_to_num(pre_cond, &cv);
+        warn_condition_always(p->cs, lineno, cv != 0.0);
+    }
+
     /* p_do_loop_until / p_do_loop_while (src/zxbc/zxbparser.py:1708-1730,
      * 1838-1859): a post-test loop warns W110 when its condition is a
      * constant, and W130 when its body is empty.  Python's p.lineno(3):
