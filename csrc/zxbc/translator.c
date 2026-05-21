@@ -2486,10 +2486,19 @@ static AstNode *tr_visit_read(Visitor *v, AstNode *node) {
                 visitor_generic(v, tgt);
             }
         } else {
-            /* Constant offset (:520-527).  name = arr.entry.data_label. */
+            /* Constant offset (:520-527).  visit_READ uses
+             * `name = arr.entry.mangled` (the raw `_x`), NOT
+             * `arr.entry.data_label` (`_x.__DATA__`) — that distinction
+             * exists in Python: visit_LETARRAY :348 uses data_label,
+             * but visit_READ :521 uses mangled.  Loading via mangled
+             * works because emit_var_assign / ic_store for arrays
+             * resolves to the same memory either way (the __DATA__ is
+             * just an alias offset into the descriptor) — but byte
+             * identity demands matching Python's choice (read4/read8). */
             long aoff = tgt->u.arrayaccess.offset;
             if (a_global) {
-                const char *name = tr_array_data_label(tr, aent);
+                const char *name = aent->u.id.mangled
+                                       ? aent->u.id.mangled : "";
                 size_t need = strlen(name) + 32;
                 char *addr = arena_alloc(&tr->cs->arena, need);
                 snprintf(addr, need, "%s + %ld", name, aoff);
