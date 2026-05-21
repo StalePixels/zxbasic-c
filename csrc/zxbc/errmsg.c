@@ -82,7 +82,19 @@ void zxbc_error(CompilerState *cs, int lineno, const char *fmt, ...) {
     }
 }
 
-void zxbc_warning(CompilerState *cs, int lineno, const char *fmt, ...) {
+/* Core warning emit.  Mirrors Python's errmsg.warning() (api/errmsg.py
+ * :60-72) combined with the @register_warning decorator's WARNING_PREFIX
+ * (errmsg.py:88-101): every registered warning sets
+ *   WARNING_PREFIX = "warning: [W<code>]"   (unless OPTIONS.hide_warning_codes)
+ * before calling warning(), which emits
+ *   "<file>:<lineno>: <WARNING_PREFIX or 'warning:'> <msg>"
+ * So a coded warning prints "<file>:<lineno>: warning: [W<code>] <msg>";
+ * with --hide-warning-codes (or code==NULL) it falls back to the bare
+ * "warning:" prefix.  The has_warnings counter is incremented for every
+ * reached warning regardless of OPTIONS.expected_warnings, which only
+ * suppresses output (errmsg.py:62-63). */
+static void warn_vemit(CompilerState *cs, int lineno, const char *code,
+                       const char *fmt, va_list ap) {
     cs->warning_count++;
     if (cs->warning_count <= cs->opts.expected_warnings)
         return;
@@ -90,14 +102,33 @@ void zxbc_warning(CompilerState *cs, int lineno, const char *fmt, ...) {
     const char *fname = cs->current_file ? cs->current_file : "<unknown>";
 
     char msg_body[1024];
+    vsnprintf(msg_body, sizeof(msg_body), fmt, ap);
+
+    char full_msg[1408];
+    if (code && !cs->opts.hide_warning_codes)
+        snprintf(full_msg, sizeof(full_msg), "%s:%d: warning: [W%s] %s",
+                 fname, lineno, code, msg_body);
+    else
+        snprintf(full_msg, sizeof(full_msg), "%s:%d: warning: %s",
+                 fname, lineno, msg_body);
+    zxbc_msg_output(cs, full_msg);
+}
+
+void zxbc_warning(CompilerState *cs, int lineno, const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
-    vsnprintf(msg_body, sizeof(msg_body), fmt, ap);
+    warn_vemit(cs, lineno, NULL, fmt, ap);
     va_end(ap);
+}
 
-    char full_msg[1280];
-    snprintf(full_msg, sizeof(full_msg), "%s:%d: warning: %s", fname, lineno, msg_body);
-    zxbc_msg_output(cs, full_msg);
+/* Coded variant — emits the "[W<code>]" bracketed prefix (the C analogue
+ * of a @register_warning("<code>")-decorated warning). */
+static void zxbc_warning_code(CompilerState *cs, int lineno, const char *code,
+                              const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    warn_vemit(cs, lineno, code, fmt, ap);
+    va_end(ap);
 }
 
 /* ----------------------------------------------------------------
@@ -210,50 +241,50 @@ void warn_implicit_type(CompilerState *cs, int lineno, const char *id, const cha
     }
     if (!type_name && cs->default_type)
         type_name = cs->default_type->name;
-    zxbc_warning(cs, lineno, "Using default implicit type '%s' for '%s'", type_name, id);
+    zxbc_warning_code(cs, lineno, "100", "Using default implicit type '%s' for '%s'", type_name, id);
 }
 
 void warn_condition_always(CompilerState *cs, int lineno, bool cond) {
-    zxbc_warning(cs, lineno, "Condition is always %s", cond ? "True" : "False");
+    zxbc_warning_code(cs, lineno, "110", "Condition is always %s", cond ? "True" : "False");
 }
 
 void warn_conversion_lose_digits(CompilerState *cs, int lineno) {
-    zxbc_warning(cs, lineno, "Conversion may lose significant digits");
+    zxbc_warning_code(cs, lineno, "120", "Conversion may lose significant digits");
 }
 
 void warn_empty_loop(CompilerState *cs, int lineno) {
-    zxbc_warning(cs, lineno, "Empty loop");
+    zxbc_warning_code(cs, lineno, "130", "Empty loop");
 }
 
 void warn_empty_if(CompilerState *cs, int lineno) {
-    zxbc_warning(cs, lineno, "Useless empty IF ignored");
+    zxbc_warning_code(cs, lineno, "140", "Useless empty IF ignored");
 }
 
 void warn_not_used(CompilerState *cs, int lineno, const char *id, const char *kind) {
     if (cs->opts.optimization_level > 0)
-        zxbc_warning(cs, lineno, "%s '%s' is never used", kind, id);
+        zxbc_warning_code(cs, lineno, "150", "%s '%s' is never used", kind, id);
 }
 
 void warn_fastcall_n_params(CompilerState *cs, int lineno, const char *kind, const char *id, int n) {
-    zxbc_warning(cs, lineno, "%s '%s' declared as FASTCALL with %d parameters", kind, id, n);
+    zxbc_warning_code(cs, lineno, "160", "%s '%s' declared as FASTCALL with %d parameters", kind, id, n);
 }
 
 void warn_func_never_called(CompilerState *cs, int lineno, const char *name) {
-    zxbc_warning(cs, lineno, "Function '%s' is never called and has been ignored", name);
+    zxbc_warning_code(cs, lineno, "170", "Function '%s' is never called and has been ignored", name);
 }
 
 void warn_unreachable_code(CompilerState *cs, int lineno) {
-    zxbc_warning(cs, lineno, "Unreachable code");
+    zxbc_warning_code(cs, lineno, "180", "Unreachable code");
 }
 
 void warn_function_should_return(CompilerState *cs, int lineno, const char *name) {
-    zxbc_warning(cs, lineno, "Function '%s' should return a value", name);
+    zxbc_warning_code(cs, lineno, "190", "Function '%s' should return a value", name);
 }
 
 void warn_value_truncated(CompilerState *cs, int lineno) {
-    zxbc_warning(cs, lineno, "Value will be truncated");
+    zxbc_warning_code(cs, lineno, "200", "Value will be truncated");
 }
 
 void warn_unknown_pragma(CompilerState *cs, int lineno, const char *pragma_name) {
-    zxbc_warning(cs, lineno, "Ignoring unknown pragma '%s'", pragma_name);
+    zxbc_warning_code(cs, lineno, "300", "Ignoring unknown pragma '%s'", pragma_name);
 }
