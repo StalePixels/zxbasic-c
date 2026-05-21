@@ -298,9 +298,15 @@ Token lexer_next(Lexer *lex)
             return tok;
         }
 
-        /* 0b prefix binary */
+        /* 0b prefix binary — but t_HEXA (asmlex.py:260) is defined BEFORE
+         * t_BIN (asmlex.py:274) and PLY tries function rules in order, so
+         * a trailing-'h' literal like 0B1h is HEX, not 0b-binary
+         * (the asmlex comment: "00Bh is a 12 in hex ... must come after
+         * HEXA").  Yield to the hex/number path when this is an h-suffix
+         * literal (zx48k 44/46/52 DEFB 0B1h S2-C-ERROR). */
         if (c == '0' && (lex->input[lex->pos + 1] == 'b' || lex->input[lex->pos + 1] == 'B')
-            && (lex->input[lex->pos + 2] == '0' || lex->input[lex->pos + 2] == '1')) {
+            && (lex->input[lex->pos + 2] == '0' || lex->input[lex->pos + 2] == '1')
+            && !hexa_h_match_at(lex, lex->pos)) {
             lex->pos += 2;
             StrBuf sb;
             strbuf_init(&sb);
