@@ -922,8 +922,19 @@ static void handle_define(PreprocState *pp, const char *rest)
         }
 
         char *body_str = strbuf_detach(&body);
-        strip_trailing(body_str);
-
+        /* Do NOT strip trailing whitespace/newlines: Python's p_define
+         * (zxbpp.py:545-565) lstrips only the FIRST defs token and
+         * preserves the rest verbatim — including a trailing newline
+         * contributed by a `\`-continued blank line.  e.g.
+         *   #define BREAK \
+         *      nop \
+         *   <blank>
+         * yields the value `\n   nop \n` (Python: ['', '\n', '   ',
+         * nop, ' ', '\n']).  Stripping the trailing ` \n` dropped the
+         * blank line the macro emits AND advanced the source-line
+         * counter one short, shifting every later #line by one
+         * (tap_errline1). The leading whitespace was already removed by
+         * skip_ws above (== Python's value[0].lstrip). */
         preproc_define(pp, name, body_str, pp->current_line, pp->current_file);
 
         free(body_str);
