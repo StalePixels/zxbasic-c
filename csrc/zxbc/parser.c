@@ -3006,10 +3006,44 @@ static AstNode *parse_statement(Parser *p) {
                 return s;
             }
 
-            /* If followed by an operator, this is an expression-as-statement
-             * e.g. test(1) + test(2) — parse remaining binary ops */
+            /* If followed by a binary operator, Python's statement-level
+             * grammar does NOT build `call_result OP rest`.  A bare
+             * `ID(...) OP ...` statement reduces via `statement : ID
+             * arguments` (zxbparser.py:1069) — i.e. ID applied to a
+             * SINGLE argument whose expr is the WHOLE `(...) OP rest`
+             * (the `(...)` is just a parenthesised sub-expression, not an
+             * arg list).  So `test(1) + test(2)` as a statement is
+             * `test((1) + test(2))`, NOT `test(1) + test(2)`
+             * (opt2_fastcall_sub).  Note the LET/expression context keeps
+             * the binary-of-two-calls reading — only the discarded
+             * statement form takes the greedy-argument path.
+             *
+             * Reproduce: when call_node is a single-argument FUNCCALL/CALL
+             * and a binary operator follows, splice the trailing
+             * expression onto the call's lone argument and re-parse the
+             * infix from there. */
             if (get_precedence(p->current.type) > PREC_NONE) {
-                call_node = parse_infix(p, call_node, PREC_NONE + 1);
+                AstNode *arglist = (call_node &&
+                    (call_node->tag == AST_FUNCCALL ||
+                     call_node->tag == AST_CALL) &&
+                    call_node->child_count > 1)
+                        ? call_node->children[1] : NULL;
+                if (arglist && arglist->tag == AST_ARGLIST &&
+                    arglist->child_count == 1 &&
+                    arglist->children[0] &&
+                    arglist->children[0]->tag == AST_ARGUMENT &&
+                    arglist->children[0]->child_count == 1) {
+                    AstNode *arg = arglist->children[0];
+                    AstNode *inner = arg->children[0];
+                    AstNode *ext = parse_infix(p, inner, PREC_NONE + 1);
+                    arg->children[0] = ext;
+                    if (ext) arg->type_ = ext->type_;
+                } else {
+                    /* Not the single-arg shape (e.g. parenless or
+                     * multi-arg) — fall back to the binary-statement
+                     * reading. */
+                    call_node = parse_infix(p, call_node, PREC_NONE + 1);
+                }
             }
 
             /* Sub call: ID(args) as statement */
