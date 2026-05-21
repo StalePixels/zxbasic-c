@@ -879,7 +879,12 @@ static AstNode *parse_call_or_array(Parser *p, const char *name, int lineno, boo
     bool has_to = false;
     if (!check(p, BTOK_RP)) {
         do {
-            /* Check for TO without lower bound: (TO expr) */
+            /* Check for TO without lower bound: (TO expr) — Python's
+             * p_subind_strTO / p_subind_TO always fill defaults so the
+             * STRSLICE child pair is well-formed downstream: lower
+             * defaults to make_number(0), upper defaults to
+             * make_number(MAX_STRSLICE_IDX=65534).  Both are
+             * uinteger-typecast (zxbparser.py:2608-2638). */
             AstNode *arg_expr = NULL;
             if (check(p, BTOK_TO)) {
                 has_to = true;
@@ -888,8 +893,16 @@ static AstNode *parse_call_or_array(Parser *p, const char *name, int lineno, boo
                 if (!check(p, BTOK_RP) && !check(p, BTOK_COMMA))
                     upper = parse_expression(p, PREC_NONE + 1);
                 AstNode *slice = ast_new(p->cs, AST_STRSLICE, lineno);
-                /* NULL lower = from start */
-                if (upper) ast_add_child(p->cs, slice, upper);
+                TypeInfo *uint_t =
+                    p->cs->symbol_table->basic_types[TYPE_uinteger];
+                AstNode *low = make_typecast(p->cs, uint_t,
+                                             make_number(p, 0, lineno, NULL),
+                                             lineno);
+                ast_add_child(p->cs, slice, low);
+                if (!upper)
+                    upper = make_number(p, 65534, lineno, NULL);
+                upper = make_typecast(p->cs, uint_t, upper, lineno);
+                ast_add_child(p->cs, slice, upper);
                 ast_add_child(p->cs, arglist, slice);
                 continue;
             }
@@ -917,15 +930,27 @@ static AstNode *parse_call_or_array(Parser *p, const char *name, int lineno, boo
                 p->lexer.pos = save_pos;
             }
             arg_expr = parse_expression(p, PREC_NONE + 1);
-            /* Check for string slice: expr TO [expr] */
+            /* Check for string slice: expr TO [expr] — Python's
+             * p_subind_str / p_subind_TOstr always emit a (lower,upper)
+             * pair; default the upper to 65534 when absent
+             * (zxbparser.py:2616-2626). The outer typecast loop at
+             * line ~1008 wraps each bound in TYPECAST(uinteger) using
+             * the OUTER call-site lineno — leave the typecast to that
+             * loop so the test-50 error line stays at the (-opening
+             * line, not the bound symbol's declaration line. */
             if (match(p, BTOK_TO)) {
                 has_to = true;
                 AstNode *upper = NULL;
                 if (!check(p, BTOK_RP) && !check(p, BTOK_COMMA))
                     upper = parse_expression(p, PREC_NONE + 1);
-                AstNode *slice = ast_new(p->cs, AST_STRSLICE, arg_expr ? arg_expr->lineno : lineno);
-                if (arg_expr) ast_add_child(p->cs, slice, arg_expr);
-                if (upper) ast_add_child(p->cs, slice, upper);
+                int sl_ln = arg_expr ? arg_expr->lineno : lineno;
+                AstNode *slice = ast_new(p->cs, AST_STRSLICE, sl_ln);
+                if (!arg_expr)
+                    arg_expr = make_number(p, 0, sl_ln, NULL);
+                ast_add_child(p->cs, slice, arg_expr);
+                if (!upper)
+                    upper = make_number(p, 65534, sl_ln, NULL);
+                ast_add_child(p->cs, slice, upper);
                 ast_add_child(p->cs, arglist, slice);
             } else if (arg_expr) {
                 AstNode *arg = ast_new(p->cs, AST_ARGUMENT, arg_expr->lineno);
@@ -1006,8 +1031,21 @@ static AstNode *parse_call_or_array(Parser *p, const char *name, int lineno, boo
                      * TYPECAST wrapper. */
                     if (cast) inner->children[j] = cast;
                 }
+                /* Flatten: Python's STRSLICE has 3 direct children
+                 * [s, lower, upper] (strslice.py:18-31). The C arglist
+                 * construction wraps each `lower TO upper` pair as a
+                 * NESTED AST_STRSLICE which we now splice out so the
+                 * outer is [id, lower, upper] — visit_STRSLICE reads
+                 * children[1]/[2] directly (translator.c:3362-3364).
+                 * Pre-fix the dual-slice path (slice0/slice2) ran the
+                 * recursive visit_STRSLICE on the still-nested inner
+                 * and the outer's lower/upper both resolved to the
+                 * inner node's empty .t (== 65534/65534). */
+                for (int k = 0; k < inner->child_count; k++)
+                    ast_add_child(p->cs, n, inner->children[k]);
+            } else if (inner) {
+                ast_add_child(p->cs, n, inner);
             }
-            ast_add_child(p->cs, n, inner);
         }
         n->type_ = p->cs->symbol_table->basic_types[TYPE_string];
         return n;
@@ -1367,7 +1405,11 @@ static AstNode *parse_postfix(Parser *p, AstNode *left) {
 
         if (!check(p, BTOK_RP)) {
             do {
-                /* TO without lower bound */
+                /* TO without lower bound — fill defaults per
+                 * zxbparser.py:2608-2638 (p_subind_strTO / p_subind_TO):
+                 * lower = make_number(0), upper = make_number(65534).
+                 * The outer site at ~line 1430 has its own typecast
+                 * loop; leave the typecast wrapping to that. */
                 if (check(p, BTOK_TO)) {
                     has_to = true;
                     advance(p);
@@ -1375,7 +1417,11 @@ static AstNode *parse_postfix(Parser *p, AstNode *left) {
                     if (!check(p, BTOK_RP) && !check(p, BTOK_COMMA))
                         upper = parse_expression(p, PREC_NONE + 1);
                     AstNode *slice = ast_new(p->cs, AST_STRSLICE, lineno);
-                    if (upper) ast_add_child(p->cs, slice, upper);
+                    ast_add_child(p->cs, slice,
+                                  make_number(p, 0, lineno, NULL));
+                    if (!upper)
+                        upper = make_number(p, 65534, lineno, NULL);
+                    ast_add_child(p->cs, slice, upper);
                     ast_add_child(p->cs, arglist, slice);
                     continue;
                 }
@@ -1385,9 +1431,14 @@ static AstNode *parse_postfix(Parser *p, AstNode *left) {
                     AstNode *upper = NULL;
                     if (!check(p, BTOK_RP) && !check(p, BTOK_COMMA))
                         upper = parse_expression(p, PREC_NONE + 1);
-                    AstNode *slice = ast_new(p->cs, AST_STRSLICE, arg_expr ? arg_expr->lineno : lineno);
-                    if (arg_expr) ast_add_child(p->cs, slice, arg_expr);
-                    if (upper) ast_add_child(p->cs, slice, upper);
+                    int sl_ln = arg_expr ? arg_expr->lineno : lineno;
+                    AstNode *slice = ast_new(p->cs, AST_STRSLICE, sl_ln);
+                    if (!arg_expr)
+                        arg_expr = make_number(p, 0, sl_ln, NULL);
+                    ast_add_child(p->cs, slice, arg_expr);
+                    if (!upper)
+                        upper = make_number(p, 65534, sl_ln, NULL);
+                    ast_add_child(p->cs, slice, upper);
                     ast_add_child(p->cs, arglist, slice);
                 } else if (arg_expr) {
                     AstNode *arg = ast_new(p->cs, AST_ARGUMENT, arg_expr->lineno);
