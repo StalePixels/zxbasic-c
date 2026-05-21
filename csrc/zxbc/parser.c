@@ -354,6 +354,90 @@ static bool zxbc_eval_to_num(const AstNode *n, double *out);
 static void compute_arrayaccess_offset(Parser *p, AstNode *acc,
                                        AstNode *entry, AstNode *arglist);
 
+/* Port of the constant-folding tail of Python's STRSLICE.make_node
+ * (src/symbols/strslice.py:84-113).  `slice` is a freshly-built
+ * AST_STRSLICE with children [s, lower, upper]; lower/upper have already
+ * had OPTIONS.string_base subtracted and been TYPECAST to STR_INDEX_TYPE
+ * (uinteger) by the caller, mirroring make_node:74-83.  This reproduces
+ * the four constant-fold outcomes Python applies before returning a real
+ * SymbolSTRSLICE:
+ *   1. constant bound clamping (lower -> >= MIN_STRSLICE_IDX=0,
+ *      upper -> <= MAX_STRSLICE_IDX=65534), mutating the NUMBER in place;
+ *   2. lo > up                 -> STRING("")           (empty slice);
+ *   3. s is a constant string  -> STRING(s.value[lo:up+1]);
+ *   4. lo==0 and up==65534     -> s   (the no-op full slice `a$( TO )`).
+ * Otherwise the STRSLICE node is returned unchanged.  Constant detection
+ * uses check.is_number (NUMBER or numeric CONST), exactly as Python. */
+static AstNode *strslice_fold(Parser *p, AstNode *slice) {
+    if (!slice || slice->child_count < 3) return slice;
+    AstNode *s     = slice->children[0];
+    AstNode *lower = slice->children[1];
+    AstNode *upper = slice->children[2];
+
+    bool lo_num = check_is_number(lower);
+    bool up_num = check_is_number(upper);
+    long lo = 0, up = 0;
+
+    if (lo_num) {
+        double v;
+        if (!zxbc_eval_to_num(lower, &v)) {
+            lo_num = false;
+        } else {
+            lo = (long)v;
+            if (lo < 0) {                 /* MIN_STRSLICE_IDX == 0 */
+                lo = 0;
+                if (lower->tag == AST_NUMBER) lower->u.number.value = 0;
+            }
+        }
+    }
+    if (up_num) {
+        double v;
+        if (!zxbc_eval_to_num(upper, &v)) {
+            up_num = false;
+        } else {
+            up = (long)v;
+            if (up > 65534) {             /* MAX_STRSLICE_IDX == 65534 */
+                up = 65534;
+                if (upper->tag == AST_NUMBER) upper->u.number.value = 65534;
+            }
+        }
+    }
+
+    if (lo_num && up_num) {
+        if (lo > up)
+            return make_string(p, "", slice->lineno);
+
+        /* s.token in ("STRING", "CONST"): a constant string -> slice now.
+         * STRING literal (AST_STRING) or a CLASS_const string id whose
+         * default value is a string literal. */
+        const char *sval = NULL;
+        if (s->tag == AST_STRING) {
+            sval = s->u.string.value;
+        } else if (s->tag == AST_ID && s->u.id.class_ == CLASS_const &&
+                   type_is_string(s->type_) && s->u.id.default_value_expr &&
+                   s->u.id.default_value_expr->tag == AST_STRING) {
+            sval = s->u.id.default_value_expr->u.string.value;
+        }
+        if (sval) {
+            long n = (long)strlen(sval);
+            long a = lo;
+            long b = up + 1;              /* Python: up += 1 */
+            if (a > n) a = n;
+            if (b > n) b = n;
+            if (b < a) b = a;
+            char *buf = arena_alloc(&p->cs->arena, (size_t)(b - a) + 1);
+            memcpy(buf, sval + a, (size_t)(b - a));
+            buf[b - a] = '\0';
+            return make_string(p, buf, slice->lineno);
+        }
+
+        /* a$(0 TO INF.) == a$ : the no-op full slice. */
+        if (lo == 0 && up == 65534)
+            return s;
+    }
+    return slice;
+}
+
 /* Parse builtin function: ABS, SIN, COS, etc. */
 static AstNode *parse_builtin_func(Parser *p, const char *fname, BTokenType kw) {
     int lineno = p->previous.lineno;
@@ -1108,7 +1192,10 @@ static AstNode *parse_call_or_array(Parser *p, const char *name, int lineno, boo
             }
         }
         n->type_ = p->cs->symbol_table->basic_types[TYPE_string];
-        return n;
+        /* STRSLICE.make_node constant-fold tail (strslice.py:84-113):
+         * fold `a$( TO )` (full slice) to the bare string, empty/constant
+         * slices to a STRING literal. */
+        return strslice_fold(p, n);
     }
 
     /* Resolve via symbol table: auto-declares if needed (matching Python's access_call) */
@@ -1335,47 +1422,34 @@ static AstNode *parse_call_or_array(Parser *p, const char *name, int lineno, boo
         if (expr_context)
             entry->u.id.accessed = true;
         ast_add_child(p->cs, n, entry);
-        /* OPTIONS.string_base adjustment — STRSLICE.make_node
-         * (symbols/strslice.py:74-83) always wraps each slice bound in
-         * `MINUS <idx> <base>` (base=OPTIONS.string_base) before
-         * TYPECAST(STR_INDEX_TYPE).  For default base==0 the C port
-         * already produces matching asm without the MINUS (BINARY x-0
-         * folds at make_binary_node; non-numeric x-0 is also a no-op
-         * at the IR level in Python — verified empirically against
-         * `a$(k)` with default base).  Only when base!=0 do we apply
-         * the MINUS at parse time so the index NUMBER folds to
-         * `idx - base` (e.g. strbase: `a$(1)` -> NUMBER(0) when
-         * string_base=1).  Gating on base!=0 keeps the default corpus
-         * (every passing strslice fixture) byte-identical and the
-         * pragma-set corpus correct.  Single-index shape (`a$(idx)`,
-         * no TO): the arglist holds one ARGUMENT(idx); for the WRITE
-         * lvalue (LET a$(idx) = rhs) Python's p_substr_assignment
-         * (zxbparser.py:1297-1304) also subtracts base from idx once
-         * and uses it as both lower and upper — exact match for the
-         * single-child STRSLICE the C builds at this site for both
-         * read AND write contexts. */
+        /* OPTIONS.string_base adjustment + STR_INDEX_TYPE promotion —
+         * STRSLICE.make_node (symbols/strslice.py:74-83) wraps each slice
+         * bound in `TYPECAST(STR_INDEX_TYPE, MINUS(<idx>, <base>))`,
+         * base = OPTIONS.string_base.  Two pieces, with different
+         * conditions:
+         *   - the MINUS is only material when base != 0 (for base==0,
+         *     `idx - 0` folds to `idx` for constants and is a no-op at
+         *     the IR level for non-constants — verified against the
+         *     corpus), so it is applied only then;
+         *   - the TYPECAST(STR_INDEX_TYPE=uinteger) is UNCONDITIONAL in
+         *     Python and must be here too.  It is what promotes a small
+         *     constant index (auto-typed ubyte from its value) up to
+         *     uinteger so visit_NUMBER -> ic_param emits the 16-bit
+         *     `ld hl, N; push hl` shape Python uses, not the 8-bit
+         *     `ld a, N; push af` (probe st_single_index: `Print s(2)`).
+         *     For an already-uinteger bound make_typecast short-circuits
+         *     (returns the node unchanged), so the corpus stays
+         *     byte-identical.  Single-index shape (`a$(idx)`, no TO):
+         *     the arglist holds one ARGUMENT(idx) used as both lower and
+         *     upper; the WRITE lvalue (LET a$(idx) = rhs) Python's
+         *     p_substr_assignment (zxbparser.py:1297-1304) likewise
+         *     typecasts to uinteger and subtracts base once — exact
+         *     match for both read and write at this site. */
         int strbase = p->cs->opts.string_base;
         TypeInfo *str_idx = p->cs->symbol_table->basic_types[TYPE_uinteger];
         for (int i = 0; i < arglist->child_count; i++) {
             AstNode *ch = arglist->children[i];
-            if (strbase != 0 && ch) {
-                /* Unwrap ARGUMENT to find the index expr; subtract
-                 * base; wrap result in TYPECAST(STR_INDEX_TYPE) so the
-                 * downstream ic_param sees the correct type.  Mirrors
-                 * STRSLICE.make_node (symbols/strslice.py:74-83):
-                 *   base = NUMBER(string_base)
-                 *   lower = TYPECAST(STR_INDEX_TYPE,
-                 *                    MINUS(lower, base))
-                 * make_binary_node folds when both operands are
-                 * numbers (returns NUMBER(idx-base)); the wrapping
-                 * make_typecast then short-circuits the TYPECAST when
-                 * the value already has the target type — but we want
-                 * the type promoted from ubyte (auto-typed from small
-                 * value) to uinteger so visit_NUMBER → ic_param emits
-                 * the uinteger (`ld hl, N; push hl`) shape Python's
-                 * READ STRSLICE also takes.  Without the explicit
-                 * typecast, C emits the ubyte (`xor a; push af`) shape
-                 * — diverges from Python on `b$ = a$(N)`. */
+            if (ch) {
                 AstNode *idx = ch;
                 AstNode *parent = NULL;
                 int parent_idx = -1;
@@ -1384,22 +1458,26 @@ static AstNode *parse_call_or_array(Parser *p, const char *name, int lineno, boo
                     parent = ch;
                     parent_idx = 0;
                 }
-                AstNode *base = make_number(p, strbase, lineno, str_idx);
-                AstNode *minus = make_binary_node(p->cs, "MINUS", idx,
-                                                  base, lineno, NULL);
-                AstNode *cast = make_typecast(p->cs, str_idx, minus, lineno);
-                AstNode *replacement = cast ? cast : minus;
-                if (replacement) {
+                AstNode *val = idx;
+                if (strbase != 0) {
+                    AstNode *base = make_number(p, strbase, lineno, str_idx);
+                    val = make_binary_node(p->cs, "MINUS", val, base,
+                                           lineno, NULL);
+                }
+                AstNode *cast = make_typecast(p->cs, str_idx, val, lineno);
+                /* make_typecast may (a) return the node mutated in place
+                 * (constant NUMBER retyped to uinteger), (b) return a
+                 * fresh TYPECAST wrapper (non-constant bound), or (c)
+                 * return the node unchanged (already uinteger).  In every
+                 * case keep the ARGUMENT.type_ in lockstep with its child
+                 * (parser.c set arg.type_ = arg_expr.type_ at creation)
+                 * so visit_ARGUMENT emits the right param_<TSUFFIX>. */
+                if (cast) {
                     if (parent) {
-                        parent->children[parent_idx] = replacement;
-                        /* Keep ARGUMENT.type_ in sync with its child
-                         * (parser.c:835 / :1241 set arg.type_ = arg_
-                         * expr.type_ at creation; replacing the child
-                         * must propagate the new type so visit_ARGUMENT
-                         * emits the right param_<TSUFFIX>). */
-                        parent->type_ = replacement->type_;
+                        parent->children[parent_idx] = cast;
+                        parent->type_ = cast->type_;
                     } else {
-                        ch = replacement;
+                        ch = cast;
                     }
                 }
             }
