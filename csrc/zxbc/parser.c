@@ -3518,8 +3518,17 @@ static AstNode *parse_if_statement(Parser *p) {
         ast_add_child(p->cs, nested_if, elif_body);
 
         if (else_block) {
-            /* Chain: previous else's last child becomes this nested IF */
-            ast_add_child(p->cs, else_block, nested_if);
+            /* Chain: attach this nested IF as the ELSE (children[2]) of
+             * the DEEPEST nested IF so far — NOT as another child of the
+             * first one.  Walking children[2] mirrors the ELSE handler
+             * below (3rd child == else branch).  Without the walk, a 3rd+
+             * ELSEIF was appended as a 4th child of the first nested IF,
+             * which visit_IF (n==3 gate) treats as a no-else IF and
+             * silently drops every branch from the 2nd ELSEIF onward
+             * (optspeed: 11 ELSEIFs collapsed to 1). */
+            AstNode *last = else_block;
+            while (last->child_count > 2) last = last->children[2];
+            ast_add_child(p->cs, last, nested_if);
         } else {
             else_block = nested_if;
         }
