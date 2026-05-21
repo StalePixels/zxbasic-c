@@ -5254,6 +5254,16 @@ static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function, bool is_decl
     }
     int lineno = p->previous.lineno;
 
+    /* Python's p_function_header_pre sets p[0]=None and returns on a
+     * rejected header (type mismatch :2966, parameter mismatch :2976/2988,
+     * SUB-with-return-type :2994). p_funcdecl then short-circuits
+     * (`if p[1] is None: return`, zxbparser.py:2905) and NEVER calls
+     * leave_scope() — so NO W150 unused-parameter warning is emitted for a
+     * function whose header was rejected. The C continues parsing the body
+     * (by design — see the reject-site comments), so we must remember the
+     * rejection and suppress the leave-scope W150 emission to match. */
+    bool header_rejected = false;
+
     /* Optional calling convention */
     Convention conv = CONV_unknown;
     if (match(p, BTOK_FASTCALL)) conv = CONV_fastcall;
@@ -5353,7 +5363,9 @@ static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function, bool is_decl
                  * registration block below repeats this resolution; with
                  * the type already corrected here it is a consistent
                  * no-op. The explicit-vs-sigil conflict diagnostic
-                 * (symboltable.py:108-109) stays there (param-name line). */
+                 * (symboltable.py:108-109) is emitted HERE against the
+                 * ORIGINAL declared type — once it is overridden below the
+                 * body-scope block can no longer see the conflict. */
                 {
                     size_t pnl = strlen(param_name);
                     if (pnl > 0 &&
@@ -5362,11 +5374,21 @@ static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function, bool is_decl
                             suffix_to_type(param_name[pnl - 1]);
                         TypeInfo *sti =
                             p->cs->symbol_table->basic_types[sbt];
-                        /* declare() overrides type_ unless an explicit
-                         * (non-implicit) declared type conflicts — in
-                         * which case Python keeps going after the error;
-                         * mirror by still adopting the sigil type (the
-                         * conflict is reported at the 4438-block). */
+                        /* SymbolTable.add (symboltable.py:108-109): if the
+                         * entry already carries a NON-implicit declared type
+                         * that differs from the sigil type, raise
+                         * "expected type <sigil> for '<id$>', got <decl>" at
+                         * the param's lineno. Python does NOT abort — it
+                         * keeps going and adopts the sigil type (line 123).
+                         * Mirror exactly: emit against the original
+                         * param_type, then override. */
+                        if (param_type && !param_type->implicit &&
+                            !type_equal(param_type, sti)) {
+                            zxbc_error(p->cs, param_line,
+                                       "expected type %s for '%s', got %s",
+                                       sti->name, param_name,
+                                       param_type->name);
+                        }
                         param_type = sti;
                     }
                 }
@@ -5421,6 +5443,7 @@ static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function, bool is_decl
         if (!is_function && ret_type && !ret_type->implicit) {
             zxbc_error(p->cs, lineno,
                        "SUBs cannot have a return type definition");
+            header_rejected = true;  /* Python p[0]=None — no leave_scope/W150 */
         }
     }
 
@@ -5498,6 +5521,7 @@ static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function, bool is_decl
         } else if (!new_is_implicit && !type_equal(id_node->type_, ret_type)) {
             zxbc_error(p->cs, lineno, "Function '%s' (previously declared at %d) type mismatch",
                        func_name, id_node->lineno);
+            header_rejected = true;  /* Python p[0]=None — no leave_scope/W150 */
         }
     }
 
@@ -5559,6 +5583,7 @@ static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function, bool is_decl
                  * mismatch" — use the existing faithful helper, not the
                  * divergent inline literal. */
                 err_parameter_mismatch(p->cs, lineno, func_name, id_node->lineno);
+                header_rejected = true;  /* Python p[0]=None — no leave_scope/W150 */
             } else {
                 for (int pi = 0; pi < old_params->child_count; pi++) {
                     AstNode *a = old_params->children[pi];
@@ -5574,6 +5599,7 @@ static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function, bool is_decl
                             /* Python syntax_error_parameter_mismatch
                              * (errmsg.py:255) — existing faithful helper. */
                             err_parameter_mismatch(p->cs, lineno, func_name, id_node->lineno);
+                            header_rejected = true;  /* Python p[0]=None — no leave_scope/W150 */
                             break;
                         }
                     }
@@ -5722,16 +5748,35 @@ static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function, bool is_decl
      * (symboltable.py:270-283: param accessed-mark on line 274 precedes
      * compute_offsets on line 283) and compute_offsets' Scope.values(
      * filter_by_opt=True) drops the un-accessed at O>1 — otherwise a
-     * never-read parameter would lose its frame slot. (Warnings are
-     * intentionally not reproduced here — Python's leave_scope is called
-     * show_warnings=False on this path, zxbparser.py:2929.) */
+     * never-read parameter would lose its frame slot.
+     *
+     * W150 (Parameter): leave_scope's param loop also emits the
+     * unused-parameter warning (symboltable.py:276-277): for an unaccessed
+     * param, `if show_warnings and not v.byref: warning_not_used(v.lineno,
+     * v.name, kind="Parameter")`. THIS path is the real definition
+     * (p_funcdecl, zxbparser.py:2911 — leave_scope() with the default
+     * show_warnings=True); the forward-DECLARE path (p_funcdeclforward,
+     * :2929, show_warnings=False) returns early above and never reaches
+     * here, so emitting here is faithful. byref params are skipped (they
+     * can return a value, so are always treated as used). warn_not_used
+     * itself gates on optimization_level>0 (errmsg.py:157). Emit BEFORE
+     * force-marking accessed (the warning predicates on the original
+     * unaccessed state, which the loop condition captures). */
     {
         Scope_ *bs = p->cs->symbol_table->current_scope;
         for (int si = 0; si < bs->ordered_count; si++) {
             AstNode *e = bs->ordered[si];
             if (e && e->tag == AST_ID &&
-                e->u.id.scope == SCOPE_parameter && !e->u.id.accessed)
+                e->u.id.scope == SCOPE_parameter && !e->u.id.accessed) {
+                /* header_rejected: Python returned before leave_scope, so
+                 * no W150 here (declare1/2/3, type-mismatch, SUB-ret-type).
+                 * The force-mark-accessed still runs (codegen-silent). */
+                if (!header_rejected && !e->u.id.byref)
+                    warn_not_used(p->cs, e->lineno,
+                                  e->u.id.name ? e->u.id.name : "",
+                                  "Parameter");
                 e->u.id.accessed = true;
+            }
         }
     }
 
