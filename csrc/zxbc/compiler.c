@@ -1494,8 +1494,8 @@ static int na_find(const char **names, int n, const char *name) {
     return -1;
 }
 
-static bool check_call_arguments(CompilerState *cs, AstNode *call,
-                                 AstNode *entry, const char *id_) {
+bool check_call_arguments(CompilerState *cs, AstNode *call,
+                          AstNode *entry, const char *id_) {
     /* entry.ref.params — the callee PARAMLIST (api/check.py:106),
      * stamped on the shared function ID at FUNCDECL-build time
      * (parser.c id_node->u.id.params). It is NULL for a builtin /
@@ -1747,14 +1747,15 @@ bool check_pending_calls(CompilerState *cs) {
         /* R3-R10 argument checks (api/check.py check_call_arguments).
          * Run ONLY for calls Python would have deferred to
          * gl.FUNCTION_CALLS — i.e. callee NOT a finished definition at
-         * call-parse time (Python call.py:104-110). Python checks the
-         * inline branch (call.py:103) at parse; the C has no inline
-         * path, so an inline-domain call is outside this deferred
-         * loop's faithful scope — skipping it here both stays faithful
-         * to Python's dispatch split and keeps FALSE_POS at 0 for the
-         * pre-existing parenless-call parser-shape divergence
-         * (funcnoparm: a def-first 0-arg `xx` call the C parser
-         * synthesises where PLY reduces a 1-arg parenless call). The
+         * call-parse time (Python call.py:104-110). Inline (def-first)
+         * calls are checked at PARSE time instead, by
+         * inline_check_call_arguments (parser.c), faithfully mirroring
+         * Python's inline branch (call.py:103) which runs the same full
+         * check_call_arguments at the call site — including its parse-time
+         * firing order relative to the surrounding statement's [W100]
+         * implicit-type warnings. Running the inline check here in the
+         * post-parse loop instead would mis-order those warnings (the
+         * call-arg error would follow rather than precede them). The
          * pre-existing R2/R11 checks below are NOT gated by this. */
         if (!call->u.call.callee_inline) {
             /* Python passes fname=filename (SymbolCALL.filename, the
@@ -1771,170 +1772,6 @@ bool check_pending_calls(CompilerState *cs) {
             if (!ok) {
                 result = false;
                 continue;
-            }
-        } else {
-            /* INLINE domain (Python call.py:102-103: entry.declared and
-             * not entry.forwarded — a def-first call). Python runs the
-             * FULL check_call_arguments here too, immediately at parse;
-             * its load-bearing side effect for codegen is
-             * `arg.byref = True` for every ByRef parameter (check.py:170),
-             * which the ByRef-array/@-element argument lowering in
-             * tr_visit_argument/tr_visit_unary keys on. The C cannot run
-             * the full R3-R10 here without re-firing the parenless-call
-             * (funcnoparm) FALSE_POS the gate comment documents, so run a
-             * MINIMAL byref-only pass: positionally zip args↔params and
-             * set arg.byref where the param is ByRef. No R3-R10
-             * diagnostics, no typecast, no default-fill — purely the
-             * codegen-visible arg.byref propagation Python performs. */
-            if (entry->tag == AST_ID && entry->u.id.params &&
-                entry->u.id.params->tag == AST_PARAMLIST &&
-                call->child_count >= 2) {
-                AstNode *pl = entry->u.id.params;
-                AstNode *al = call->children[1];
-                if (al && al->tag == AST_ARGLIST) {
-                    int zn = al->child_count < pl->child_count
-                                 ? al->child_count : pl->child_count;
-                    for (int z = 0; z < zn; z++) {
-                        AstNode *arg = al->children[z];
-                        AstNode *pm  = pl->children[z];
-                        if (!arg || arg->tag != AST_ARGUMENT || !pm)
-                            continue;
-                        if (pm->u.argument.byref) {
-                            /* R9 byref-shape check (api/check.py:159-161),
-                             * run inline so a def-first call to a ByRef
-                             * SUB/FUNCTION rejects a non-variable argument
-                             * exactly as Python does (call.py:103 runs the
-                             * full check_call_arguments inline), instead of
-                             * letting a non-ID/ARRAYLOAD value reach the
-                             * translator's `visit_ARGUMENT byref array —
-                             * non-ARRAYACCESS shape residue` stub
-                             * (CLAUDE.md r8: never leak an internal stub).
-                             * ONLY the shape check is run here (no R3-R8,
-                             * no typecast) so the funcnoparm FALSE_POS the
-                             * full check would re-fire stays suppressed — a
-                             * 0-arg parenless call has no byref arg to trip
-                             * this.  arg.value == arg->children[0]; Python
-                             * accepts ID / ARRAYLOAD (the C array read is
-                             * AST_ARRAYACCESS, matching the deferred R9
-                             * path at check_call_arguments). */
-                            AstNode *v = arg->child_count > 0
-                                             ? arg->children[0] : NULL;
-                            bool is_var_ref =
-                                v && (v->tag == AST_ID ||
-                                      v->tag == AST_ARRAYLOAD ||
-                                      v->tag == AST_ARRAYACCESS);
-                            if (!is_var_ref) {
-                                char *saved_file = cs->current_file;
-                                if (call->u.call.filename)
-                                    cs->current_file = call->u.call.filename;
-                                zxbc_error(cs, call->lineno,
-                                    "Expected a variable name, not an expression (parameter By Reference)");
-                                cs->current_file = saved_file;
-                                result = false;
-                            } else {
-                                arg->u.argument.byref = true;
-                            }
-                        }
-                    }
-                    /* Bug B: optional-param default-fill (api/check.py
-                     * :127-135). Python's inline branch (call.py:103) also
-                     * runs check_call_arguments which appends a synthesised
-                     * ARGUMENT(param.default_value, byref=False, name=
-                     * param.name) for every missing optional param (break
-                     * on first missing-with-no-default). The deferred-path
-                     * default-fill at lines 1478-1495 already handles the
-                     * non-inline case; replicate the no-diagnostic subset
-                     * here so a def-first `sub test(x=0): end sub; test()`
-                     * still gets the `push <default>` argument lowering.
-                     * Diagnostics (R3-R10) intentionally not run here to
-                     * preserve the funcnoparm FALSE_POS gate documented
-                     * above. */
-                    if (al->child_count < pl->child_count) {
-                        /* Named-args dict mirror (api/check.py:104, 125-135).
-                         * Positional args have NULL names — back-fill from
-                         * the paired param so the "param already supplied"
-                         * check works for both positional and y:=expr
-                         * named-arg call sites. WITHOUT this back-fill the
-                         * inline branch's default-fill is purely positional
-                         * (pi = al->child_count) and a `test(y:=213)` on a
-                         * 2-param signature fills slot pi=1 (y) with y's
-                         * default — pushing y's default into x's slot
-                         * (keyword_arg2). */
-                        int izip = al->child_count < pl->child_count
-                                     ? al->child_count : pl->child_count;
-                        for (int z = 0; z < izip; z++) {
-                            AstNode *arg = al->children[z];
-                            AstNode *pm  = pl->children[z];
-                            if (!arg || arg->tag != AST_ARGUMENT) continue;
-                            if (arg->u.argument.name == NULL && pm)
-                                arg->u.argument.name = (char *)pm->u.argument.name;
-                        }
-                        /* Walk params in order; skip those already supplied
-                         * by name; stop at first missing-with-no-default. */
-                        for (int pi = 0; pi < pl->child_count; pi++) {
-                            AstNode *pm = pl->children[pi];
-                            if (!pm) continue;
-                            const char *pn = pm->u.argument.name;
-                            bool already = false;
-                            for (int a = 0; a < al->child_count; a++) {
-                                AstNode *ag = al->children[a];
-                                if (ag && ag->tag == AST_ARGUMENT &&
-                                    ag->u.argument.name && pn &&
-                                    strcmp(ag->u.argument.name, pn) == 0) {
-                                    already = true; break;
-                                }
-                            }
-                            if (already) continue;
-                            AstNode *defv = (pm->child_count >= 1)
-                                              ? pm->children[0] : NULL;
-                            if (defv == NULL) break;
-                            AstNode *arg = ast_new(cs, AST_ARGUMENT,
-                                                    call->lineno);
-                            arg->u.argument.name = (char *)pn;
-                            arg->u.argument.byref = false;
-                            ast_add_child(cs, arg, defv);
-                            arg->type_ = defv->type_;
-                            ast_add_child(cs, al, arg);
-                        }
-                    }
-                    /* Bug D: arg->param typecast (api/check.py:156) —
-                     * INLINE branch port.  Python's inline check_call
-                     * also calls arg.typecast(param.type_).  ARGUMENT
-                     * .type_ resolves to value.type_, so without this a
-                     * uinteger arg passed to a ubyte FASTCALL param
-                     * keeps type uinteger and emits `push hl` instead
-                     * of the `ld a, l; push af` ubyte-fastcall lowering.
-                     * NARROW the cast to numeric-from-numeric to avoid
-                     * surfacing pre-existing missing warnings (W100/
-                     * W150) on string-to-numeric error fixtures (lcd2,
-                     * typecast2) that we cannot match exactly without
-                     * the warning lowering ported; for these the
-                     * pre-Bug-D FALSE_NEG behaviour is preserved.  The
-                     * deferred path at line 1577-1582 still runs the
-                     * full check (no guard) for non-inline calls. */
-                    int zlim = al->child_count < pl->child_count
-                                 ? al->child_count : pl->child_count;
-                    for (int z = 0; z < zlim; z++) {
-                        AstNode *arg = al->children[z];
-                        AstNode *pm  = pl->children[z];
-                        if (!arg || arg->tag != AST_ARGUMENT ||
-                            arg->child_count < 1 || !pm || !pm->type_)
-                            continue;
-                        AstNode *aval = arg->children[0];
-                        if (!aval || !aval->type_) continue;
-                        /* Narrow: only numeric->numeric to skip string
-                         * conversion errors that we cannot stderr-match. */
-                        if (!type_is_numeric(aval->type_) ||
-                            !type_is_numeric(pm->type_))
-                            continue;
-                        AstNode *casted = make_typecast(cs, pm->type_,
-                                                        aval, call->lineno);
-                        if (casted == NULL) continue;
-                        arg->children[0] = casted;
-                        if (casted->parent != arg) casted->parent = arg;
-                        arg->type_ = casted->type_;
-                    }
-                }
             }
         }
 

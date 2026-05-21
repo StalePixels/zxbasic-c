@@ -691,6 +691,15 @@ char *current_data_label(CompilerState *cs);
 /* Post-parse validation (from p_start in zxbparser.py, check.py) */
 bool check_pending_labels(CompilerState *cs, AstNode *ast);
 bool check_pending_calls(CompilerState *cs);
+/* check_call_arguments — faithful port of api/check.py:91-183. Python
+ * runs it INLINE at the call site (symbols/call.py:103) when the callee
+ * is a finished definition (entry.declared and not entry.forwarded),
+ * and via check_pending_calls for deferred (forward-declared) calls.
+ * Exposed so the parser can invoke it at parse time for the inline
+ * branch — matching Python's parse-time firing order relative to the
+ * later-emitted implicit-type [W100] warnings. */
+bool check_call_arguments(CompilerState *cs, AstNode *call,
+                          AstNode *entry, const char *id_);
 void symboltable_check_classes(SymbolTable *st, CompilerState *cs);
 
 #endif /* ZXBC_H */

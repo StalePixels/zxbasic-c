@@ -1053,6 +1053,60 @@ AstNode *parse_primary(Parser *p) {
     return NULL;
 }
 
+/* Inline (def-first) argument check, run at PARSE time.
+ *
+ * Faithful port of Python symbols/call.py:102-103: when the resolved
+ * callee is already a finished definition (entry.declared and not
+ * entry.forwarded — the C `callee_inline` predicate), Python runs the
+ * full check.check_call_arguments AT THE CALL SITE during parsing,
+ * rather than deferring it to check_pending_calls. Running it here (not
+ * in the post-parse deferred loop) reproduces Python's parse-time
+ * firing order: the call-argument errors precede the later-emitted
+ * implicit-type [W100] warnings of the surrounding statement (e.g. the
+ * LET target in `let a = test(1)`), exactly as the oracle orders them.
+ * check_call_arguments also performs the codegen-visible side effects
+ * (default-fill, arg->param typecast, arg.byref propagation), so the
+ * inline call no longer needs the bespoke minimal pass that the
+ * deferred loop's `callee_inline` branch used to run.
+ *
+ * The callee entry is the call node's child[0]; resolve the global-scope
+ * definition the same way the deferred loop does so a callee whose
+ * params were stamped on the global FUNCDECL entry is seen. */
+static void inline_check_call_arguments(Parser *p, AstNode *call) {
+    if (!call || call->child_count < 1) return;
+    AstNode *callee = call->children[0];
+    if (!callee || callee->tag != AST_ID) return;
+    if (!call->u.call.callee_inline) return;
+
+    const char *name = callee->u.id.name;
+    AstNode *entry = callee;
+    if (name) {
+        /* Strip a single deprecated suffix for the global lookup, mirroring
+         * check_pending_calls' resolution. */
+        size_t len = strlen(name);
+        char stripped[256];
+        const char *lookup_name = name;
+        if (len > 0 && len < sizeof(stripped) &&
+            is_deprecated_suffix(name[len - 1])) {
+            memcpy(stripped, name, len - 1);
+            stripped[len - 1] = '\0';
+            lookup_name = stripped;
+        }
+        AstNode *g = symboltable_lookup(p->cs->symbol_table, lookup_name);
+        if (g) entry = g;
+    }
+
+    /* Python passes fname=filename (SymbolCALL.filename) for R3-R6 and
+     * fname=arg.filename for R7/R9 — both the call-site file. Swap
+     * cs->current_file for the duration (the faithful fname= analogue),
+     * exactly as the deferred loop does. */
+    char *saved_file = p->cs->current_file;
+    if (call->u.call.filename)
+        p->cs->current_file = call->u.call.filename;
+    check_call_arguments(p->cs, call, entry, name);
+    p->cs->current_file = saved_file;
+}
+
 /* Parse function call or array access: name(...) */
 static AstNode *parse_call_or_array(Parser *p, const char *name, int lineno, bool expr_context, bool addressof_ctx) {
     consume(p, BTOK_LP, "Expected '('");
@@ -1594,6 +1648,11 @@ static AstNode *parse_call_or_array(Parser *p, const char *name, int lineno, boo
 
     /* Track for post-parse validation (check_pending_calls) */
     vec_push(p->cs->function_calls, n);
+
+    /* Python call.py:103 — inline branch runs check_call_arguments at the
+     * call site during parsing. Deferred (non-inline) calls are checked
+     * later by check_pending_calls (which skips callee_inline calls). */
+    inline_check_call_arguments(p, n);
 
     return n;
 }
@@ -3589,6 +3648,11 @@ static AstNode *parse_statement(Parser *p) {
                 (id_node->tag == AST_ID && id_node->u.id.params != NULL &&
                  !id_node->u.id.forwarded);
             vec_push(p->cs->function_calls, s);
+            /* Python call.py:103 — inline branch runs check_call_arguments
+             * at the parenless call site during parsing (deferred calls are
+             * checked later by check_pending_calls, which skips
+             * callee_inline calls). */
+            inline_check_call_arguments(p, s);
         }
 
         /* Statement-level sub call: FUNCCALL -> CALL, exactly as the
@@ -5329,12 +5393,30 @@ static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function, bool is_decl
     /* Parameters */
     AstNode *params = ast_new(p->cs, AST_PARAMLIST, lineno);
     bool had_optional_param = false;
+    /* Params declared explicitly ByVal as arrays are REJECTED from the
+     * PARAMLIST (zxbparser.py:3089-3093 sets p[0]=None), but Python's
+     * declare_param has ALREADY registered the symbol in the function
+     * scope — so its leave_scope "[W150] Parameter '<id>' is never used"
+     * warning still fires. Collect them here and register them in the
+     * body scope below (after enter_scope), WITHOUT adding them to the
+     * PARAMLIST that check_call_arguments counts. Tiny count in practice. */
+    AstNode *dropped_byval_array[16];
+    int dropped_byval_array_n = 0;
     if (match(p, BTOK_LP)) {
         if (!check(p, BTOK_RP)) {
             do {
                 bool byref = p->cs->opts.default_byref;
+                /* Track whether BYVAL was given explicitly: an array
+                 * parameter passed explicitly ByVal is rejected
+                 * (zxbparser.py:3084-3094 p_param_byval_definition). */
+                bool explicit_byval = false;
+                int byval_line = lineno;
                 if (match(p, BTOK_BYREF)) byref = true;
-                else if (match(p, BTOK_BYVAL)) byref = false;
+                else if (match(p, BTOK_BYVAL)) {
+                    byref = false;
+                    explicit_byval = true;
+                    byval_line = p->previous.lineno;
+                }
 
                 if (!is_name_token(p)) {
                     parser_error(p, "Expected parameter name");
@@ -5350,6 +5432,43 @@ static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function, bool is_decl
                     consume(p, BTOK_RP, "Expected ')' for array parameter");
                     is_array = true;
                     byref = true; /* arrays always byref */
+                }
+
+                /* p_param_byval_definition (zxbparser.py:3089-3093): an
+                 * array parameter cannot be passed ByVal — emit the
+                 * "Array parameter '<id>' must be passed ByRef" error at
+                 * the BYVAL token's line and DROP this param (Python sets
+                 * p[0] = None, so the parameter is not appended to the
+                 * PARAMLIST). The remaining call-argument checks then see
+                 * the reduced parameter count exactly as Python does. */
+                if (is_array && explicit_byval) {
+                    err_cannot_pass_array_by_value(p->cs, byval_line,
+                                                   param_name);
+                    /* Consume this param's typedef so the loop resyncs at
+                     * the next ',' / ')' (the do-while's match(COMMA)
+                     * advances to the following param). The param is
+                     * dropped from the PARAMLIST — exactly as Python's
+                     * p[0] = None — but a node is still built and remembered
+                     * so it can be registered in the body scope, where its
+                     * "[W150] never used" warning fires (Python's
+                     * declare_param ran before the byval rejection). */
+                    TypeInfo *dtype = parse_typedef(p);
+                    if (!dtype)
+                        dtype = type_new_ref(p->cs, p->cs->default_type,
+                                             param_line, true);
+                    if (dropped_byval_array_n <
+                        (int)(sizeof(dropped_byval_array) /
+                              sizeof(dropped_byval_array[0]))) {
+                        AstNode *dp = ast_new(p->cs, AST_ARGUMENT,
+                                              param_line);
+                        dp->u.argument.name =
+                            arena_strdup(&p->cs->arena, param_name);
+                        dp->u.argument.byref = false;
+                        dp->u.argument.is_array = true;
+                        dp->type_ = dtype;
+                        dropped_byval_array[dropped_byval_array_n++] = dp;
+                    }
+                    continue;
                 }
 
                 TypeInfo *param_type = parse_typedef(p);
@@ -5710,6 +5829,34 @@ static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function, bool is_decl
             sym->u.id.offset = param->u.argument.offset;
             sym->u.id.offset_set = true;
             sym->u.id.byref = param->u.argument.byref;
+        }
+    }
+
+    /* Register byval-array-rejected params in the body scope so their
+     * "[W150] Parameter '<id>' is never used" warning fires at
+     * leave_scope (Python declare_param ran before the byval rejection,
+     * so the symbol exists in scope even though it was dropped from the
+     * PARAMLIST). They are NOT in `params`, so check_call_arguments still
+     * sees the reduced parameter count. Suffix handling mirrors the loop
+     * above; these are scope-only entries (no PARAMLIST offset). */
+    for (int i = 0; i < dropped_byval_array_n; i++) {
+        AstNode *dp = dropped_byval_array[i];
+        const char *pname = dp->u.argument.name;
+        size_t plen = strlen(pname);
+        char stripped[256];
+        if (plen > 0 && plen < sizeof(stripped) &&
+            is_deprecated_suffix(pname[plen - 1])) {
+            memcpy(stripped, pname, plen - 1);
+            stripped[plen - 1] = '\0';
+            pname = stripped;
+        }
+        AstNode *sym = symboltable_declare(p->cs->symbol_table, p->cs,
+                                           pname, dp->lineno, CLASS_array);
+        if (sym) {
+            sym->type_ = dp->type_;
+            sym->u.id.declared = true;
+            sym->u.id.scope = SCOPE_parameter;
+            sym->u.id.byref = false;
         }
     }
 
