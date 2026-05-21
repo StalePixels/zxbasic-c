@@ -316,6 +316,8 @@ static int s_log2(long x) { int n = 0; while (x > 1) { x >>= 1; n++; } return n;
 #define RL_BXOR32     ZXBC_NAMESPACE ".__BXOR32"
 #define RL_BNOT32     ZXBC_NAMESPACE ".__BNOT32"
 #define RL_PLOADF     ZXBC_NAMESPACE ".__PLOADF"  /* core.py:104 */
+#define RL_PSTOREF    ZXBC_NAMESPACE ".__PSTOREF"  /* core.py:106 */
+#define RL_PISTOREF   ZXBC_NAMESPACE ".__PISTOREF" /* core.py:101 */
 #define RL_PISTORE16  ZXBC_NAMESPACE ".__PISTORE16" /* core.py:99 */
 #define RL_PISTORE32  ZXBC_NAMESPACE ".__PISTORE32" /* core.py:100 */
 #define RL_PISTORE_STR  ZXBC_NAMESPACE ".__PISTORE_STR"  /* core.py:102 */
@@ -583,6 +585,8 @@ static const char *s_required_module(const char *label) {
     if (strcmp(label, RL_PISTORE32)  == 0) return "pistore32.asm"; /* core.py:229 */
     if (strcmp(label, RL_PISTORE_STR)  == 0) return "storestr.asm";  /* core.py:231 */
     if (strcmp(label, RL_PISTORE_STR2) == 0) return "storestr2.asm"; /* core.py:232 */
+    if (strcmp(label, RL_PSTOREF)    == 0) return "pstoref.asm"; /* core.py:235 */
+    if (strcmp(label, RL_PISTOREF)   == 0) return "storef.asm";  /* core.py:230 */
     if (strcmp(label, RL_PSTORE32)   == 0) return "pstore32.asm"; /* core.py:236 */
     if (strcmp(label, RL_PSTORE_STR)  == 0) return "pstorestr.asm";  /* core.py:237 */
     if (strcmp(label, RL_PSTORE_STR2) == 0) return "pstorestr2.asm"; /* core.py:238 */
@@ -2687,6 +2691,12 @@ static StrVec emit_pload32(Backend *b, Quad *q) {
 /* float_fpush body is defined later (with the Float emitters); the
  * existing forward decl is later still, so declare here for emit_ploadf. */
 static void float_fpush(Backend *b, StrVec *out);
+/* Forward decls for the float/fixed operand loaders — emit_pstoref /
+ * emit_pstoref16 below use them, but their bodies live with the
+ * Float/Fixed16 emitters further down. */
+static StrVec float_get_oper(Backend *b, const char *op1, const char *op2);
+static StrVec fixed16_get_oper(Backend *b, const char *op1, const char *op2,
+                               bool use_bc, bool reversed);
 /* _ploadf (_pload.py:155-160): _pload(ins[2], 5); Float.fpush().
  * 5-byte float local-load. PLOADF16 (main.py:532) routes to _pload32. */
 static StrVec emit_ploadf(Backend *b, Quad *q) {
@@ -2826,6 +2836,42 @@ static StrVec emit_pstore32(Backend *b, Quad *q) {
     long i = s_int_val(offset);
     if (i >= 0) i += 4;
     StrVec out = bits32_get_oper(b, value, NULL, false, false);
+    sv_pushf(b, &out, "ld bc, %ld", i);
+    sv_push(b, &out, s_runtime_call(b,
+                                    indirect ? RL_PISTORE32 : RL_PSTORE32));
+    return out;
+}
+
+/* _pstoref (_pload.py:386-413): stores a Float (5-byte FP) value (2nd
+ * operand) into a local/param slot at signed offset (1st operand).
+ * Float.get_oper loads the value into A/DE/BC, then `ld hl, i` + PSTOREF
+ * (PISTOREF for the '*' indirect offset).  i += 4 for >=0 offsets
+ * (return addr + pushed IX). */
+static StrVec emit_pstoref(Backend *b, Quad *q) {
+    const char *value  = q_ins(q, 2);
+    const char *offset = q_ins(q, 1);
+    bool indirect = offset[0] == '*';
+    if (indirect) offset++;
+    long i = s_int_val(offset);
+    if (i >= 0) i += 4;
+    StrVec out = float_get_oper(b, value, NULL);
+    sv_pushf(b, &out, "ld hl, %ld", i);
+    sv_push(b, &out, s_runtime_call(b,
+                                    indirect ? RL_PISTOREF : RL_PSTOREF));
+    return out;
+}
+
+/* _pstoref16 (_pload.py:356-383): Fixed (16.16) stored via Fixed16.
+ * get_oper into DE/HL then PSTORE32/PISTORE32 (fixed is a 32-bit slot).
+ * `ld bc, i` carries the offset (PSTORE32 reads BC). */
+static StrVec emit_pstoref16(Backend *b, Quad *q) {
+    const char *value  = q_ins(q, 2);
+    const char *offset = q_ins(q, 1);
+    bool indirect = offset[0] == '*';
+    if (indirect) offset++;
+    long i = s_int_val(offset);
+    if (i >= 0) i += 4;
+    StrVec out = fixed16_get_oper(b, value, NULL, false, false);
     sv_pushf(b, &out, "ld bc, %ld", i);
     sv_push(b, &out, s_runtime_call(b,
                                     indirect ? RL_PISTORE32 : RL_PSTORE32));
@@ -5554,6 +5600,8 @@ static StrVec quad_emit(Backend *b, Quad *q) {
     if (strcmp(I, "pstorei8")  == 0 || strcmp(I, "pstoreu8")  == 0) return emit_pstore8(b, q);
     if (strcmp(I, "pstorei16") == 0 || strcmp(I, "pstoreu16") == 0) return emit_pstore16(b, q);
     if (strcmp(I, "pstorei32") == 0 || strcmp(I, "pstoreu32") == 0) return emit_pstore32(b, q);
+    if (strcmp(I, "pstoref")   == 0) return emit_pstoref(b, q);
+    if (strcmp(I, "pstoref16") == 0) return emit_pstoref16(b, q);
     if (strcmp(I, "pstorestr") == 0) return emit_pstorestr(b, q);
     if (strcmp(I, "pastorestr")== 0) return emit_pastorestr(b, q);
 
