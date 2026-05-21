@@ -3523,6 +3523,15 @@ static AstNode *parse_if_statement(Parser *p) {
     AstNode *condition = parse_expression(p, PREC_NONE + 1);
     match(p, BTOK_THEN); /* optional — Sinclair BASIC allows IF without THEN */
 
+    /* p_if_then_part (src/zxbc/zxbparser.py:1515-1525): a constant IF
+     * condition is always true/false -> W110 at the IF line
+     * (p.lineno(1)).  bool(expr.value): nonzero -> True, zero -> False. */
+    if (condition && check_is_number(condition)) {
+        double cv = 0;
+        zxbc_eval_to_num(condition, &cv);
+        warn_condition_always(p->cs, lineno, cv != 0.0);
+    }
+
     /* Single-line IF: IF cond THEN stmt [:stmt...] [ELSE stmt [:stmt...]]
      * Note: THEN: is still single-line (: is statement separator) */
     if (!check(p, BTOK_NEWLINE) && !check(p, BTOK_EOF)) {
@@ -3893,19 +3902,45 @@ static AstNode *parse_do_statement(Parser *p) {
     }
 
     consume(p, BTOK_LOOP, "Expected LOOP");
+    int loop_line = p->previous.lineno;
 
     /* LOOP WHILE cond / LOOP UNTIL cond */
     AstNode *post_cond = NULL;
+    int cond_kw_line = loop_line;
     if (match(p, BTOK_WHILE)) {
+        cond_kw_line = p->previous.lineno;
         post_cond = parse_expression(p, PREC_NONE + 1);
         kind = "LOOP_WHILE";
     } else if (match(p, BTOK_UNTIL)) {
+        cond_kw_line = p->previous.lineno;
         post_cond = parse_expression(p, PREC_NONE + 1);
         kind = "LOOP_UNTIL";
     }
 
     if (p->cs->loop_stack.len > 0)
         vec_pop(p->cs->loop_stack);
+
+    /* p_do_loop_until / p_do_loop_while (src/zxbc/zxbparser.py:1708-1730,
+     * 1838-1859): a post-test loop warns W110 when its condition is a
+     * constant, and W130 when its body is empty.  Python's p.lineno(3):
+     * the empty-body form has the bare LOOP as label_loop (token 2), so
+     * token 3 is the UNTIL/WHILE keyword; the non-empty form has
+     * label_loop (the LOOP keyword) at token 3.  Mirror that: W130 (only
+     * fires on the empty body) -> the UNTIL/WHILE keyword line; W110 ->
+     * that same keyword line for an empty body, else the LOOP keyword
+     * line.  (W110 before W130, matching the Python order.) */
+    if (post_cond) {
+        bool body_empty = (body->child_count == 0);
+        if (check_is_number(post_cond)) {
+            double cv = 0;
+            zxbc_eval_to_num(post_cond, &cv);
+            warn_condition_always(p->cs,
+                                  body_empty ? cond_kw_line : loop_line,
+                                  cv != 0.0);
+        }
+        if (body_empty)
+            warn_empty_loop(p->cs, cond_kw_line);
+    }
 
     AstNode *s = make_sentence_node(p, kind, lineno);
     if (pre_cond) ast_add_child(p->cs, s, pre_cond);
@@ -5370,6 +5405,19 @@ static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function, bool is_decl
 
     /* Parse body */
     skip_newlines(p);
+    /* p_function_header_pre (src/zxbc/zxbparser.py:3002-3004): a FASTCALL
+     * SUB/FUNCTION declared with more than one parameter -> W160.
+     * Python's lineno is p.lineno(3) — the implicit-typedef position,
+     * which for a header with no explicit return type resolves (via PLY's
+     * epsilon-production lookahead) to the first token after the header
+     * NEWLINE, i.e. the line parsing resumes on (p->current here, after
+     * skip_newlines).  Uses the suffix-stripped entry name and the
+     * SUB/FUNCTION class, matching FUNCTION_LEVEL[-1].class_. */
+    if (conv == CONV_fastcall && params->child_count > 1) {
+        warn_fastcall_n_params(p->cs, p->current.lineno,
+                               is_function ? "FUNCTION" : "SUB",
+                               func_name, params->child_count);
+    }
     AstNode *body = make_block_node(p, lineno);
     while (!check(p, BTOK_EOF)) {
         /* Check for END FUNCTION / END SUB */
