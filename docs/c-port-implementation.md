@@ -1,11 +1,22 @@
 # ZX BASIC C Port — Implementation Report
 
 Companion to [`c-port-plan.md`](c-port-plan.md) (the plan) and the
-phase plans under [`plans/`](plans/). This document records the **final
-implemented state**: a C port of the Boriel ZX BASIC toolchain whose
-output is **byte-for-byte identical** to the Python original across the
-full compile→assemble→link pipeline, for both the `zx48k` and `zxnext`
+phase plans under [`plans/`](plans/). This document records the
+implemented state: a C port of the Boriel ZX BASIC toolchain whose
+output is **byte-for-byte identical to the Python original across the
+inherited functional corpus** (`tests/functional/`), through the full
+compile→assemble→link pipeline, for both the `zx48k` and `zxnext`
 targets.
+
+**Scope of that claim (important):** corpus byte-identity is achieved
+and independently verified — but it is **not** the same as full
+drop-in completeness. A fixed corpus is byte-truth only for the
+codepaths it exercises; it is silent on the rest. The
+rejection/diagnostic surface (error/warning parity on *invalid* input)
+and codepaths the corpus never exercises still carry **known open
+divergences** — see *Known residue* below and the verification-probe
+series (`csrc/tests/codegen_probes/`). "Port complete" (full drop-in)
+is **not** yet reached.
 
 ## Status
 
@@ -19,13 +30,24 @@ through the gated pipeline. (Counts exclude fixtures the *Python*
 reference itself cannot compile/assemble — `skip-python` — and a small
 `skip-known-bug` set; see "Known residue" below.)
 
+These counts are **corpus codegen byte-identity** (the
+codegen→assemble→binary path). They are **not** a port-complete claim:
+the rejection/diagnostic surface and untested-codepath divergences in
+*Known residue* are outside what this table measures.
+
 Cross-component equivalence guards also pass:
 
 | Guard | Result |
 |-------|--------|
-| `zxbc` parse-equivalence (exit-code parity vs Python `--parse-only`) | 952 PASS / 47 STDERR_MISMATCH / **0 FALSE_POS** |
+| `zxbc` parse-equivalence (exit-code parity vs Python `--parse-only`) | 952 PASS / **34 FALSE_NEG** (C accepts what Python rejects) / 47 STDERR_MISMATCH / **0 FALSE_POS** |
 | `zxbpp` strict harness | 86 success + 5 error PASS / **0 FAIL** |
 | `zxbasm` success (binary) tests | 60 PASS / **0 FAIL** |
+
+`FALSE_POS = 0` is the hard regression gate and holds. The **34
+FALSE_NEG** (C accepts programs Python rejects) and **47
+STDERR_MISMATCH** (divergent error/warning text) are *not* clean —
+they are the rejection/diagnostic-surface residue catalogued under
+*Known residue*, required for full drop-in.
 
 ## What "byte-identical" means here, and how it is measured
 
@@ -45,14 +67,28 @@ a later stage can never paper over an earlier divergence:
 3. **Stage 3 — end-to-end.** The default `zxbc -o out.bin` pipeline is run
    end-to-end; exit code and final binary are compared. Gated on Stage 2.
 
-A fixture is **PORT-COMPLETE** only when all three stages are EQUAL with
-zero DIVERGE and zero C-ERROR. The verdict line is mechanical, not a
-human judgement.
+A fixture is **fully byte-identical** only when all three stages are
+EQUAL with zero DIVERGE and zero C-ERROR. (This is the per-fixture
+pipeline verdict — distinct from whole-port "port complete," which also
+requires the rejection/diagnostic surface in *Known residue*.) The
+verdict line is mechanical, not a human judgement.
 
 This meter exists specifically because earlier per-stage metrics could
 read green in isolation while the *composed* pipeline diverged — measuring
 each stage independently let a codegen-text match hide an assembled-binary
 mismatch. The gated design makes that structurally impossible.
+
+**The corpus meter is necessary but not sufficient.** It is byte-truth
+only for the codepaths the fixed corpus exercises. A second,
+coverage-driven instrument — the verification-probe series
+([`csrc/tests/codegen_probes/`](../csrc/tests/codegen_probes/),
+`run_probes.sh`) — authors *new* fixtures that exercise codepaths the
+corpus does not, comparing C-vs-Python on the full meaningful contract
+(exit code + stderr + Stage-1 asm + binary). Its first batch (typecast)
+immediately surfaced real divergences the corpus was blind to (listed
+in *Known residue*), confirming that "all stages green on the corpus"
+under-states the work remaining for a true drop-in. That series is
+ongoing.
 
 ## Architecture
 
@@ -198,20 +234,58 @@ make test-zxbasm          # assembler (success = binary parity)
 The meter requires a Python 3.11+ reference interpreter to produce the
 ground-truth side of each comparison.
 
-## Known residue (outside byte-identical codegen scope)
+## Known residue (open divergences — required for full drop-in)
 
-- **`zxbasm` error-message wording / parser error-recovery.** The
-  `test-zxbasm` *error-test* harness is 22 PASS / 11 FAIL. These are not
-  codegen byte-identity: they concern the exact `stderr` text and the
-  post-error cascade on *invalid* assembler input (e.g. Python stops at the
-  first `Unexpected token`, while C reports a different message and a
+Corpus codegen byte-identity is complete; these are the surfaces that
+are **not** yet byte-for-byte and so block a full drop-in claim. They
+are dominated by the **rejection/diagnostic** path (behaviour on
+invalid input, and warning text) — not by codegen.
+
+- **`zxbc` rejection-surface FALSE_NEG (34).** Programs the Python
+  reference *rejects* (exit 1 + error) that the C currently *accepts*
+  (exit 0, emits a binary). Confirmed example from the verification
+  probes: a string argument passed to a numeric function parameter —
+  Python errors `Cannot convert string to a value. Use VAL() function`;
+  C silently compiles it. (The argument-typecast check was narrowed to
+  numeric→numeric during the codegen campaign; the string↔numeric
+  function-call path is unported. The LET/assignment path is correct.)
+- **`zxbc` diagnostic-text STDERR_MISMATCH (47).** Divergent error/
+  warning text on inputs both accept. Includes the confirmed **`[W…]`
+  warning-prefix gap**: C emits `warning: <text>` where Python emits
+  `warning: [W<code>] <text>` (`src/api/errmsg.py:100` `WARNING_PREFIX`).
+  The warning *text* matches; the bracketed code prefix + per-code
+  registry are missing.
+- **Leaking internal NYI stub.** A by-reference parameter given a
+  non-variable argument makes C print an internal residue message
+  (`visit_ARGUMENT byref array — non-ARRAYACCESS shape residue`) and
+  exit 0 with a binary, where Python errors `Expected a variable name,
+  not an expression (parameter By Reference)`. Both a false-positive and
+  a "fail loudly, never stub" violation.
+- **`zxbasm` error-message wording / parser error-recovery (11 FAIL).**
+  `test-zxbasm` *error-test* harness 22 PASS / 11 FAIL — exact `stderr`
+  text + post-error cascade on *invalid* assembler input (Python stops
+  at the first `Unexpected token`; C reports a different message and a
   follow-on error). The *success* (binary-output) assembler tests are
-  60/0. This is assembler-parser error-recovery parity — a distinct
-  subsystem from "emit byte-identical assembly" — and is the only known
-  remaining divergence in the toolchain.
-- **`skip-python` fixtures.** A small number of corpus programs the Python
-  reference itself rejects or cannot assemble; they are excluded from the
-  meter denominator because there is no ground truth to match.
+  60/0. Distinct subsystem (assembler-parser error-recovery), pre-existing.
+- **`.bin`-format INCBIN residue (2).** `test-zxbc-outfmt` is BYTE_EQUAL
+  10 / BYTE_DIFF 0 / **SKIP_C_ERROR 2** — two `tap_incbin` fixtures the
+  C path does not yet assemble; SKIP-C-error is never a legitimate
+  terminal state.
+- **`skip-known-bug` (chr / chr1 / const6).** Inherited from the
+  abandoned port as "Python output known-wrong." Under the current bar
+  these are **not** grandfathered: an entry is a legitimate skip only
+  with an open upstream ticket or external evidence that Python is wrong
+  at the pinned commit — otherwise C must match Python. Justification
+  pending.
+- **`skip-python` fixtures.** Corpus programs the Python reference itself
+  rejects or cannot assemble (incl. cases where Python's *own* `zxbasm`
+  cannot assemble Python's *own* emitted asm); excluded from the meter
+  denominator because there is no ground truth to match — a Python-side
+  limit, not a C defect.
+
+The full remaining map is being completed mechanically by the
+coverage-driven probe series (`csrc/tests/codegen_probes/`); each RED
+probe becomes an item here until closed.
 
 ## Repository pointers
 
@@ -219,5 +293,6 @@ ground-truth side of each comparison.
   [`plans/`](plans/)
 - C port sources: [`../csrc/`](../csrc/) (mirrors the Python `src/` layout)
 - Stage meter: [`../csrc/tests/run_zxbc_stage_validation.sh`](../csrc/tests/run_zxbc_stage_validation.sh)
+- Verification-probe series (coverage of untested codepaths): [`../csrc/tests/codegen_probes/`](../csrc/tests/codegen_probes/) (`run_probes.sh`)
 - Changelog: [`CHANGELOG-c.md`](CHANGELOG-c.md)
 - Python reference (read-only upstream mirror): `../src/`
