@@ -1368,21 +1368,36 @@ static void handle_include(PreprocState *pp, const char *rest)
         return;
     }
 
-    /* Normalize: make path relative to CWD if possible */
+    /* Normalize: make path relative to CWD if possible (display form),
+     * and ALWAYS compute the canonical realpath for the dedup key.
+     *
+     * Python keys INCLUDED by abs_filename == os.path.realpath(...)
+     * (utils.get_absolute_filename_path) — NOT the relative display
+     * form — and only converts to a relative form for the #line path
+     * (zxbpp.py:219-220).  The C port previously used the (possibly
+     * non-canonical) `resolved` as the dedup key, so a self-#include
+     * with a `../zx48k/`-style relative path produced a DIFFERENT key on
+     * each pass (`../zx48k/../zx48k/...`) — the `once` set never matched
+     * and the include recursed until the path overflowed (rel_include
+     * S1-C-ERROR when run from a foreign CWD, e.g. the meter's tmp dir). */
+    const char *dedup_key = resolved;
     {
         char abs_resolved[PATH_MAX];
         char abs_cwd[PATH_MAX];
-        if (realpath(resolved, abs_resolved) && getcwd(abs_cwd, sizeof(abs_cwd))) {
-            size_t cwd_len = strlen(abs_cwd);
-            if (strncmp(abs_resolved, abs_cwd, cwd_len) == 0 &&
-                abs_resolved[cwd_len] == '/') {
-                resolved = arena_strdup(&pp->arena, abs_resolved + cwd_len + 1);
+        if (realpath(resolved, abs_resolved)) {
+            dedup_key = arena_strdup(&pp->arena, abs_resolved);
+            if (getcwd(abs_cwd, sizeof(abs_cwd))) {
+                size_t cwd_len = strlen(abs_cwd);
+                if (strncmp(abs_resolved, abs_cwd, cwd_len) == 0 &&
+                    abs_resolved[cwd_len] == '/') {
+                    resolved = arena_strdup(&pp->arena, abs_resolved + cwd_len + 1);
+                }
             }
         }
     }
 
-    /* Check for #pragma once / include once */
-    IncludeInfo *inc_info = hashmap_get(&pp->included, resolved);
+    /* Check for #pragma once / include once (keyed by canonical path) */
+    IncludeInfo *inc_info = hashmap_get(&pp->included, dedup_key);
     if (inc_info && (inc_info->once || once)) {
         /* Already included: the file expands to nothing, but the
          * directive line's terminating NEWLINE is still emitted (Python
@@ -1394,11 +1409,11 @@ static void handle_include(PreprocState *pp, const char *rest)
         return; /* already included with once */
     }
 
-    /* Track this include */
+    /* Track this include (canonical key, matching the dedup lookup). */
     if (!inc_info) {
         inc_info = arena_calloc(&pp->arena, 1, sizeof(IncludeInfo));
         inc_info->once = once;
-        hashmap_set(&pp->included, resolved, inc_info);
+        hashmap_set(&pp->included, dedup_key, inc_info);
     }
 
     /* Read the file */
@@ -1494,13 +1509,20 @@ static bool handle_pragma(PreprocState *pp, const char *rest)
 {
     const char *p = skip_ws(rest);
 
-    /* #pragma once */
+    /* #pragma once — key by the canonical realpath, matching the
+     * #include dedup key (handle_include's dedup_key) so a file that
+     * marks itself `#pragma once` is recognised on a later #include
+     * regardless of the relative spelling used to reach it. */
     if (strnicmp_local(p, "once", 4) == 0 && !is_id_char(p[4])) {
         if (pp->current_file) {
-            IncludeInfo *info = hashmap_get(&pp->included, pp->current_file);
+            const char *key = pp->current_file;
+            char abs_cur[PATH_MAX];
+            if (realpath(pp->current_file, abs_cur))
+                key = arena_strdup(&pp->arena, abs_cur);
+            IncludeInfo *info = hashmap_get(&pp->included, key);
             if (!info) {
                 info = arena_calloc(&pp->arena, 1, sizeof(IncludeInfo));
-                hashmap_set(&pp->included, pp->current_file, info);
+                hashmap_set(&pp->included, key, info);
             }
             info->once = true;
         }
