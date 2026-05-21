@@ -2321,28 +2321,53 @@ static AstNode *parse_statement(Parser *p) {
     if (match(p, BTOK_EXIT)) {
         int ln = p->previous.lineno;
         const char *loop_kw = NULL;
-        if (match(p, BTOK_DO)) loop_kw = "EXIT_DO";
-        else if (match(p, BTOK_FOR)) loop_kw = "EXIT_FOR";
-        else if (match(p, BTOK_WHILE)) loop_kw = "EXIT_WHILE";
+        const char *q = NULL;
+        LoopType lt = LOOP_DO;
+        if (match(p, BTOK_DO)) { loop_kw = "EXIT_DO"; q = "DO"; lt = LOOP_DO; }
+        else if (match(p, BTOK_FOR)) { loop_kw = "EXIT_FOR"; q = "FOR"; lt = LOOP_FOR; }
+        else if (match(p, BTOK_WHILE)) { loop_kw = "EXIT_WHILE"; q = "WHILE"; lt = LOOP_WHILE; }
         else {
             parser_error(p, "Expected DO, FOR, or WHILE after EXIT");
             return NULL;
         }
-        return make_sentence_node(p, loop_kw, ln);
+        AstNode *node = make_sentence_node(p, loop_kw, ln);
+        /* p_exit (src/zxbc/zxbparser.py:1950-1960): the sentence node is
+         * built first, then the LOOPS stack is scanned for a loop of the
+         * named type; if none is found Python reports a regular error
+         * (exit 1) "Syntax Error: EXIT <q> out of loop".  Without this
+         * the C let the EXIT reach the translator, whose loop_exit_label
+         * fell through to the internal `InvalidLoopError` stub and a
+         * non-1 exit (CLAUDE.md r8: never leak an internal stub). */
+        bool in_loop = false;
+        for (int i = 0; i < p->cs->loop_stack.len; i++)
+            if (p->cs->loop_stack.data[i].type == lt) { in_loop = true; break; }
+        if (!in_loop)
+            zxbc_error(p->cs, ln, "Syntax Error: EXIT %s out of loop", q);
+        return node;
     }
 
     /* CONTINUE DO/FOR/WHILE */
     if (match(p, BTOK_CONTINUE)) {
         int ln = p->previous.lineno;
         const char *loop_kw = NULL;
-        if (match(p, BTOK_DO)) loop_kw = "CONTINUE_DO";
-        else if (match(p, BTOK_FOR)) loop_kw = "CONTINUE_FOR";
-        else if (match(p, BTOK_WHILE)) loop_kw = "CONTINUE_WHILE";
+        const char *q = NULL;
+        LoopType lt = LOOP_DO;
+        if (match(p, BTOK_DO)) { loop_kw = "CONTINUE_DO"; q = "DO"; lt = LOOP_DO; }
+        else if (match(p, BTOK_FOR)) { loop_kw = "CONTINUE_FOR"; q = "FOR"; lt = LOOP_FOR; }
+        else if (match(p, BTOK_WHILE)) { loop_kw = "CONTINUE_WHILE"; q = "WHILE"; lt = LOOP_WHILE; }
         else {
             parser_error(p, "Expected DO, FOR, or WHILE after CONTINUE");
             return NULL;
         }
-        return make_sentence_node(p, loop_kw, ln);
+        AstNode *node = make_sentence_node(p, loop_kw, ln);
+        /* p_continue (src/zxbc/zxbparser.py:1963-1975): same LOOPS-stack
+         * gate as p_exit -> "Syntax Error: CONTINUE <q> out of loop". */
+        bool in_loop = false;
+        for (int i = 0; i < p->cs->loop_stack.len; i++)
+            if (p->cs->loop_stack.data[i].type == lt) { in_loop = true; break; }
+        if (!in_loop)
+            zxbc_error(p->cs, ln, "Syntax Error: CONTINUE %s out of loop", q);
+        return node;
     }
 
     /* DATA — faithful p_data (src/zxbc/zxbparser.py:1732-1772).

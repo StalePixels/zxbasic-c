@@ -1799,8 +1799,42 @@ bool check_pending_calls(CompilerState *cs) {
                         AstNode *pm  = pl->children[z];
                         if (!arg || arg->tag != AST_ARGUMENT || !pm)
                             continue;
-                        if (pm->u.argument.byref)
-                            arg->u.argument.byref = true;
+                        if (pm->u.argument.byref) {
+                            /* R9 byref-shape check (api/check.py:159-161),
+                             * run inline so a def-first call to a ByRef
+                             * SUB/FUNCTION rejects a non-variable argument
+                             * exactly as Python does (call.py:103 runs the
+                             * full check_call_arguments inline), instead of
+                             * letting a non-ID/ARRAYLOAD value reach the
+                             * translator's `visit_ARGUMENT byref array —
+                             * non-ARRAYACCESS shape residue` stub
+                             * (CLAUDE.md r8: never leak an internal stub).
+                             * ONLY the shape check is run here (no R3-R8,
+                             * no typecast) so the funcnoparm FALSE_POS the
+                             * full check would re-fire stays suppressed — a
+                             * 0-arg parenless call has no byref arg to trip
+                             * this.  arg.value == arg->children[0]; Python
+                             * accepts ID / ARRAYLOAD (the C array read is
+                             * AST_ARRAYACCESS, matching the deferred R9
+                             * path at check_call_arguments). */
+                            AstNode *v = arg->child_count > 0
+                                             ? arg->children[0] : NULL;
+                            bool is_var_ref =
+                                v && (v->tag == AST_ID ||
+                                      v->tag == AST_ARRAYLOAD ||
+                                      v->tag == AST_ARRAYACCESS);
+                            if (!is_var_ref) {
+                                char *saved_file = cs->current_file;
+                                if (call->u.call.filename)
+                                    cs->current_file = call->u.call.filename;
+                                zxbc_error(cs, call->lineno,
+                                    "Expected a variable name, not an expression (parameter By Reference)");
+                                cs->current_file = saved_file;
+                                result = false;
+                            } else {
+                                arg->u.argument.byref = true;
+                            }
+                        }
                     }
                     /* Bug B: optional-param default-fill (api/check.py
                      * :127-135). Python's inline branch (call.py:103) also
