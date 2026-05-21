@@ -516,7 +516,18 @@ static AstNode *parse_builtin_func(Parser *p, const char *fname, BTokenType kw) 
         case BTOK_SIN: case BTOK_COS: case BTOK_TAN:
         case BTOK_ACS: case BTOK_ASN: case BTOK_ATN:
         case BTOK_EXP: case BTOK_LN: case BTOK_SQR:
+            /* p_expr_trig (zxbparser.py:3502-3520): every math fn
+             * typecasts its arg to TYPE.float — the runtime trig/log/sqrt
+             * routines all operate on the FP register set. Without it a
+             * non-float operand (e.g. a UByte var, test 70's `SQR b`)
+             * skips the .core.__U8TOFREG conversion and the chained
+             * calls read garbage (push 0 / ld a,0). */
             n->type_ = st->basic_types[TYPE_float];
+            if (arg && n->child_count > 0) {
+                AstNode *cast = make_typecast(p->cs,
+                    st->basic_types[TYPE_float], arg, lineno);
+                if (cast) n->children[0] = cast;
+            }
             break;
         case BTOK_LEN:
             n->type_ = st->basic_types[TYPE_uinteger];

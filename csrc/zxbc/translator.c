@@ -1677,7 +1677,24 @@ static int tr_builtin_dispatch(Visitor *v, AstNode *node) {
     const char *fn = node->u.builtin.fname;
     AstNode *op = node->child_count > 0 ? node->children[0] : NULL;
     int nsz = node->type_ ? type_size(node->type_) : 0;
-    const char *ot = (op && op->t) ? op->t : "0";
+    /* Python Symbol.t (symbol_.py:71-76) lazily allocates a temp the
+     * first time .t is read.  For a chained builtin operand whose result
+     * lives on the FP stack (e.g. SIN(COS(... SQR b))) the inner node's
+     * .t is otherwise NULL — reading it as "0" makes float_get_oper emit
+     * `ld a,0; ld de,0; ld bc,0` (float literal 0) instead of the
+     * `pop af/de/bc` that pops the inner call's pushed result.  Mirror
+     * the lazy allocation: a value-bearing operand with no .t gets a
+     * fresh temp here so the outer fparam pops the stacked result
+     * (test 70: SIN COS TAN ABS LN EXP SQR b). */
+    const char *ot;
+    if (op && op->t) {
+        ot = op->t;
+    } else if (op) {
+        op->t = compiler_new_temp(tr->cs);
+        ot = op->t;
+    } else {
+        ot = "0";
+    }
 
     /* RND (builtin_translator.py:60-61): zeroary; runtime_call(RND,
      * Type.float_.size). */
