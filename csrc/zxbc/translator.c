@@ -1787,11 +1787,31 @@ static int tr_builtin_dispatch(Visitor *v, AstNode *node) {
         return 1;
     }
 
-    /* CHR (builtin_translator.py:37-39): ic_fparam(STR_INDEX_TYPE,
-     * len(operand)=#args); runtime_call(CHR, node.size). */
+    /* CHR (builtin_translator.py:37-39 + the implicit ARGLIST/ARGUMENT
+     * push path):  visit_BUILTIN yields node.operand (the ARGLIST);
+     * visit_ARGLIST iterates args in REVERSE and yields each ARGUMENT;
+     * visit_ARGUMENT yields node.value then ic_param(ubyte, t).
+     * Finally visit_CHR emits ic_fparam(STR_INDEX_TYPE, len(operand))
+     * and runtime_call(CHR).
+     *
+     * The C parser stores the CHR args as direct children of the
+     * BUILTIN (no ARGLIST/ARGUMENT wrappers).  tr_visit_builtin pre-
+     * visited children[0]; we still need to visit + ic_param the
+     * remaining children (and the first, since visit_ID is emit-free)
+     * — in REVERSE order so the push matches Python's stack layout.
+     * The parser already cast every child to ubyte at BTOK_CHR. */
     if (strcmp(fn, "CHR") == 0) {
         const TypeInfo *uint_t =
             tr->cs->symbol_table->basic_types[TYPE_uinteger];
+        const TypeInfo *ubyte_t =
+            tr->cs->symbol_table->basic_types[TYPE_ubyte];
+        for (int i = node->child_count - 1; i >= 0; i--) {
+            AstNode *ch = node->children[i];
+            if (!ch) continue;
+            if (i != 0)  /* children[0] was already visited above */
+                visitor_visit(v, ch);
+            tr_ic_param(tr, ubyte_t, ch->t ? ch->t : "0");
+        }
         char nb[16];
         snprintf(nb, sizeof(nb), "%d", node->child_count);
         tr_ic_fparam(tr, uint_t, nb);

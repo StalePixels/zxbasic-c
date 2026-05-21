@@ -548,7 +548,21 @@ static AstNode *parse_builtin_func(Parser *p, const char *fname, BTokenType kw) 
             n->type_ = st->basic_types[TYPE_string];
             break;
         case BTOK_CHR:
+            /* p_chr / p_chr_one (zxbparser.py:3427-3444): every
+             * argument is make_typecast'd to TYPE.ubyte at parse time;
+             * the CHR$ runtime expects 8-bit char codes. Without the
+             * typecast the visit_BUILTIN/CHR handler would emit a
+             * uinteger push (ld hl, ...; push hl) instead of the
+             * narrowed `ld a, l; push af` form Python produces. */
             n->type_ = st->basic_types[TYPE_string];
+            for (int i = 0; i < n->child_count; i++) {
+                AstNode *ch = n->children[i];
+                if (ch) {
+                    AstNode *cast = make_typecast(p->cs,
+                        st->basic_types[TYPE_ubyte], ch, lineno);
+                    if (cast) n->children[i] = cast;
+                }
+            }
             break;
         case BTOK_VAL:
             n->type_ = st->basic_types[TYPE_float];
