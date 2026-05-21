@@ -705,10 +705,14 @@ AstNode *parse_primary(Parser *p) {
         consume(p, BTOK_RP, "Expected ')' after CAST");
         if (!expr) return NULL;
 
-        AstNode *n = ast_new(p->cs, AST_TYPECAST, lineno);
-        n->type_ = target;
-        ast_add_child(p->cs, n, expr);
-        return n;
+        /* p_cast (zxbparser.py:2522-2524) is exactly make_typecast(type,
+         * expr) — which constant-folds a NUMBER/CONST operand into a
+         * retyped literal rather than emitting a runtime cast. Building a
+         * raw AST_TYPECAST here skipped that fold, so CAST(UInteger, 3)
+         * emitted `ld a,3; ld l,a; ld h,0` instead of Python's `ld hl, 3`
+         * (test print). Route through make_typecast for the fold +
+         * string<->value error checks. */
+        return make_typecast(p->cs, target, expr, lineno);
     }
 
     /* Address-of (@id or @id(args)) */
