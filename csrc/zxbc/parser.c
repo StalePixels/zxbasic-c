@@ -388,10 +388,17 @@ static AstNode *parse_builtin_func(Parser *p, const char *fname, BTokenType kw) 
         /* Check if first arg is a type name */
         TypeInfo *peek_type = parse_type_name(p);
         if (peek_type) {
-            /* PEEK(type, addr) */
+            /* PEEK(type, addr) — p_expr_peektype_ (zxbparser.py:3302-3304)
+             * make_typecast(uinteger, addr): the address must be a 16-bit
+             * pointer; a Float/Long addr needs the runtime narrow. */
             consume(p, BTOK_COMMA, "Expected ',' after PEEK type");
             AstNode *addr = parse_expression(p, PREC_NONE + 1);
-            if (addr) ast_add_child(p->cs, n, addr);
+            if (addr) {
+                AstNode *cast = make_typecast(p->cs,
+                    p->cs->symbol_table->basic_types[TYPE_uinteger],
+                    addr, lineno);
+                ast_add_child(p->cs, n, cast ? cast : addr);
+            }
             n->type_ = peek_type;
             consume(p, BTOK_RP, "Expected ')' after PEEK arguments");
             return n;
@@ -533,7 +540,17 @@ static AstNode *parse_builtin_func(Parser *p, const char *fname, BTokenType kw) 
             n->type_ = st->basic_types[TYPE_uinteger];
             break;
         case BTOK_PEEK:
+            /* p_expr_peek (zxbparser.py:3292-3299): make_typecast(uinteger,
+             * addr) — narrow a Float/Long address to a 16-bit pointer
+             * (lcd3: PEEK adr where adr is an implicit Float needs
+             * .core.__FTOU32REG; without it the C reads adr's low 2
+             * bytes as the pointer). */
             n->type_ = st->basic_types[TYPE_ubyte];
+            if (arg && n->child_count > 0) {
+                AstNode *cast = make_typecast(p->cs,
+                    st->basic_types[TYPE_uinteger], arg, lineno);
+                if (cast) n->children[0] = cast;
+            }
             break;
         case BTOK_CODE:
             n->type_ = st->basic_types[TYPE_ubyte];
