@@ -2020,10 +2020,26 @@ static AstNode *tr_visit_unary(Visitor *v, AstNode *node) {
         /* scalar variable */
         if (node->t == NULL) node->t = compiler_new_temp(tr->cs);
         if (scope == SCOPE_global) {
-            size_t ol = operand && operand->t ? strlen(operand->t) : 0;
+            /* operand.t — for a CLASS_label entry this is LabelRef.t ==
+             * parent.mangled == ".LABEL._<name>" (labelref.py:20,34). A
+             * FORWARD label (`@b` before `b:`) is parsed while still
+             * CLASS_unknown so its .t was never stamped; by translate time
+             * the shared entry has been to_label'd, so resolve the mangled
+             * label here exactly as LabelRef.t does — without this the
+             * scalar-global `#operand.t` collapses to a bare "#" and emits
+             * `ld hl, ` with no operand (atlabel2 -> assembler syntax
+             * error -> leaked exit 5). */
+            const char *opt;
+            if (operand && operand->tag == AST_ID &&
+                operand->u.id.class_ == CLASS_label)
+                opt = (operand->t && operand->t[0]) ? operand->t
+                                                    : tr_label_mangled(tr, operand);
+            else
+                opt = (operand && operand->t) ? operand->t : "";
+            size_t ol = strlen(opt);
             char *src = arena_alloc(&tr->cs->arena, ol + 2);
             src[0] = '#';
-            memcpy(src + 1, (operand && operand->t) ? operand->t : "", ol);
+            memcpy(src + 1, opt, ol);
             src[ol + 1] = '\0';
             tr_ic_load(tr, node->type_, node->t, src);
         } else if (scope == SCOPE_parameter) {
