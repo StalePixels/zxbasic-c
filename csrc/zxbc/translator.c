@@ -2946,6 +2946,170 @@ static const char *tr_array_data_label(Translator *tr, AstNode *entry) {
     return buf;
 }
 
+/* visit_LETARRAYSUBSTR (translator.py:404-446): `LET a$(idx)(lo TO hi) = rhs`
+ * where a$ is a STRING ARRAY — the substring of an array ELEMENT.
+ *
+ * This is a DISTINCT Python sentence (make_array_substr_assign,
+ * zxbparser.py:328-362 -> "LETARRAYSUBSTR") whose children are
+ *   [0] arr  : the sym.ARRAYACCESS lvalue (a$(idx))
+ *   [1] s0   : lower bound (already TYPECAST(uinteger) and base-adjusted)
+ *   [2] s1   : upper bound (ditto)
+ *   [3] expr : the RHS string
+ *
+ * The C parser does NOT build a separate sentence — `tr_visit_letarray`
+ * detects the shape and calls this. The C LETARRAY children are
+ *   acc = node->children[0]   (the lvalue), rhs = node->children[1].
+ * The lvalue `acc` carries:
+ *   - Shape A (TO-slice, `a$(idx)(lo TO hi)`):  acc is AST_STRSLICE with
+ *       acc->children[0] = ARRAYACCESS (a$(idx)),
+ *       acc->children[1] = inner AST_STRSLICE [lower, upper].
+ *   - Shape B (single index, `a$(idx)(p)`):  acc is AST_ARRAYACCESS whose
+ *       acc->children[0] = ARRAYACCESS (a$(idx)) and acc->children[1] =
+ *       ARGUMENT(p); Python's p_let_arr_substr_single makes lower==upper==p.
+ *
+ * Unlike the scalar tr_letsubstr_emit, the base-adjustment (string_base
+ * MINUS) is applied here unconditionally for NUMBER/runtime bounds — the
+ * postfix-paren array path (parser.c parse_postfix) never pre-rewrites the
+ * bounds, whereas make_array_substr_assign (zxbparser.py:357-360) always
+ * does so when OPTIONS.string_base != 0.  arr_acc is the ARRAYACCESS node
+ * (a$(idx)); its constant byte offset / scope drive the element-address
+ * load exactly as Python's `node_.offset` / `node_.scope`. */
+static void tr_letarraysubstr_emit(Visitor *v, AstNode *node,
+                                   AstNode *arr_acc, AstNode *lower,
+                                   AstNode *upper, AstNode *rhs) {
+    Translator *tr = v->ctx;
+    const TypeInfo *ptr = tr->cs->symbol_table->basic_types[TYPE_uinteger];
+    const TypeInfo *str_t = tr->cs->symbol_table->basic_types[TYPE_string];
+    const TypeInfo *ubyte = tr->cs->symbol_table->basic_types[TYPE_ubyte];
+
+    AstNode *arr_id = (arr_acc && arr_acc->child_count > 0)
+                          ? arr_acc->children[0] : NULL;
+
+    /* O_LEVEL>1 DCE: visit_LETARRAYSUBSTR (translator.py:405-406) emits
+     * nothing when the element's array entry is not accessed. */
+    if (tr->cs->opts.optimization_level > 1 && arr_id &&
+        arr_id->tag == AST_ID && !arr_id->u.id.accessed)
+        return;
+
+    /* :408-416 yield expr; param expr; param 0/1 (is_temporary_value). */
+    if (rhs) visitor_visit(v, rhs);
+    bool rhs_is_str_or_var = rhs && (rhs->tag == AST_STRING ||
+                                     rhs->tag == AST_ID);
+    const char *rt = (rhs && rhs->t) ? rhs->t : "";
+    bool rhs_tmp = !rhs_is_str_or_var && rt[0] != '_' && rt[0] != '#';
+    if (rhs_tmp) {
+        tr_ic_param(tr, str_t, rt);
+        tr_ic_param(tr, ubyte, "1");
+    } else {
+        tr_ic_param(tr, ptr, rt);
+        tr_ic_param(tr, ubyte, "0");
+    }
+
+    /* :418-421 yield lower; param lower.t; yield upper; param upper.t.
+     * The bounds get OPTIONS.string_base subtracted (make_array_substr_
+     * assign, zxbparser.py:357-360): NUMBER folds, runtime emits subu16. */
+    int base = tr->cs->opts.string_base;
+    const char *base_s = NULL;
+    if (base != 0) {
+        char base_buf[16];
+        snprintf(base_buf, sizeof(base_buf), "%d", base);
+        base_s = arena_strdup(&tr->cs->arena, base_buf);
+    }
+    if (lower) visitor_visit(v, lower);
+    const char *lower_t;
+    {
+        const char *lt = (lower && lower->t) ? lower->t : "0";
+        if (base == 0) {
+            lower_t = lt;
+        } else if (lower && lower->tag == AST_NUMBER) {
+            char folded[24];
+            snprintf(folded, sizeof(folded), "%ld",
+                     (long)lower->u.number.value - base);
+            lower_t = arena_strdup(&tr->cs->arena, folded);
+        } else {
+            const char *t = compiler_new_temp(tr->cs);
+            tr_ic_arith(tr, "sub", ptr, t, lt, base_s);
+            lower_t = t;
+        }
+    }
+    tr_ic_param(tr, ptr, lower_t);
+    if (upper) visitor_visit(v, upper);
+    const char *upper_t;
+    {
+        const char *ut = (upper && upper->t) ? upper->t : "0";
+        if (base == 0) {
+            upper_t = ut;
+        } else if (upper && upper->tag == AST_NUMBER) {
+            char folded[24];
+            snprintf(folded, sizeof(folded), "%ld",
+                     (long)upper->u.number.value - base);
+            upper_t = arena_strdup(&tr->cs->arena, folded);
+        } else {
+            const char *t = compiler_new_temp(tr->cs);
+            tr_ic_arith(tr, "sub", ptr, t, ut, base_s);
+            upper_t = t;
+        }
+    }
+    tr_ic_param(tr, ptr, upper_t);
+
+    /* :423-445 Address of an array element. node_ = arr_acc (ARRAYACCESS).
+     * scope = arr_acc.scope == arr_id.scope; entry = arr_id. */
+    bool a_global = arr_id && arr_id->tag == AST_ID &&
+                    arr_id->u.id.scope == SCOPE_global;
+    bool a_param  = arr_id && arr_id->tag == AST_ID &&
+                    arr_id->u.id.scope == SCOPE_parameter;
+    bool a_local  = arr_id && arr_id->tag == AST_ID &&
+                    arr_id->u.id.scope == SCOPE_local;
+    long a_eoff = arr_id ? arr_id->u.id.offset : 0;
+
+    /* Python `node_.offset is None` (arrayaccess.py:68-91): None for a
+     * non-constant subscript OR any parameter-scope array. */
+    bool offset_is_none = !arr_acc->u.arrayaccess.is_const || a_param;
+
+    if (arr_acc->t == NULL)
+        arr_acc->t = (char *)compiler_new_temp(tr->cs);
+
+    if (offset_is_none) {
+        /* :428-435 yield node_ (push the index args — sym.ARRAYACCESS's
+         * visit only yields its arglist, no aload), then scope-dispatched
+         * aload/paload of the element address. */
+        for (int i = arr_acc->child_count - 1; i >= 1; i--)
+            visitor_visit(v, arr_acc->children[i]);
+        if (a_global) {
+            tr_ic_aload(tr, ptr, arr_acc->t,
+                        arr_id->u.id.mangled ? arr_id->u.id.mangled : "");
+        } else if (a_param) {
+            char ofs[24];
+            snprintf(ofs, sizeof(ofs), "%ld", a_eoff);
+            tr_ic_paload(tr, ptr, arr_acc->t, ofs);
+        } else if (a_local) {
+            char ofs[24];
+            snprintf(ofs, sizeof(ofs), "%ld", -a_eoff);
+            tr_ic_paload(tr, ptr, arr_acc->t, ofs);
+        }
+    } else {
+        /* :436-443 constant offset. */
+        long offset = arr_acc->u.arrayaccess.offset;
+        if (a_global) {
+            const char *dlabel = tr_array_data_label(tr, arr_id);
+            size_t need = strlen(dlabel) + 32;
+            char *addr = arena_alloc(&tr->cs->arena, need);
+            snprintf(addr, need, "%s + %ld", dlabel, offset);
+            tr_ic_load(tr, ptr, dlabel, addr);
+        } else if (a_local) {
+            char ofs[24];
+            snprintf(ofs, sizeof(ofs), "%ld", -(a_eoff - offset));
+            tr_ic_pload(tr, ptr, arr_acc->t, ofs);
+        }
+        /* parameter+const never reached (offset_is_none already true). */
+    }
+
+    /* :445 ic_fparam(PTR, node.children[0].t) — the ARRAYACCESS .t. */
+    tr_ic_fparam(tr, ptr, arr_acc->t);
+    /* :446 runtime_call(LETSUBSTR, 0). */
+    tr_runtime_call(tr, ".core.__LETSUBSTR", 0);
+}
+
 /* visit_ARRAYLOAD (translator.py:265-289) — array-element value READ.
  * The C parser builds AST_ARRAYACCESS for every array access (read AND
  * write target; it never mints a distinct AST_ARRAYLOAD). When the node
@@ -3091,6 +3255,51 @@ static AstNode *tr_visit_letarray(Visitor *v, AstNode *node) {
 
     AstNode *acc = node->child_count > 0 ? node->children[0] : NULL;
     AstNode *rhs = node->child_count > 1 ? node->children[1] : NULL;
+
+    /* String-ARRAY element substring assignment — `LET a$(idx)(lo TO hi)=rhs`
+     * / `LET a$(idx)(p)=rhs` where a$ is a string ARRAY.  Python builds a
+     * dedicated LETARRAYSUBSTR sentence (make_array_substr_assign,
+     * zxbparser.py:328-362; visit_LETARRAYSUBSTR translator.py:404-446).
+     * The C parser builds these two lvalue shapes (parser.c parse_postfix
+     * chains a 2nd paren group onto the a$(idx) ARRAYACCESS):
+     *   Shape A (TO-slice):  acc = AST_STRSLICE whose child[0] is an
+     *     ARRAYACCESS and child[1] is an inner AST_STRSLICE [lower,upper].
+     *   Shape B (single):    acc = AST_ARRAYACCESS whose child[0] is an
+     *     ARRAYACCESS and child[1] is an ARGUMENT(p) (lower==upper==p).
+     * This MUST be detected before the DCE gate / scalar-substr branches
+     * below: tr_letarray_entry returns acc->children[0] which here is the
+     * inner ARRAYACCESS (not an AST_ID), so any later `entry->u.id.*`
+     * access would read the wrong union member (the original segfault on
+     * let_array_substr2/3 / str_base1). */
+    if (acc && acc->tag == AST_STRSLICE && acc->child_count >= 2 &&
+        acc->children[0] && acc->children[0]->tag == AST_ARRAYACCESS) {
+        AstNode *arr_acc = acc->children[0];
+        AstNode *bounds = acc->children[1];
+        AstNode *lower = NULL, *upper = NULL;
+        if (bounds && bounds->tag == AST_STRSLICE &&
+            bounds->child_count >= 2) {
+            lower = bounds->children[0];
+            upper = bounds->children[1];
+        } else {
+            /* Flattened [ARRAYACCESS, lower, upper] shape, defensively. */
+            lower = bounds;
+            upper = acc->child_count >= 3 ? acc->children[2] : bounds;
+        }
+        tr_letarraysubstr_emit(v, node, arr_acc, lower, upper, rhs);
+        return node;
+    }
+    if (acc && acc->tag == AST_ARRAYACCESS && acc->child_count >= 2 &&
+        acc->children[0] && acc->children[0]->tag == AST_ARRAYACCESS) {
+        AstNode *arr_acc = acc->children[0];
+        /* Single trailing index `a$(idx)(p)`: lower==upper==p
+         * (p_let_arr_substr_single, zxbparser.py:2746). The trailing
+         * index is acc->children[1] (ARGUMENT or bare expr). */
+        AstNode *c1 = acc->children[1];
+        AstNode *p = (c1 && c1->tag == AST_ARGUMENT && c1->child_count > 0)
+                         ? c1->children[0] : c1;
+        tr_letarraysubstr_emit(v, node, arr_acc, p, p, rhs);
+        return node;
+    }
 
     /* THE GATE — translator.py:330-331 (visit_LETARRAY) /
      * :405-406 (visit_LETARRAYSUBSTR): O_LEVEL>1 and the target entry
