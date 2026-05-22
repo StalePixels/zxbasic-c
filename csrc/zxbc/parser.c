@@ -4233,6 +4233,37 @@ static AstNode *parse_do_statement(Parser *p) {
         return NULL;
     }
 
+    /* `do_start : DO CO | DO NEWLINE` (zxbparser.py:1908-1910) is exactly ONE
+     * terminator. The DO-NEWLINE form's separator is consumed by skip_newlines
+     * below; the DO-CO form's leading ':' must be consumed symmetrically so an
+     * EMPTY same-line body reaches the LOOP terminator cleanly — `DO: LOOP`,
+     * `DO: LOOP WHILE 0`, `DO: LOOP UNTIL 0` are valid `do_start label_loop`
+     * (zxbparser.py:1689/1840/1710) and Python exits 0. Without consuming it
+     * the body loop runs parse_statement on the leftover ':' (-> empty NOP +
+     * trailing CO) and the plain-DO no-program-before-trailing-CO rule then
+     * faults on LOOP — the PASS->FALSE_POS regression.
+     *
+     * Consume the do_start CO ONLY when it is immediately followed by LOOP
+     * (the same-line empty-body form). This is deliberately narrow: a CO
+     * followed by anything else (a body statement, a second CO, a mid-line
+     * label, or a NEWLINE) is left for the existing body-loop handling, which
+     * already matches Python on every such shape (`DO: LET a=1: LOOP` ->
+     * reject; `DO:: LOOP` -> reject; `DO: 20 LOOP` -> reject;
+     * `DO:\nLOOP` / `DO:\n20 LOOP` / `DO:\n: LOOP` -> accept). The NEWLINE
+     * case stays with skip_newlines so none of those paths shift. */
+    if (!is_pretest && check(p, BTOK_CO)) {
+        int save_pos = p->lexer.pos;
+        BToken save_cur = p->current;
+        advance(p);
+        if (!check(p, BTOK_LOOP)) {
+            /* Not the same-line empty `DO: LOOP` form — restore the CO for
+             * the body loop (every non-empty / multi-token shape is handled
+             * faithfully there). */
+            p->current = save_cur;
+            p->lexer.pos = save_pos;
+        }
+    }
+
     skip_newlines(p);
     AstNode *body = make_block_node(p, lineno);
     /* Body validity before LOOP. The plain-DO body is `program_co` only
