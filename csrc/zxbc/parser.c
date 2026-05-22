@@ -17,6 +17,11 @@
 #define M_PI 3.14159265358979323846
 #endif
 
+/* Python str(float) renderer (defined in pyfloat.c, declared in z80asm.h).
+ * Forward-declared here to render a NUMBER token's PLY `p.value` in
+ * tok_unexpected_error without dragging in the whole z80asm.h surface. */
+void z80h_pyfloat_repr(double v, char *buf, int sz);
+
 /* ----------------------------------------------------------------
  * Token management
  * ---------------------------------------------------------------- */
@@ -111,6 +116,75 @@ static void parser_error(Parser *p, const char *msg) {
     p->panic_mode = true;
     p->had_error = true;
     zxbc_error(p->cs, p->current.lineno, "%s", msg);
+}
+
+/* Render a token's PLY `p.value` exactly as Python's lexer would, into buf.
+ * Used only by tok_unexpected_error to reproduce p_error's
+ *   "Syntax Error. Unexpected token '%s' <%s>" % (p.value, p.type)
+ * formatter (zxbparser.py:3564). For keyword tokens PLY's value is the
+ * upper-cased keyword text (== btok_name); for ID/ARRAY_ID/LABEL it's the
+ * source text (t.value, sval); for NUMBER it's `float(t.value)` rendered
+ * with Python's str(float) (z80h_pyfloat_repr); for punctuation it's the
+ * literal lexeme. */
+static const char *tok_ply_value(const BToken *t, char *buf, size_t sz) {
+    switch (t->type) {
+        case BTOK_ID:
+        case BTOK_ARRAY_ID:
+        case BTOK_LABEL:
+        case BTOK_ASM:
+            if (t->sval) return t->sval;
+            break;
+        case BTOK_STRC:
+            if (t->sval) return t->sval;
+            break;
+        case BTOK_NUMBER: {
+            z80h_pyfloat_repr(t->numval, buf, (int)sz);
+            return buf;
+        }
+        case BTOK_PLUS:  return "+";
+        case BTOK_MINUS: return "-";
+        case BTOK_MUL:   return "*";
+        case BTOK_DIV:   return "/";
+        case BTOK_POW:   return "^";
+        case BTOK_LP:    return "(";
+        case BTOK_RP:    return ")";
+        case BTOK_LBRACE: return "{";
+        case BTOK_RBRACE: return "}";
+        case BTOK_EQ:    return "=";
+        case BTOK_LT:    return "<";
+        case BTOK_GT:    return ">";
+        case BTOK_LE:    return "<=";
+        case BTOK_GE:    return ">=";
+        case BTOK_NE:    return "<>";
+        case BTOK_WEQ:   return ":=";
+        case BTOK_CO:    return ":";
+        case BTOK_SC:    return ";";
+        case BTOK_COMMA: return ",";
+        case BTOK_RIGHTARROW: return "=>";
+        default:
+            break;
+    }
+    /* Keyword tokens: PLY's reserved-word value is the upper-cased keyword,
+     * which is exactly what btok_name returns for the keyword range. */
+    return btok_name(t->type);
+}
+
+/* Emit p_error's verbatim message for an unexpected token (zxbparser.py:3561
+ * p_error: if p.type != "NEWLINE": "Syntax Error. Unexpected token '%s' <%s>"
+ * else "Unexpected end of line"). Faults at the token's own line. */
+static void tok_unexpected_error(Parser *p, const BToken *t) {
+    if (p->panic_mode) return;
+    p->panic_mode = true;
+    p->had_error = true;
+    if (t->type == BTOK_NEWLINE) {
+        zxbc_error(p->cs, t->lineno, "Unexpected end of line");
+        return;
+    }
+    char buf[64];
+    const char *val = tok_ply_value(t, buf, sizeof(buf));
+    zxbc_error(p->cs, t->lineno,
+               "Syntax Error. Unexpected token '%s' <%s>",
+               val, btok_name(t->type));
 }
 
 /* Case-insensitive string equality (Python's str.upper() == ... idiom,
@@ -3704,8 +3778,13 @@ static AstNode *parse_statement(Parser *p) {
         return make_nop(p);
     }
 
-    /* Error recovery */
-    parser_error(p, "Unexpected token");
+    /* Error recovery: a token that cannot start any statement is PLY's
+     * p_error "Syntax Error. Unexpected token '%s' <%s>" (zxbparser.py:3564)
+     * — e.g. the residual `LOOP` after a DO header desync
+     * (doloopuntilsplitted.bas:5). Emit the verbatim message rather than the
+     * placeholder. Exit code is unchanged (still a parse error); only the
+     * stderr text becomes faithful. */
+    tok_unexpected_error(p, &p->current);
     synchronize(p);
     return NULL;
 }
@@ -3985,7 +4064,35 @@ static AstNode *parse_for_statement(Parser *p) {
     while (!check(p, BTOK_EOF) && !check(p, BTOK_NEXT)) {
         AstNode *stmt = parse_statement(p);
         if (stmt) ast_add_child(p->cs, body, stmt);
-        while (match(p, BTOK_NEWLINE) || match(p, BTOK_CO)) {}
+        /* Faithful to the for-body grammar `for_start program_co label_next`
+         * (zxbparser.py:1553): the body is a `program_co`, every program_line
+         * of which ends in NEWLINE; a body statement must therefore be
+         * followed by a statement separator (NEWLINE or CO) before NEXT —
+         * a statement that runs directly into NEXT with no separator is a
+         * PLY p_error on NEXT (e.g. `FOR i=1 TO 10 PRINT "X" NEXT` ->
+         * ":2: Unexpected token 'NEXT' <NEXT>"; verified on the oracle).
+         * Only reject the no-separator-at-all case (always a Python fault);
+         * the all-CO trailing forms PLY also rejects stay accepted here as
+         * residual FN — never over-reject. */
+        bool sep = false;
+        while (match(p, BTOK_NEWLINE) || match(p, BTOK_CO)) sep = true;
+        if (sep) continue;
+        if (check(p, BTOK_EOF)) continue;
+        /* `label_next : label NEXT` (zxbparser.py:1565): a LABEL immediately
+         * preceding NEXT is the NEXT's own label, NOT an unterminated body
+         * statement — parse_statement consumed it as a label-only sentence
+         * (AST_SENTENCE kind "LABEL"); when NEXT follows directly, that is
+         * the valid `... program_line\n label NEXT` shape (fornext.bas:
+         * `10 FOR…\n20 NEXT`), so do not require a separator here. */
+        bool stmt_is_label_only =
+            stmt && stmt->tag == AST_SENTENCE && stmt->u.sentence.kind &&
+            strcmp(stmt->u.sentence.kind, "LABEL") == 0;
+        if (check(p, BTOK_NEXT) && stmt_is_label_only) continue;
+        /* No separator and not the label_next case: PLY faults on the
+         * current (non-separator) token (NEXT for the bare run-on, or the
+         * first token of the would-be second statement). */
+        tok_unexpected_error(p, &p->current);
+        break;
     }
 
     /* NEXT [var] */
@@ -4095,21 +4202,96 @@ static AstNode *parse_do_statement(Parser *p) {
     /* DO WHILE cond / DO UNTIL cond */
     const char *kind = "DO_LOOP";
     AstNode *pre_cond = NULL;
+    bool is_pretest = false;
 
     if (match(p, BTOK_WHILE)) {
         pre_cond = parse_expression(p, PREC_NONE + 1);
         kind = "DO_WHILE";
+        is_pretest = true;
     } else if (match(p, BTOK_UNTIL)) {
         pre_cond = parse_expression(p, PREC_NONE + 1);
         kind = "DO_UNTIL";
+        is_pretest = true;
+    }
+
+    /* For the PLAIN DO forms (`do_start program_co label_loop` /
+     * `do_start label_loop` / `DO label_loop`, zxbparser.py:1688-1690),
+     * `do_start : DO CO | DO NEWLINE` (zxbparser.py:1908-1910) — so after a
+     * bare DO the only valid continuations are CO, NEWLINE, or LOOP/a label
+     * then LOOP (the `DO label_loop` infinite-loop form). A bare DO that
+     * runs straight into a statement (e.g. `DO LET M=0: …`) is a PLY
+     * p_error on that token (`Unexpected token 'LET' <LET>`; verified on the
+     * oracle). The pre-test `DO WHILE expr` / `DO UNTIL expr` forms have no
+     * such separator requirement (`do_while_start : DO WHILE expr`) so this
+     * gate applies ONLY to the plain DO. LABEL is allowed (label_loop's
+     * `label LOOP`, or a labelled body line). */
+    if (!is_pretest && !check(p, BTOK_CO) && !check(p, BTOK_NEWLINE) &&
+        !check(p, BTOK_LOOP) && !check(p, BTOK_LABEL) && !check(p, BTOK_EOF)) {
+        tok_unexpected_error(p, &p->current);
+        if (p->cs->loop_stack.len > 0)
+            vec_pop(p->cs->loop_stack);
+        return NULL;
     }
 
     skip_newlines(p);
     AstNode *body = make_block_node(p, lineno);
+    /* Body validity before LOOP. The plain-DO body is `program_co` only
+     * (no `do_start co_statements_co label_loop` production) — so a
+     * trailing CO-terminated fragment is valid ONLY when a NEWLINE-
+     * terminated `program` precedes it; `DO\nLET M=0: LOOP` therefore
+     * faults on LOOP (doloopuntilsplitted.bas:3). The pre-test DO
+     * WHILE/UNTIL body additionally has a `co_statements_co LOOP`
+     * production (zxbparser.py:1864/1882), accepting an all-CO body
+     * (`DO WHILE 1: PRINT 1: LOOP` is OK), so for pre-test we only
+     * reject a statement running into LOOP with no separator at all.
+     * Both: never over-reject — residual rejects PLY also makes stay FN. */
+    bool seen_nl_terminated = false;
     while (!check(p, BTOK_EOF) && !check(p, BTOK_LOOP)) {
         AstNode *stmt = parse_statement(p);
         if (stmt) ast_add_child(p->cs, body, stmt);
-        while (match(p, BTOK_NEWLINE) || match(p, BTOK_CO)) {}
+        bool sep = false, nl = false;
+        while (check(p, BTOK_NEWLINE) || check(p, BTOK_CO)) {
+            if (check(p, BTOK_NEWLINE)) nl = true;
+            advance(p);
+            sep = true;
+        }
+        if (nl) seen_nl_terminated = true;
+        if (check(p, BTOK_EOF)) break;
+        /* `label_loop : label LOOP` (zxbparser.py:1678): a LABEL immediately
+         * preceding LOOP is the LOOP's own label (parse_statement consumed it
+         * as a label-only sentence), NOT an unterminated body statement —
+         * `DO\n20 LOOP` and `DO\nLET a=1\n30 LOOP` are valid (doloop*.bas).
+         * Exempt exactly as the FOR body exempts label_next. */
+        bool stmt_is_label_only =
+            stmt && stmt->tag == AST_SENTENCE && stmt->u.sentence.kind &&
+            strcmp(stmt->u.sentence.kind, "LABEL") == 0;
+        if (check(p, BTOK_LOOP) && stmt_is_label_only) break;
+        if (check(p, BTOK_LOOP)) {
+            /* At the LOOP terminator. The just-parsed statement must be
+             * properly closed before LOOP. */
+            if (!sep) {
+                /* Statement ran directly into LOOP, no separator — always
+                 * a PLY fault (both plain and pre-test). */
+                tok_unexpected_error(p, &p->current);
+                if (p->cs->loop_stack.len > 0) vec_pop(p->cs->loop_stack);
+                return NULL;
+            }
+            if (!is_pretest && !nl && !seen_nl_terminated) {
+                /* Plain DO: trailing CO-fragment with no preceding
+                 * NEWLINE-terminated program -> fault on LOOP. */
+                tok_unexpected_error(p, &p->current);
+                if (p->cs->loop_stack.len > 0) vec_pop(p->cs->loop_stack);
+                return NULL;
+            }
+            break;
+        }
+        if (!sep) {
+            /* Two statements with no separator between them -> fault on the
+             * first token of the second. */
+            tok_unexpected_error(p, &p->current);
+            if (p->cs->loop_stack.len > 0) vec_pop(p->cs->loop_stack);
+            return NULL;
+        }
     }
 
     consume(p, BTOK_LOOP, "Expected LOOP");
@@ -5868,6 +6050,27 @@ static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function, bool is_decl
     /* Push function level (for GOSUB check and other function-scope tracking) */
     vec_push(p->cs->function_level, id_node);
 
+    /* The function header must be terminated by a statement separator:
+     * `function_header : function_header_pre CO | function_header_pre NEWLINE`
+     * (zxbparser.py:2934-2935). A header that runs directly into the body
+     * (or END) with no CO/NEWLINE is a PLY p_error on that token — e.g.
+     * `FUNCTION f() END FUNCTION` on one line -> ":2: Unexpected token
+     * 'END' <END>" (verified on the oracle, both FUNCTION and SUB). The
+     * header is fully parsed at this point (params + return typedef); the
+     * only valid continuations are CO or NEWLINE. */
+    if (!check(p, BTOK_CO) && !check(p, BTOK_NEWLINE) && !check(p, BTOK_EOF)) {
+        tok_unexpected_error(p, &p->current);
+        /* Pop the function level we just pushed and restore the parent
+         * scope so the outer parser stays balanced. symboltable_exit_scope
+         * does NOT emit W150 (those come later, on the local_symbol_table
+         * capture which we skip), matching Python: the one-line header
+         * error emits only the p_error line, no unused-param warnings
+         * (verified on the oracle). had_error is set -> parse rejected. */
+        if (p->cs->function_level.len > 0)
+            vec_pop(p->cs->function_level);
+        symboltable_exit_scope(p->cs->symbol_table);
+        return NULL;
+    }
     /* Parse body */
     skip_newlines(p);
     /* p_function_header_pre (src/zxbc/zxbparser.py:3002-3004): a FASTCALL
@@ -6089,11 +6292,61 @@ AstNode *parser_parse(Parser *p) {
          * crossed a NEWLINE (program_line boundary) vs just a CO
          * (statement-on-same-line separator). */
         bool crossed_newline = false;
+        bool sep_consumed = false;
         while (check(p, BTOK_NEWLINE) || check(p, BTOK_CO)) {
             if (check(p, BTOK_NEWLINE)) crossed_newline = true;
             advance(p);
+            sep_consumed = true;
         }
         if (check(p, BTOK_EOF)) crossed_newline = true;
+
+        /* Top-level statement separator requirement. Python's program is a
+         * sequence of `program_line`s, each `statements NEWLINE` / etc.
+         * (zxbparser.py:564-573), and `statements : statement | statements_co
+         * statement` requires a CO between statements on one line
+         * (zxbparser.py:596-603). Two statements with no NEWLINE/CO between
+         * them is a PLY p_error on the first token of the second statement —
+         * e.g. `LET a = 0 b = 1` -> ":2: Unexpected token 'b' <ID>", and
+         * `LET a = BIN a = a + 1` (BIN with no digits lexes to NUMBER 0, the
+         * trailing `a` re-lexed as ID) -> ":2: Unexpected token 'a' <ID>"
+         * (bin02.bas; both verified on the oracle). Only fault when a real
+         * statement was parsed, no separator followed, we are not at EOF,
+         * and no earlier error is being recovered (panic_mode) — never
+         * over-reject; valid one-liners use CO and are unaffected.
+         *
+         * EXEMPT a label-only sentence: `label_line : label statements`
+         * (zxbparser.py:617) lets a (line-number or named) label be followed
+         * by a statement on the same line with NO separator, e.g.
+         * `25 END` / `30 GOTO 50` (opt3_gotogosub.bas). parse_statement
+         * returns the bare label sentence (END/etc. are block terminators it
+         * declines to absorb), and the following statement is taken on the
+         * next top-level iteration — the pre-existing accepted shape. */
+        bool top_stmt_label_only =
+            stmt && stmt->tag == AST_SENTENCE && stmt->u.sentence.kind &&
+            strcmp(stmt->u.sentence.kind, "LABEL") == 0;
+        /* EXEMPT block-structured statements (IF/FOR/WHILE/DO…). In a valid
+         * program these are always their own program_line and end in a
+         * NEWLINE-terminated terminator, so a missing separator after one can
+         * only arise from the block parser's own internal recovery of a
+         * desync it ALREADY diagnoses (e.g. `IF a<0 THEN:` — the colon-after-
+         * THEN form returns an empty single-line IF at the next line's first
+         * token; Python faults on `IF` at the END IF line, ifthencoendif.bas,
+         * which the END-statement path already reports). Re-faulting on that
+         * leftover token here would double-report. The leaf-statement desync
+         * (bin02 `LET a=0` then `a`) is unaffected — LET is not a block. */
+        bool top_stmt_block = false;
+        if (stmt && stmt->tag == AST_SENTENCE && stmt->u.sentence.kind) {
+            const char *k = stmt->u.sentence.kind;
+            top_stmt_block =
+                strcmp(k, "IF") == 0 || strcmp(k, "FOR") == 0 ||
+                strcmp(k, "WHILE") == 0 || strncmp(k, "DO_", 3) == 0 ||
+                strncmp(k, "LOOP_", 5) == 0;
+        }
+        if (!sep_consumed && !check(p, BTOK_EOF) && !p->panic_mode &&
+            stmt && stmt->tag != AST_NOP && !top_stmt_label_only &&
+            !top_stmt_block) {
+            tok_unexpected_error(p, &p->current);
+        }
 
         /* Emit CHKBREAK sentence after program_line if enable_break is
          * on and the line carried a real (non-label-only) statement.
