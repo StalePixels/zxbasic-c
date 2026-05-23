@@ -3160,6 +3160,36 @@ static StrVec emit_astoref(Backend *b, Quad *q) {
     return out;
 }
 
+/* _astoref16 (_array.py:266-289): verbatim port. Stores a FIXED (16.16,
+ * 4-byte) value (2nd operand) into the GLOBAL array element at the offset
+ * computed from the 1st operand. Uses _addr (s_array_addr -> __ARRAY) to
+ * put the element address in HL, then Fixed16.get_oper(value, use_bc=True)
+ * loads the value into DE/BC, and __STORE32 writes it. The '*' indirect
+ * path brackets the operand load with push hl / pop hl (the address must
+ * survive the ILOAD32 inside get_oper). Note Python passes the ALREADY
+ * '*'-stripped value into get_oper (unlike _astoref), so get_oper sees a
+ * direct operand on that path. */
+static StrVec emit_astoref16(Backend *b, Quad *q) {
+    StrVec out = sv_new();
+    s_array_addr(b, &out, q_ins(q, 1));
+
+    const char *value = q_ins(q, 2);
+    bool indirect = (value[0] == '*');
+    if (indirect) value++;
+
+    if (indirect) {
+        sv_push(b, &out, "push hl");
+        StrVec g = fixed16_get_oper(b, value, NULL, true, false);
+        for (int i = 0; i < g.len; i++) vec_push(out, g.data[i]);
+        sv_push(b, &out, "pop hl");
+    } else {
+        StrVec g = fixed16_get_oper(b, value, NULL, true, false);
+        for (int i = 0; i < g.len; i++) vec_push(out, g.data[i]);
+    }
+    sv_push(b, &out, s_runtime_call(b, RL_STORE32));
+    return out;
+}
+
 /* _astorestr (_array.py:314-372): verbatim port. Stores a STRING value
  * (2nd operand) into the GLOBAL array element at the offset computed from
  * the 1st operand. Uses _addr (s_array_addr → __ARRAY) to put the element
@@ -3356,6 +3386,89 @@ static StrVec emit_pastore32(Backend *b, Quad *q) {
         sv_push(b, &out, "pop de");
     }
     sv_push(b, &out, s_runtime_call(b, RL_STORE32));
+    return out;
+}
+/* _pastoref16 (_parray.py:213-244): verbatim port. Stores a FIXED (16.16,
+ * 4-byte) value (2nd operand) into the param/local array element at the
+ * IX-relative offset (1st operand). Uses _paddr (s_parray_addr ->
+ * __ARRAY/__ARRAY_PTR) to put the element address in HL, then loads the
+ * value into DE/BC and __STORE32 writes it.
+ *
+ * Python's try-block reproduces a Boriel quirk: for the indirect ('*')
+ * value the immediate path does `value = int(ins[2])` against the *un*-
+ * stripped operand (the leading '*' is still present), so int() ALWAYS
+ * raises ValueError there and execution falls to the except branch
+ * (pop bc / pop de). For the non-indirect operand the immediate path is
+ * `Fixed16.f16(value)` which does float(value) — taken only when value is
+ * a float literal; a temporary (non-numeric) likewise falls to pop. We
+ * mirror this exactly: immediate emit only for the non-indirect float
+ * literal; everything else pops the 32-bit value off the stack. */
+static StrVec emit_pastoref16(Backend *b, Quad *q) {
+    StrVec out = sv_new();
+    s_parray_addr(b, &out, q_ins(q, 1));
+
+    const char *raw = q_ins(q, 2);
+    const char *value = raw;
+    bool indirect = (value[0] == '*');
+    if (indirect) value++;
+
+    /* try: ... except ValueError: pop bc / pop de.
+     * indirect immediate uses int(ins[2]) (un-stripped) => always raises. */
+    if (!indirect && s_is_float(value)) {
+        unsigned DE, HL; s_f16(s_float_val(value), &DE, &HL);
+        sv_pushf(b, &out, "ld de, %u", DE);
+        sv_pushf(b, &out, "ld bc, %u", HL);
+    } else {
+        sv_push(b, &out, "pop bc");
+        sv_push(b, &out, "pop de");
+    }
+
+    sv_push(b, &out, s_runtime_call(b, RL_STORE32));
+    return out;
+}
+/* _pastoref (_parray.py:247-282): verbatim port. Stores a FLOAT (5-byte
+ * FP) value (2nd operand) into the param/local array element at the
+ * IX-relative offset (1st operand). _paddr puts the element address in HL.
+ *
+ * Python try-block: for the indirect operand the immediate path is
+ * `int(value) & 0xFFFF` on the *stripped* value (so an integer-literal
+ * pointer is honoured here, unlike _pastoref16), loading via __ILOADF;
+ * for the non-indirect operand it is `float(value)` -> immediate_float
+ * (A/DE/BC). Either int()/float() raising ValueError (a temporary on the
+ * stack) falls to the except branch which re-marshals the 5 bytes off the
+ * stack (pop bc / pop de / ex (sp), hl / ld a,l / pop hl). Then __STOREF. */
+static StrVec emit_pastoref(Backend *b, Quad *q) {
+    StrVec out = sv_new();
+    s_parray_addr(b, &out, q_ins(q, 1));
+
+    const char *value = q_ins(q, 2);
+    bool indirect = (value[0] == '*');
+    if (indirect) value++;
+
+    if (indirect && s_is_int(value)) {
+        long v = s_int_val(value) & 0xFFFF;     /* int(value) & 0xFFFF */
+        sv_push(b, &out, "push hl");
+        sv_pushf(b, &out, "ld hl, %ld", v);
+        sv_push(b, &out, s_runtime_call(b, RL_ILOADF));
+        sv_push(b, &out, "ld a, c");
+        sv_push(b, &out, "ld b, h");
+        sv_push(b, &out, "ld c, l");            /* BC = lower 16, A = exp */
+        sv_push(b, &out, "pop hl");             /* recover pointer */
+    } else if (!indirect && s_is_float(value)) {
+        char C[8], DE[8], BC[8];
+        z80h_immediate_float(s_float_val(value), C, DE, BC);
+        sv_pushf(b, &out, "ld a, %s", C);
+        sv_pushf(b, &out, "ld de, %s", DE);
+        sv_pushf(b, &out, "ld bc, %s", BC);
+    } else {
+        sv_push(b, &out, "pop bc");
+        sv_push(b, &out, "pop de");
+        sv_push(b, &out, "ex (sp), hl");        /* preserve HL for STOREF */
+        sv_push(b, &out, "ld a, l");
+        sv_push(b, &out, "pop hl");
+    }
+
+    sv_push(b, &out, s_runtime_call(b, RL_STOREF));
     return out;
 }
 
@@ -5380,6 +5493,36 @@ static StrVec emit_jzerostr(Backend *b, Quad *q) {
     return out;
 }
 
+/* String.jnzerostr (_str.py:283-309). Jumps to ins[2] if the top-of-stack
+ * (or named-var) string is non-NULL and has length >= 1. Twin of
+ * jzerostr but with `jp nz` at the tail. Reproduces the same Boriel quirk:
+ * the variable load uses only ins[1][0] — `ld hl, (%s)` % ins[1][0] — i.e.
+ * the first char of the operand (here always '_'); ported verbatim as
+ * o1[0] / `(%c)`. A non-named operand is popped, kept (disposable), STRLEN
+ * measured, then MEM_FREE'd. */
+static StrVec emit_jnzerostr(Backend *b, Quad *q) {
+    StrVec out = sv_new();
+    bool disposable = false;
+    const char *o1 = q->args[0];
+    if (o1[0] == '_') {
+        sv_pushf(b, &out, "ld hl, (%c)", o1[0]); /* _str.py:293 verbatim */
+    } else {
+        sv_push(b, &out, "pop hl");
+        sv_push(b, &out, "push hl");
+        disposable = true;
+    }
+    sv_push(b, &out, s_runtime_call(b, RL_STRLEN));
+    if (disposable) {
+        sv_push(b, &out, "ex (sp), hl");
+        sv_push(b, &out, s_runtime_call(b, RL_MEM_FREE));
+        sv_push(b, &out, "pop hl");
+    }
+    sv_push(b, &out, "ld a, h");
+    sv_push(b, &out, "or l");
+    sv_pushf(b, &out, "jp nz, %s", q->args[1]);
+    return out;
+}
+
 /* String.retstr (_str.py:311-321). */
 static StrVec emit_retstr(Backend *b, Quad *q) {
     bool tmp;
@@ -5431,6 +5574,7 @@ static StrVec quad_emit(Backend *b, Quad *q) {
     if (strcmp(I, "gestr")     == 0) return emit_gestr(b, q);
     if (strcmp(I, "lenstr")    == 0) return emit_lenstr(b, q);
     if (strcmp(I, "jzerostr")  == 0) return emit_jzerostr(b, q);
+    if (strcmp(I, "jnzerostr") == 0) return emit_jnzerostr(b, q);
 
     /* S5.3 — _QUAD_TABLE entries (main.py:151-611). store/load/add/sub/
      * mul/div dispatch by suffix to the Bits8/Bits16 emitter (the Python
@@ -5669,8 +5813,9 @@ static StrVec quad_emit(Backend *b, Quad *q) {
     if (strcmp(I, "pastorestr")== 0) return emit_pastorestr(b, q);
 
     /* Array element access (main.py:430-478,504-528,585 ICInfo). f16
-     * array load maps to _aload32 (main.py:476); astore/pastore f16 use
-     * the Fixed16 path — not registered (no fixture in scope). */
+     * array load maps to _aload32 (main.py:476); the f16/float array
+     * stores (astoref16/pastoref16/pastoref) go through the Fixed16/Float
+     * paths and are registered below (S7.3d-9a). */
     if (strcmp(I, "aaddr")     == 0) return emit_aaddr(b, q);
     if (strcmp(I, "aloadi8")   == 0 || strcmp(I, "aloadu8")  == 0) return emit_aload8(b, q);
     if (strcmp(I, "aloadi16")  == 0 || strcmp(I, "aloadu16") == 0) return emit_aload16(b, q);
@@ -5682,6 +5827,7 @@ static StrVec quad_emit(Backend *b, Quad *q) {
     if (strcmp(I, "astorei16") == 0 || strcmp(I, "astoreu16")== 0) return emit_astore16(b, q);
     if (strcmp(I, "astorei32") == 0 || strcmp(I, "astoreu32")== 0) return emit_astore32(b, q);
     if (strcmp(I, "astoref")   == 0) return emit_astoref(b, q);
+    if (strcmp(I, "astoref16") == 0) return emit_astoref16(b, q);
     if (strcmp(I, "astorestr") == 0) return emit_astorestr(b, q);
     if (strcmp(I, "paaddr")    == 0) return emit_paaddr(b, q);
     if (strcmp(I, "paloadi8")  == 0 || strcmp(I, "paloadu8")  == 0) return emit_paload8(b, q);
@@ -5693,6 +5839,8 @@ static StrVec quad_emit(Backend *b, Quad *q) {
     if (strcmp(I, "pastorei8")  == 0 || strcmp(I, "pastoreu8") == 0) return emit_pastore8(b, q);
     if (strcmp(I, "pastorei16") == 0 || strcmp(I, "pastoreu16")== 0) return emit_pastore16(b, q);
     if (strcmp(I, "pastorei32") == 0 || strcmp(I, "pastoreu32")== 0) return emit_pastore32(b, q);
+    if (strcmp(I, "pastoref16") == 0) return emit_pastoref16(b, q);
+    if (strcmp(I, "pastoref")   == 0) return emit_pastoref(b, q);
     if (strcmp(I, "memcopy")   == 0) return emit_memcopy(b, q);
     if (strcmp(I, "exchg")     == 0) return emit_exchg(b, q);
 
