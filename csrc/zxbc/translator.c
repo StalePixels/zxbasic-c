@@ -4244,11 +4244,80 @@ void translator_visit(Translator *tr, AstNode *ast) {
  * the S5.7d numeric corpus uses NUMBER / CONSTEXPR(NUMBER) literals.
  * Mirrors var_translator.c's vt_bound_val (kept local to avoid a
  * cross-TU dependency churn). */
+/* Numeric fold for a static array-bound operator (mirrors parser.c
+ * zxbc_eval_binop / var_translator.c vt_eval_binop, backing Python's
+ * eval_to_num). Returns false (== Python eval() exception -> None) for an
+ * undefined op or div/mod-by-zero. */
+static bool tr_bound_binop(const char *op, double l, double r, double *out) {
+    if (!op) return false;
+    if (strcmp(op, "PLUS") == 0)  { *out = l + r; return true; }
+    if (strcmp(op, "MINUS") == 0) { *out = l - r; return true; }
+    if (strcmp(op, "MULT") == 0 || strcmp(op, "MUL") == 0) { *out = l * r; return true; }
+    if (strcmp(op, "DIV") == 0)  { if (r == 0) return false; *out = l / r; return true; }
+    if (strcmp(op, "MOD") == 0)  { if (r == 0) return false; *out = fmod(l, r); return true; }
+    if (strcmp(op, "POW") == 0)  { *out = pow(l, r); return true; }
+    if (strcmp(op, "SHL") == 0)  { *out = (double)((int64_t)l << (int64_t)r); return true; }
+    if (strcmp(op, "SHR") == 0)  { *out = (double)((int64_t)l >> (int64_t)r); return true; }
+    if (strcmp(op, "BAND") == 0) { *out = (double)((int64_t)l & (int64_t)r); return true; }
+    if (strcmp(op, "BOR") == 0)  { *out = (double)((int64_t)l | (int64_t)r); return true; }
+    if (strcmp(op, "BXOR") == 0) { *out = (double)((int64_t)l ^ (int64_t)r); return true; }
+    if (strcmp(op, "LT") == 0)   { *out = (l <  r) ? 1 : 0; return true; }
+    if (strcmp(op, "GT") == 0)   { *out = (l >  r) ? 1 : 0; return true; }
+    if (strcmp(op, "EQ") == 0)   { *out = (l == r) ? 1 : 0; return true; }
+    if (strcmp(op, "LE") == 0)   { *out = (l <= r) ? 1 : 0; return true; }
+    if (strcmp(op, "GE") == 0)   { *out = (l >= r) ? 1 : 0; return true; }
+    if (strcmp(op, "NE") == 0)   { *out = (l != r) ? 1 : 0; return true; }
+    if (strcmp(op, "AND") == 0)  { *out = ((int64_t)l && (int64_t)r) ? 1 : 0; return true; }
+    if (strcmp(op, "OR") == 0)   { *out = ((int64_t)l || (int64_t)r) ? 1 : 0; return true; }
+    if (strcmp(op, "XOR") == 0)  { *out = ((!!(int64_t)l) ^ (!!(int64_t)r)) ? 1 : 0; return true; }
+    return false;
+}
+
+/* eval_to_num analogue for a resolved LOCAL-array BOUND expr — identical
+ * to var_translator.c vt_bound_eval (the global path) and parser.c
+ * zxbc_eval_to_num.  Python's SymbolBOUND folds each bound to an integer
+ * at parse time; the C parser keeps the unresolved expr tree on the
+ * AST_BOUND children, so the local-array translator must evaluate a named
+ * CONST / static const expression bound to that same integer. */
+static bool tr_bound_eval(AstNode *n, double *out) {
+    if (!n) return false;
+    switch (n->tag) {
+    case AST_NUMBER:
+        *out = n->u.number.value;
+        return true;
+    case AST_CONSTEXPR:
+        return n->child_count > 0 && tr_bound_eval(n->children[0], out);
+    case AST_ID:
+        if (n->u.id.class_ == CLASS_const && n->u.id.default_value_expr)
+            return tr_bound_eval(n->u.id.default_value_expr, out);
+        return false;
+    case AST_BINARY: {
+        double l, r;
+        if (n->child_count < 2) return false;
+        if (!tr_bound_eval(n->children[0], &l)) return false;
+        if (!tr_bound_eval(n->children[1], &r)) return false;
+        return tr_bound_binop(n->u.binary.operator, l, r, out);
+    }
+    case AST_UNARY: {
+        double v;
+        const char *op = n->u.unary.operator;
+        if (op && strcmp(op, "ADDRESS") == 0) return false;
+        if (n->child_count < 1) return false;
+        if (!tr_bound_eval(n->children[0], &v)) return false;
+        if (op && strcmp(op, "MINUS") == 0) { *out = -v; return true; }
+        if (op && strcmp(op, "PLUS") == 0)  { *out = v;  return true; }
+        if (op && strcmp(op, "NOT") == 0)   { *out = (v == 0) ? 1 : 0; return true; }
+        if (op && strcmp(op, "BNOT") == 0)  { *out = (double)(~(int64_t)v); return true; }
+        return false;
+    }
+    default:
+        return false;
+    }
+}
+
 static long tr_bound_val(AstNode *n) {
-    if (!n) return 0;
-    if (n->tag == AST_NUMBER) return (long)n->u.number.value;
-    if (n->tag == AST_CONSTEXPR && n->child_count > 0)
-        return tr_bound_val(n->children[0]);
+    double v;
+    if (tr_bound_eval(n, &v)) return (long)v;
     return 0;
 }
 

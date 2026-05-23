@@ -32,6 +32,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
+#include <math.h>
 
 /* Python repr of a list[str]: "['a', 'b']" — now the shared
  * tr_py_list_repr (translator.c) so the S5.7d local-init IC wrappers and
@@ -448,14 +449,96 @@ int tr_array_default_value(Translator *tr, const TypeInfo *type_,
     return off;
 }
 
-/* SymbolBOUND geometry: BOUND child is [lower NUMBER, upper NUMBER]
- * (parser.c:2099-2102; bound.py:33-37 lower/upper/count). For the S5.6
- * numeric corpus these are NUMBER literals; read the integer value. */
+/* Numeric operator fold for a static array-bound expression, mirroring
+ * the parser-side zxbc_eval_binop (parser.c) that backs Python's
+ * eval_to_num.  Returns false (== Python's eval() exception -> None) for a
+ * non-numeric / undefined op or a div/mod-by-zero. */
+static bool vt_eval_binop(const char *op, double l, double r, double *out) {
+    if (!op) return false;
+    if (strcmp(op, "PLUS") == 0)  { *out = l + r; return true; }
+    if (strcmp(op, "MINUS") == 0) { *out = l - r; return true; }
+    if (strcmp(op, "MULT") == 0 || strcmp(op, "MUL") == 0) { *out = l * r; return true; }
+    if (strcmp(op, "DIV") == 0)  { if (r == 0) return false; *out = l / r; return true; }
+    if (strcmp(op, "MOD") == 0)  { if (r == 0) return false; *out = fmod(l, r); return true; }
+    if (strcmp(op, "POW") == 0)  { *out = pow(l, r); return true; }
+    if (strcmp(op, "SHL") == 0)  { *out = (double)((int64_t)l << (int64_t)r); return true; }
+    if (strcmp(op, "SHR") == 0)  { *out = (double)((int64_t)l >> (int64_t)r); return true; }
+    if (strcmp(op, "BAND") == 0) { *out = (double)((int64_t)l & (int64_t)r); return true; }
+    if (strcmp(op, "BOR") == 0)  { *out = (double)((int64_t)l | (int64_t)r); return true; }
+    if (strcmp(op, "BXOR") == 0) { *out = (double)((int64_t)l ^ (int64_t)r); return true; }
+    if (strcmp(op, "LT") == 0)   { *out = (l <  r) ? 1 : 0; return true; }
+    if (strcmp(op, "GT") == 0)   { *out = (l >  r) ? 1 : 0; return true; }
+    if (strcmp(op, "EQ") == 0)   { *out = (l == r) ? 1 : 0; return true; }
+    if (strcmp(op, "LE") == 0)   { *out = (l <= r) ? 1 : 0; return true; }
+    if (strcmp(op, "GE") == 0)   { *out = (l >= r) ? 1 : 0; return true; }
+    if (strcmp(op, "NE") == 0)   { *out = (l != r) ? 1 : 0; return true; }
+    if (strcmp(op, "AND") == 0)  { *out = ((int64_t)l && (int64_t)r) ? 1 : 0; return true; }
+    if (strcmp(op, "OR") == 0)   { *out = ((int64_t)l || (int64_t)r) ? 1 : 0; return true; }
+    if (strcmp(op, "XOR") == 0)  { *out = ((!!(int64_t)l) ^ (!!(int64_t)r)) ? 1 : 0; return true; }
+    return false;
+}
+
+/* eval_to_num analogue (api/utils.py:173) for a resolved BOUND expr.
+ * Python's SymbolBOUND.make_node (bound.py:40-65) folds each bound to a
+ * concrete integer at PARSE time via eval_to_num(node.t), so the
+ * VarTranslator (var_translator.py:69/98-102/602) just reads
+ * bound.upper - bound.lower + 1.  The C parser keeps the bound's
+ * UNRESOLVED expr tree on the AST_BOUND children (parser.c:5084-5086) —
+ * a NUMBER, a named CONST id, or a CONSTEXPR/BINARY/UNARY of those — so
+ * the translator must evaluate it to the same integer Python stored.
+ * This mirrors parser.c:zxbc_eval_to_num branch-for-branch (the same
+ * evaluator bound_count/p_arr_decl already use at parse time), so a const
+ * array bound (e.g. const3 `dim x(DGMAXY, DGMAXX)`, dim_const_const's
+ * transitive `const MAXMOBS = MHEIGHT`) sizes the DATA image and idx
+ * table identically.  Returns true + *out on a numeric resolution; false
+ * == Python's None (e.g. an address-of leaf — but a bound never reaches
+ * codegen non-numeric: make_bound rejected it). */
+static bool vt_bound_eval(AstNode *n, double *out) {
+    if (!n) return false;
+    switch (n->tag) {
+    case AST_NUMBER:
+        *out = n->u.number.value;
+        return true;
+    case AST_CONSTEXPR:
+        return n->child_count > 0 && vt_bound_eval(n->children[0], out);
+    case AST_ID:
+        /* A named CONST: Python's .t is the resolved numeric string
+         * (const+number arithmetic already folded). Resolve via the
+         * stored constant value (default_value_expr). */
+        if (n->u.id.class_ == CLASS_const && n->u.id.default_value_expr)
+            return vt_bound_eval(n->u.id.default_value_expr, out);
+        return false;
+    case AST_BINARY: {
+        double l, r;
+        if (n->child_count < 2) return false;
+        if (!vt_bound_eval(n->children[0], &l)) return false;
+        if (!vt_bound_eval(n->children[1], &r)) return false;
+        return vt_eval_binop(n->u.binary.operator, l, r, out);
+    }
+    case AST_UNARY: {
+        double v;
+        const char *op = n->u.unary.operator;
+        if (op && strcmp(op, "ADDRESS") == 0) return false;
+        if (n->child_count < 1) return false;
+        if (!vt_bound_eval(n->children[0], &v)) return false;
+        if (op && strcmp(op, "MINUS") == 0) { *out = -v; return true; }
+        if (op && strcmp(op, "PLUS") == 0)  { *out = v;  return true; }
+        if (op && strcmp(op, "NOT") == 0)   { *out = (v == 0) ? 1 : 0; return true; }
+        if (op && strcmp(op, "BNOT") == 0)  { *out = (double)(~(int64_t)v); return true; }
+        return false;
+    }
+    default:
+        return false;
+    }
+}
+
+/* SymbolBOUND geometry: BOUND child is [lower expr, upper expr]
+ * (parser.c:5084-5086; bound.py:33-37 lower/upper/count). Resolve the
+ * bound expr to its folded integer (a NUMBER literal, a named CONST, or a
+ * static const expression) — see vt_bound_eval. */
 static long vt_bound_val(AstNode *n) {
-    if (!n) return 0;
-    if (n->tag == AST_NUMBER) return (long)n->u.number.value;
-    if (n->tag == AST_CONSTEXPR && n->child_count > 0)
-        return vt_bound_val(n->children[0]);
+    double v;
+    if (vt_bound_eval(n, &v)) return (long)v;
     return 0;
 }
 

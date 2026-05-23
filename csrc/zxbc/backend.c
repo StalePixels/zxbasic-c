@@ -4999,8 +4999,15 @@ static StrVec emit_lvarx(Backend *b, Quad *q) {
     long offset = s_int_val(q_ins(q, 1));
     const char *suffix = q_ins(q, 2);
 
-    /* AT_END.extend(_varx(ins-with-ins[1]:=label)) */
-    const char *xargs[3] = { label, suffix, q_ins(q, 4) };
+    /* AT_END.extend(_varx(ins-with-ins[1]:=label)). Python (_lvarx,
+     * generic.py:211-223) reuses the SAME quad with only ins[1] replaced
+     * by the tmp label, so the deferred _varx reads its data list from
+     * ins[3] — the lvarx's own value list. The C synthetic varx quad maps
+     * {name, suffix, list} to args[0..2], so its data list is the lvarx
+     * quad's ins[3] == q_ins(q, 3) (NOT q_ins(q, 4), which is past the end
+     * and yields ""; that dropped the whole DEFW data block — e.g. a local
+     * `DIM q As Uinteger = @Map` emitted an empty `.LABEL.__LABEL0:`). */
+    const char *xargs[3] = { label, suffix, q_ins(q, 3) };
     Quad *xq = quad_new(b->arena, "varx", 3, xargs);
     StrVec xd = emit_varx(b, xq);
     for (int i = 0; i < xd.len; i++) vec_push(b->at_end, xd.data[i]);

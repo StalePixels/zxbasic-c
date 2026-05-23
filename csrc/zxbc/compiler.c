@@ -137,6 +137,23 @@ void symboltable_exit_scope(SymbolTable *st) {
             }
             hashmap_set(&st->global_scope->symbols, nm, e);
             hashmap_remove(&leaving->symbols, nm);
+            /* Python `del self.current_scope[id_]` (symboltable.py:304)
+             * removes the entry from the leaving scope's OrderedDict — and
+             * since func.ref.local_symbol_table IS that same Scope object
+             * (zxbparser.py:2910, assigned by reference BEFORE leave_scope),
+             * the promoted entry vanishes from the values() the
+             * FunctionTranslator later iterates. The C captures local_entries
+             * from leaving->ordered, so the entry must also be COMPACTED out
+             * of ordered here; otherwise a forward `@Map` inside a function
+             * (creating CLASS_unknown _q.Map, later promoted to global _Map
+             * by a top-level `Dim Map = 1`) would linger in the function's
+             * local_entries and emit a spurious local-init image of the
+             * global's default value (dimconst2d). i is decremented so the
+             * compacted-in successor is still visited. */
+            for (int j = i; j < leaving->ordered_count - 1; j++)
+                leaving->ordered[j] = leaving->ordered[j + 1];
+            leaving->ordered_count--;
+            i--;
             /* Keep it discoverable in global insertion order too (the
              * faithful analogue of global_scope[id_] = symbol adding it
              * to the global OrderedDict). */

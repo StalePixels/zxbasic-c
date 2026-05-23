@@ -6508,6 +6508,21 @@ static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function, bool is_decl
      * return at zxbparser.py:2929) a declare computes no sizes. */
     {
         Scope_ *body_scope = p->cs->symbol_table->current_scope;
+
+        /* Python order (zxbparser.py:2910-2911): func.ref.local_symbol_table
+         * = current_scope (BY REFERENCE), then leave_scope() — which FIRST
+         * relocates every CLASS.unknown entry to the global scope (deleting
+         * it from current_scope), and only THEN compute_offsets. Because the
+         * local table is the same live Scope object, the promoted entries are
+         * already gone from it when the FunctionTranslator iterates
+         * values(). The C snapshots leaving->ordered, so it must snapshot
+         * AFTER exit_scope's promotion-compaction — otherwise a forward
+         * `@global` inside the body lingers in local_entries (dimconst2d).
+         * exit_scope only flips current_scope to the parent; body_scope still
+         * points at the (arena-owned) leaving scope, now with the promoted
+         * entries compacted out of ->ordered. */
+        symboltable_exit_scope(p->cs->symbol_table);
+
         int oc = body_scope->ordered_count;
         if (oc > 0) {
             AstNode **le = arena_alloc(&p->cs->arena,
@@ -6521,9 +6536,6 @@ static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function, bool is_decl
             symboltable_compute_offsets(p->cs->symbol_table, body_scope,
                                         p->cs->opts.optimization_level);
     }
-
-    /* Exit scope */
-    symboltable_exit_scope(p->cs->symbol_table);
 
     /* Create function declaration node (id_node was declared before entering scope) */
     AstNode *decl = ast_new(p->cs, AST_FUNCDECL, lineno);
