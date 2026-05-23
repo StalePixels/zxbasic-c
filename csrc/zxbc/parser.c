@@ -583,73 +583,104 @@ static AstNode *parse_builtin_func(Parser *p, const char *fname, BTokenType kw) 
         closing_rp_lineno = p->previous.lineno;  /* p.lineno(6) — the RP */
     }
 
-    /* p_expr_lbound_expr (zxbparser.py:3335-3378) — LBOUND/UBOUND with an
-     * explicit dimension: `LBOUND(arr, expr)` / `UBOUND(arr, expr)`. The C
-     * grammar funnels these through this generic builtin builder, so the
-     * production's array-descriptor side effect must be reproduced here.
+    /* p_expr_lbound / p_expr_lbound_expr (zxbparser.py:3317-3378) —
+     * LBOUND/UBOUND, both the no-dimension form `LBOUND(arr)` and the
+     * explicit-dimension form `LBOUND(arr, expr)`. The C grammar funnels
+     * both through this generic builtin builder, so the production's
+     * constant-fold AND its array-descriptor side effect must be
+     * reproduced here.
      *
-     * Python: num = make_typecast(uinteger, expr). If is_number(num) and
-     * the array scope is local/global, the dimension constant-propagates
-     * (val==0 -> #dims; LBOUND -> bounds[val-1].lower; UBOUND -> .upper)
-     * and NO flag is set. Otherwise (a non-constant dimension) it sets
-     *     entry.ref.lbound_used = True   (LBOUND)
-     *     entry.ref.ubound_used = True   (UBOUND)
-     * which is exactly the gate VarTranslator.visit_ARRAYDECL
-     * (var_translator.py:58/61) reads to emit the
-     * `<mangled>.__LBOUND__` / `.__UBOUND__` descriptor slot + trailing
-     * bound table for a non-zero-based global array (var_translator.c
-     * :452-455 / :539-562 already consume these flags).
+     * No-dimension form (p_expr_lbound, :3317-3332): if the array scope is
+     * parameter → make_builtin(p[1], [entry, NUMBER(0)]) (runtime, dim
+     * arg 0). Otherwise → make_number(len(entry.bounds)) — i.e. BOTH
+     * LBOUND(arr) and UBOUND(arr) constant-fold to the array's DIMENSION
+     * COUNT (Python returns the rank for the no-arg form, not the first
+     * bound). The C parses the bare ARRAY_ID into n->children[0] (an
+     * AST_ID, CLASS_array) and no second child.
      *
-     * Faithful narrow port: only the flag side effect is reproduced. The
-     * constant-propagation fold of the result value (the LBOUND/UBOUND
-     * runtime builtin itself) is a separate, not-yet-ported subsystem
-     * (translator.c:1479); the C corpus's const-dim fixtures
-     * (lbound0/1/3, bound00/01) reach byte-identical output through the
-     * unused-LET DCE path and must stay untouched — so the flag is set
-     * ONLY on the non-number dimension, exactly Python's else-branch. The
-     * typecast is applied (as Python does) so check_is_number sees the
-     * folded numeric form for a literal dimension. child[0] is the shared
-     * array ID entry (parse_primary resolves a bare ARRAY_ID to the
-     * symbol-table node — the same node the ARRAYDECL carries). */
-    if ((kw == BTOK_LBOUND || kw == BTOK_UBOUND) && n->child_count >= 2) {
-        AstNode *arr = n->children[0];
-        if (arr && arr->tag == AST_ID &&
-            arr->u.id.class_ == CLASS_array) {
-            AstNode *dim = n->children[1];
-            AstNode *num = make_typecast(
-                p->cs,
-                p->cs->symbol_table->basic_types[TYPE_uinteger],
-                dim, lineno);
-            if (num) n->children[1] = num;
-            /* Python's const-prop branch additionally requires the array
-             * scope to be local/global; a parameter-scope array always
-             * takes the flag-setting else-branch. SCOPE_global / _local
-             * arrays with a constant dimension fold (no flag). */
-            bool const_dim =
-                num && (arr->u.id.scope == SCOPE_global ||
-                        arr->u.id.scope == SCOPE_local) &&
-                check_is_number(num);
-            if (const_dim) {
-                /* Python's constant-propagation branch (zxbparser.py
-                 * :3355-3363): val = num.value; if val < 0 or val >
-                 * len(entry.bounds): error(p.lineno(6), "Dimension out of
-                 * range"); p[0]=None; return. The fold of a VALID dim is
-                 * still left to the unused-LET DCE path (see the comment
-                 * above) — only the OOR rejection is ported here, exactly
-                 * Python's guard. */
-                long val = (long) num->u.number.value;
-                AstNode *bl = arr->u.id.arr_boundlist;
-                int nbounds = bl ? bl->child_count : 0;
-                if (val < 0 || val > nbounds) {
-                    zxbc_error(p->cs, closing_rp_lineno,
-                               "Dimension out of range");
-                    return NULL;
+     * Explicit-dimension form (p_expr_lbound_expr, :3335-3378):
+     * num = make_typecast(uinteger, expr). If is_number(num) and the array
+     * scope is local/global, the result constant-propagates:
+     *     val == 0           -> len(entry.bounds)        (dim count)
+     *     val, LBOUND        -> bounds[val-1].lower
+     *     val, UBOUND        -> bounds[val-1].upper
+     * and an out-of-range val (<0 or >len(bounds)) is a "Dimension out of
+     * range" error. Otherwise (non-constant dim, or a parameter array) it
+     * sets entry.ref.lbound_used / .ubound_used — the gate
+     * VarTranslator.visit_ARRAYDECL (var_translator.py:58/61) reads to
+     * emit the `<mangled>.__LBOUND__` / `.__UBOUND__` descriptor slot +
+     * trailing bound table for a non-zero-based array (var_translator.c
+     * :530-544 consume these flags) — and keeps the runtime BUILTIN node.
+     *
+     * make_number is typed TYPE.uinteger exactly like Python (3330/3332/
+     * 3366/3368/3370) so the enclosing LET's typecast/codegen matches. The
+     * array entry was already marked accessed when parse_primary resolved
+     * the bare ARRAY_ID (parser.c:1442), mirroring Python's
+     * mark_entry_as_accessed (zxbparser.py:3326/3349) — so the folded
+     * NUMBER still keeps the array's DIM emission alive. */
+    if (kw == BTOK_LBOUND || kw == BTOK_UBOUND) {
+        AstNode *arr = n->child_count > 0 ? n->children[0] : NULL;
+        if (arr && arr->tag == AST_ID && arr->u.id.class_ == CLASS_array) {
+            AstNode *bl = arr->u.id.arr_boundlist;
+            int nbounds = bl ? bl->child_count : 0;
+            TypeInfo *uint_t =
+                p->cs->symbol_table->basic_types[TYPE_uinteger];
+
+            if (n->child_count < 2) {
+                /* p_expr_lbound (no-dimension form). */
+                if (arr->u.id.scope == SCOPE_parameter) {
+                    /* Parameter array: make_builtin(p[1],
+                     * [entry, NUMBER(0)]) — keep the runtime BUILTIN with
+                     * an explicit dim-0 argument (Python :3329-3330). */
+                    AstNode *zero = make_number(p, 0, lineno, uint_t);
+                    if (zero) ast_add_child(p->cs, n, zero);
+                } else {
+                    /* Non-parameter: fold to the dimension COUNT. */
+                    return make_number(p, nbounds, lineno, uint_t);
                 }
             } else {
-                if (kw == BTOK_LBOUND)
-                    arr->u.id.lbound_used = true;
-                else
-                    arr->u.id.ubound_used = true;
+                /* p_expr_lbound_expr (explicit-dimension form). */
+                AstNode *dim = n->children[1];
+                AstNode *num = make_typecast(p->cs, uint_t, dim, lineno);
+                if (num) n->children[1] = num;
+                /* Python's const-prop branch additionally requires the
+                 * array scope to be local/global; a parameter-scope array
+                 * always takes the flag-setting else-branch. */
+                bool const_dim =
+                    num && (arr->u.id.scope == SCOPE_global ||
+                            arr->u.id.scope == SCOPE_local) &&
+                    check_is_number(num);
+                if (const_dim) {
+                    long val = (long) num->u.number.value;
+                    if (val < 0 || val > nbounds) {
+                        zxbc_error(p->cs, closing_rp_lineno,
+                                   "Dimension out of range");
+                        return NULL;
+                    }
+                    if (val == 0) {
+                        /* val == 0 -> number of dimensions. */
+                        return make_number(p, nbounds, lineno, uint_t);
+                    }
+                    /* bounds[val-1] geometry: BOUND child[0]=lower NUMBER,
+                     * child[1]=upper NUMBER (parser.c:2099-2102;
+                     * bound.py:33-37). */
+                    AstNode *bd = bl->children[val - 1];
+                    long lo = (bd && bd->child_count > 0 &&
+                               bd->children[0]->tag == AST_NUMBER)
+                                  ? (long) bd->children[0]->u.number.value
+                                  : 0;
+                    long hi = (bd && bd->child_count > 1 &&
+                               bd->children[1]->tag == AST_NUMBER)
+                                  ? (long) bd->children[1]->u.number.value
+                                  : 0;
+                    return make_number(
+                        p, kw == BTOK_LBOUND ? lo : hi, lineno, uint_t);
+                } else {
+                    if (kw == BTOK_LBOUND)
+                        arr->u.id.lbound_used = true;
+                    else
+                        arr->u.id.ubound_used = true;
+                }
             }
         }
     }
