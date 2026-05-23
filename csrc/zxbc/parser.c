@@ -2004,8 +2004,17 @@ static AstNode *parse_call_or_array(Parser *p, const char *name, int lineno, boo
     return n;
 }
 
-/* Parse postfix indexing/slicing: expr(...) */
-static AstNode *parse_postfix(Parser *p, AstNode *left) {
+/* Parse postfix indexing/slicing: expr(...)
+ *
+ * expr_context distinguishes the READ path (parse_expression, true) from the
+ * statement-level WRITE/lvalue target (`a$(i)(j) = rhs`, false). The two
+ * diverge in Python's grammar: a READ chains the `string : func_call substr`
+ * / `string : func_call LP expr RP` productions (zxbparser.py:2542-2549) into
+ * a flat make_strslice, while a WRITE uses the dedicated p_let_arr_substr*
+ * productions (zxbparser.py:2733-2815) that the statement handler builds from
+ * the ARRAYACCESS-over-ARRAYACCESS shape this function still emits in WRITE
+ * context. So the STRSLICE lowering below is gated on expr_context. */
+static AstNode *parse_postfix(Parser *p, AstNode *left, bool expr_context) {
     while (check(p, BTOK_LP)) {
         int lineno = p->current.lineno;
         advance(p); /* consume ( */
@@ -2062,8 +2071,94 @@ static AstNode *parse_postfix(Parser *p, AstNode *left) {
         }
         consume(p, BTOK_RP, "Expected ')' after postfix index");
 
-        if (has_to) {
-            /* String slice */
+        /* String-typed base in a READ context => the postfix group is a
+         * substring slice, exactly Python's `string : func_call substr`
+         * (zxbparser.py:2543) / `string : func_call LP expr RP` (:2548) /
+         * `string : func_call LP RP` (the whole-string copy, :2558 analogue)
+         * productions, all of which call make_strslice on the func_call
+         * result. A non-string base (real 2-D numeric array, func result,
+         * etc.) or a WRITE/lvalue target keeps the ARRAYACCESS path.
+         *
+         * The empty group `a$(1)()` is EXCLUDED: Python has NO
+         * `string : func_call LP RP` production (only `string : string LP RP`,
+         * zxbparser.py:2558, for a bare `string` non-terminal — not a
+         * func_call), so `func_call ()` is a Syntax Error there. Requiring a
+         * non-empty arglist routes the empty group to the legacy ARRAYACCESS
+         * path, which rejects the zero-subscript access exactly as before. */
+        bool slice_left = expr_context && left &&
+                          type_is_string(left->type_) &&
+                          arglist->child_count > 0;
+
+        if (slice_left) {
+            /* Build a FLAT STRSLICE[base, lower, upper], mirroring
+             * make_strslice -> STRSLICE.make_node (strslice.py:59-111) and
+             * the canonical NAME-form site (parse_call_or_array:1531-1592):
+             *   - each bound: TYPECAST(uinteger, MINUS(bound, string_base))
+             *     (the MINUS folds to a no-op for the default base 0);
+             *   - flatten the per-group inner AST_STRSLICE wrappers into the
+             *     outer's 3 direct children [s, lower, upper];
+             *   - run strslice_fold (the constant-fold tail) on the result.
+             * Both the TO form (`a$(1)(2 TO 4)`) and the single-index form
+             * (`a$(1)(2)`, lower==upper==expr) route here. */
+            int sbase = p->cs->opts.string_base;
+            TypeInfo *uint_t = p->cs->symbol_table->basic_types[TYPE_uinteger];
+            AstNode *n = ast_new(p->cs, AST_STRSLICE, lineno);
+            ast_add_child(p->cs, n, left);
+
+            for (int i = 0; i < arglist->child_count; i++) {
+                AstNode *inner = arglist->children[i];
+                if (!inner) continue;
+                if (inner->tag == AST_STRSLICE) {
+                    /* TO group: children are [lower, upper]. */
+                    for (int j = 0; j < inner->child_count; j++) {
+                        AstNode *bound = inner->children[j];
+                        if (!bound) continue;
+                        if (sbase != 0)
+                            bound = make_binary_node(
+                                p->cs, "MINUS", bound,
+                                make_number(p, sbase, lineno, uint_t),
+                                lineno, NULL);
+                        AstNode *cast = make_typecast(p->cs, uint_t, bound,
+                                                      lineno);
+                        ast_add_child(p->cs, n, cast ? cast : inner->children[j]);
+                    }
+                } else {
+                    /* Single index: build TWO independent bound chains
+                     * (lower==upper==expr), per p_string_func_call_single
+                     * make_strslice(s, expr, expr). Unwrap the AST_ARGUMENT
+                     * shell the no-TO arglist loop wrapped the expr in. */
+                    AstNode *idx = (inner->tag == AST_ARGUMENT &&
+                                    inner->child_count > 0)
+                                       ? inner->children[0] : inner;
+                    AstNode *lo = idx, *up = idx;
+                    if (sbase != 0) {
+                        lo = make_binary_node(
+                            p->cs, "MINUS", idx,
+                            make_number(p, sbase, lineno, uint_t), lineno, NULL);
+                        up = make_binary_node(
+                            p->cs, "MINUS", idx,
+                            make_number(p, sbase, lineno, uint_t), lineno, NULL);
+                    }
+                    lo = make_typecast(p->cs, uint_t, lo, lineno);
+                    up = make_typecast(p->cs, uint_t, up, lineno);
+                    ast_add_child(p->cs, n, lo ? lo : idx);
+                    ast_add_child(p->cs, n, up ? up : idx);
+                }
+            }
+
+            /* slice_left already required a non-empty arglist, so a single
+             * index or a TO group always contributes >= 2 bound children
+             * (total >= 3 with the base). The guard is purely defensive: a
+             * degenerate STRSLICE missing its bounds leaves `left` as the
+             * base rather than emitting a malformed node. */
+            if (n->child_count >= 3) {
+                n->type_ = p->cs->symbol_table->basic_types[TYPE_string];
+                left = strslice_fold(p, n);
+            }
+        } else if (has_to) {
+            /* Non-string TO slice in WRITE context, or a non-string base:
+             * keep the existing STRSLICE shape (the statement handler reads
+             * children[0] to pick its diagnostic; see parser.c:3570). */
             AstNode *n = ast_new(p->cs, AST_STRSLICE, lineno);
             ast_add_child(p->cs, n, left);
             for (int i = 0; i < arglist->child_count; i++)
@@ -2073,7 +2168,9 @@ static AstNode *parse_postfix(Parser *p, AstNode *left) {
         } else {
             /* Array access or function call on expression result —
              * always a READ here (postfix on an expression value) =>
-             * Python sym.ARRAYLOAD. */
+             * Python sym.ARRAYLOAD. Preserved unchanged: the WRITE-path
+             * chained single-index `a(i)(j) = rhs` relies on this
+             * ARRAYACCESS-over-ARRAYACCESS shape (parser.c:3592-3616). */
             AstNode *n = ast_new(p->cs, AST_ARRAYACCESS, lineno);
             n->u.arrayaccess.is_load = true;
             ast_add_child(p->cs, n, left);
@@ -2121,7 +2218,7 @@ AstNode *parse_expression(Parser *p, Precedence min_prec) {
     if (!left) return NULL;
 
     /* Handle postfix indexing/slicing: expr(...) */
-    left = parse_postfix(p, left);
+    left = parse_postfix(p, left, true);
 
     return parse_infix(p, left, min_prec);
 }
@@ -3541,8 +3638,12 @@ static AstNode *parse_statement(Parser *p) {
         /* Array element assignment: ID(index) = expr or ID(i)(j TO k) = expr */
         if (check(p, BTOK_LP)) {
             AstNode *call_node = parse_call_or_array(p, name, ln, false, false);
-            /* Handle chained postfix: a$(b)(1 TO 5) */
-            call_node = parse_postfix(p, call_node);
+            /* Handle chained postfix: a$(b)(1 TO 5). WRITE/lvalue context
+             * (expr_context=false): keep the ARRAYACCESS-over-ARRAYACCESS /
+             * legacy STRSLICE shape the assignment dispatcher below expects
+             * (parser.c:3570-3616) and that the p_let_arr_substr* write
+             * productions (zxbparser.py:2733-2815) lower from. */
+            call_node = parse_postfix(p, call_node, false);
 
             /* Check if followed by = (assignment to array element or func return) */
             if (match(p, BTOK_EQ) || was_let) {
