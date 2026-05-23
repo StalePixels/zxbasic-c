@@ -512,6 +512,112 @@ static AstNode *strslice_fold(Parser *p, AstNode *slice) {
     return slice;
 }
 
+/* Build the LETARRAYSUBSTR lvalue for a string-ARRAY element substring
+ * assignment — the single-paren-group / comma-subscript family that
+ * Python parses with its dedicated p_let_arr_substr* productions
+ * (zxbparser.py:2733-2815) and the p_let_arr string branch
+ * (zxbparser.py:1199-1205), all routed through make_array_substr_assign
+ * (zxbparser.py:328-362 -> "LETARRAYSUBSTR").
+ *
+ * The C port has no separate LETARRAYSUBSTR sentence; tr_visit_letarray
+ * (translator.c:3290) detects "Shape A": an AST_STRSLICE lvalue whose
+ * child[0] is an ARRAYACCESS (the array element a$(dims)) and child[1] is
+ * an inner AST_STRSLICE [lower, upper] (the substring bounds), and routes
+ * it to tr_letarraysubstr_emit.  This helper builds exactly that node so
+ * the single-paren shapes share the postfix shape's translation path.
+ *
+ * Mirrors make_array_substr_assign:
+ *   - access_call(id_)  -> entry  (already resolved by caller, passed in)
+ *   - entry.type_ != string -> "Array '%s' is not of type String" (:336-337)
+ *   - make_array_access(id_, dim arglist) -> the ARRAYACCESS over the
+ *     DIM subscripts only (the substring index already split off); this
+ *     runs the BOUND_TYPE typecast + dim-count check on the dim args.
+ * `dim_args` is a list of the dim subscript nodes (each an AST_ARGUMENT
+ * or a bare expr); `lower`/`upper` are the substring bounds.  Returns the
+ * STRSLICE lvalue, or NULL after emitting the matching Python error. */
+static void compute_arrayaccess_offset(Parser *p, AstNode *acc,
+                                       AstNode *entry, AstNode *arglist);
+static AstNode *build_array_substr_lvalue(Parser *p, const char *name,
+                                          int lineno, AstNode **dim_args,
+                                          int ndim_args, AstNode *lower,
+                                          AstNode *upper) {
+    /* access_call (zxbparser.py:332) — resolves/auto-declares the id. */
+    AstNode *entry = symboltable_access_call(p->cs->symbol_table, p->cs,
+                                             name, lineno, NULL);
+    if (entry == NULL)
+        return NULL;
+
+    /* make_array_substr_assign:336-338 — element type must be String. */
+    if (!type_is_string(entry->type_)) {
+        zxbc_error(p->cs, lineno, "Array '%s' is not of type String", name);
+        return NULL;
+    }
+
+    /* make_array_access (zxbparser.py:311-325) over the DIM args only.
+     * Build the dim arglist, BOUND_TYPE-typecast each subscript (:316),
+     * run the dim-count check (arrayaccess.py:100-104), then build the
+     * AST_ARRAYACCESS [entry, arg0, arg1, ...] and compute its constant
+     * offset — identical to the CLASS_array branch of parse_call_or_array. */
+    AstNode *dim_arglist = ast_new(p->cs, AST_ARGLIST, lineno);
+    TypeInfo *bound_type = p->cs->symbol_table->basic_types[TYPE_uinteger];
+    for (int i = 0; i < ndim_args; i++) {
+        AstNode *arg = dim_args[i];
+        if (arg && arg->tag == AST_ARGUMENT && arg->child_count > 0) {
+            AstNode *cast = make_typecast(p->cs, bound_type,
+                                          arg->children[0], lineno);
+            if (!cast) return NULL;  /* make_array_access returns None */
+            arg->children[0] = cast;
+            arg->type_ = cast->type_;
+        } else if (arg) {
+            /* Bare expr — wrap in an ARGUMENT for the ARRAYACCESS shape. */
+            AstNode *cast = make_typecast(p->cs, bound_type, arg, lineno);
+            if (!cast) return NULL;
+            AstNode *wrap = ast_new(p->cs, AST_ARGUMENT, lineno);
+            wrap->u.argument.byref = p->cs->opts.default_byref;
+            ast_add_child(p->cs, wrap, cast);
+            wrap->type_ = cast->type_;
+            arg = wrap;
+        }
+        ast_add_child(p->cs, dim_arglist, arg);
+    }
+
+    /* arrayaccess.py:100-104 — len(bounds) != len(args) for a non-param
+     * array -> "Array '%s' has %i dimensions, not %i".  The substring
+     * index is already popped, so this sees the true dim count. */
+    if (entry->u.id.scope != SCOPE_parameter) {
+        int ndecl = entry->u.id.arr_boundlist
+                        ? entry->u.id.arr_boundlist->child_count : 0;
+        if (ndecl != dim_arglist->child_count) {
+            zxbc_error(p->cs, lineno, "Array '%s' has %d dimensions, not %d",
+                       entry->u.id.name, ndecl, dim_arglist->child_count);
+            return NULL;
+        }
+    }
+
+    /* SymbolARRAYACCESS.__init__ (arrayaccess.py:34-37). */
+    entry->u.id.is_dynamically_accessed = true;
+
+    AstNode *acc = ast_new(p->cs, AST_ARRAYACCESS, lineno);
+    acc->u.arrayaccess.is_load = false;   /* write target (LETARRAY lvalue) */
+    ast_add_child(p->cs, acc, entry);
+    for (int i = 0; i < dim_arglist->child_count; i++)
+        ast_add_child(p->cs, acc, dim_arglist->children[i]);
+    acc->type_ = entry->type_;
+    compute_arrayaccess_offset(p, acc, entry, dim_arglist);
+
+    /* Wrap as Shape A: STRSLICE[ ARRAYACCESS, STRSLICE[lower, upper] ].
+     * tr_visit_letarray (translator.c:3290) reads exactly this shape. */
+    AstNode *inner = ast_new(p->cs, AST_STRSLICE, lineno);
+    ast_add_child(p->cs, inner, lower);
+    ast_add_child(p->cs, inner, upper);
+
+    AstNode *lv = ast_new(p->cs, AST_STRSLICE, lineno);
+    lv->type_ = entry->type_;
+    ast_add_child(p->cs, lv, acc);
+    ast_add_child(p->cs, lv, inner);
+    return lv;
+}
+
 /* Parse builtin function: ABS, SIN, COS, etc. */
 static AstNode *parse_builtin_func(Parser *p, const char *fname, BTokenType kw) {
     int lineno = p->previous.lineno;
@@ -1306,6 +1412,68 @@ static AstNode *parse_call_or_array(Parser *p, const char *name, int lineno, boo
     }
 
     consume(p, BTOK_RP, "Expected ')' after arguments");
+
+    /* String-ARRAY element substring assignment, single-paren-group family:
+     *   a$(dims..., lo TO hi) = rhs   (TO inside the subscript group)
+     *   a$(dims..., idx)      = rhs   (one extra subscript, no TO)
+     * Python parses these with dedicated statement productions
+     * (p_let_arr_substr* :2733-2815, p_let_arr string branch :1199-1205),
+     * all -> make_array_substr_assign (:328-362) -> LETARRAYSUBSTR.  These
+     * shapes occur ONLY as write targets — there is no read production for
+     * `ARRAY_ID (args TO ...)` (verified on the oracle) and a read with an
+     * extra subscript is the dim-count error.  So act only on the write
+     * target (expr_context == false) when `name` is a declared string
+     * ARRAY.  Without this the C collapses the TO form into a scalar
+     * STRSLICE on the array NAME (losing the element) and treats the
+     * no-TO extra subscript as an N-arg array access — both wrong binaries
+     * (let_array_substr9..13, sys_letarrsubstr0..2). */
+    /* EXCLUDE the chained-postfix form `a(i,j)(k)` (a `(` follows this
+     * `)`): there `a(i,j)` is the inner postfix-base array access and
+     * Python runs the full dim-count check on it (the trailing `(k)` is
+     * routed by p_let_arr_substr_single, not these single-group
+     * productions), so a 1-dim `a(3,4)(1)` is the dim-count error, not a
+     * substring assign (let_array_substr8).  Same `!check(BTOK_LP)` guard
+     * shape as str_substr_assign_shape in the CLASS_array branch. */
+    if (!expr_context && arglist->child_count >= 2 && !check(p, BTOK_LP)) {
+        /* get_entry strips a trailing deprecated suffix ($/%/&) so a
+         * suffixed array name `a$(...)` resolves to the entry stored
+         * under `a` (symboltable.py:76-77 / compiler.c:286). */
+        AstNode *probe = symboltable_get_entry(p->cs->symbol_table, name);
+        if (probe && probe->tag == AST_ID &&
+            probe->u.id.class_ == CLASS_array &&
+            type_is_string(probe->type_)) {
+            AstNode *last = arglist->children[arglist->child_count - 1];
+            int ndecl = probe->u.id.arr_boundlist
+                            ? probe->u.id.arr_boundlist->child_count : 0;
+            AstNode *lower = NULL, *upper = NULL;
+            bool is_substr_shape = false;
+            if (last && last->tag == AST_STRSLICE && last->child_count >= 2) {
+                /* TO-form: the trailing subscript group is `lo TO hi`
+                 * (parse loop built it as an inner STRSLICE).  All
+                 * preceding elements are the DIM subscripts. */
+                lower = last->children[0];
+                upper = last->children[1];
+                is_substr_shape = true;
+            } else if (!has_to && last &&
+                       arglist->child_count == ndecl + 1) {
+                /* No-TO form with exactly one extra subscript: pop it as
+                 * the single substring index (p_let_arr string branch,
+                 * lower==upper==idx). */
+                AstNode *idx = (last->tag == AST_ARGUMENT &&
+                                last->child_count > 0)
+                                   ? last->children[0] : last;
+                lower = idx;
+                upper = idx;
+                is_substr_shape = true;
+            }
+            if (is_substr_shape) {
+                int ndim = arglist->child_count - 1;  /* drop the substr */
+                AstNode *lv = build_array_substr_lvalue(
+                    p, name, lineno, arglist->children, ndim, lower, upper);
+                return lv;  /* NULL on the typed/dim error -> p[0]=None */
+            }
+        }
+    }
 
     /* String slice: name$(from TO to) */
     if (has_to) {
