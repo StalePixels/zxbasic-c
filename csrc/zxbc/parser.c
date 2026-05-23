@@ -1529,19 +1529,33 @@ static AstNode *parse_call_or_array(Parser *p, const char *name, int lineno, boo
             return NULL;
         }
         /* Python STRSLICE.make_node (symbols/strslice.py:74-83) wraps
-         * each bound in TYPECAST(STR_INDEX_TYPE=uinteger), AFTER
-         * subtracting OPTIONS.string_base.  The MINUS folds to a no-op
-         * when base==0, but the TYPECAST is unconditionally applied —
-         * and it is THAT typecast which catches the `a$(a TO b)` case
-         * (50/51) where `a`/`b` resolve via deprecated-suffix sharing
-         * to a string-typed entry and trigger "Cannot convert string to
-         * a value. Use VAL() function".  The C built each `lower TO
-         * upper` pair as an inner AST_STRSLICE in `arglist` (lines
-         * 880-895 and 919-929 above) with raw bound exprs as children
-         * — typecast those children now so the error surfaces at parse
-         * time exactly as Python.  Single-index callers (the second
-         * STRSLICE site below at line ~1196) already apply the
-         * typecast in their own loop. */
+         * each bound in TYPECAST(STR_INDEX_TYPE=uinteger, MINUS(bound,
+         * OPTIONS.string_base)).  TWO layers, both required:
+         *
+         *   1. The `substr` non-terminal (zxbparser.py:2600-2638) already
+         *      `make_typecast(TYPE.uinteger, bound)` each TO bound BEFORE
+         *      make_strslice — this is the `pre` cast below.  It catches
+         *      the `a$(a TO b)` case (fixtures 50/51) where a/b resolve
+         *      via deprecated-suffix sharing to a string-typed entry and
+         *      trip "Cannot convert string to a value. Use VAL()".
+         *
+         *   2. make_node then `MINUS(bound, string_base)` and TYPECAST
+         *      again.  The MINUS is UNCONDITIONAL (Python never special-
+         *      cases base==0): it folds `bound - 0` for a constant bound
+         *      but builds a real MINUS node for a non-constant one,
+         *      yielding the extra `subu16 t,bound,0` -> `pop hl; push hl`
+         *      at -O0 (binary.py:144; the peephole strips it at O>0).
+         *      Since the `pre` cast already widened the bound to uinteger,
+         *      the MINUS common-types to u16 — base type is irrelevant, so
+         *      make_number auto-infers (NULL), matching Python's bare
+         *      NUMBER(string_base).
+         *
+         * The C built each `lower TO upper` pair as an inner AST_STRSLICE
+         * in `arglist` with raw bound exprs as children — apply both
+         * layers now so the error surfaces at parse time and the bound
+         * round-trip is byte-faithful.  Single-index callers (the second
+         * STRSLICE site below at line ~1196) apply the equivalent in
+         * their own loop. */
         TypeInfo *str_idx = p->cs->symbol_table->basic_types[TYPE_uinteger];
         for (int i = 0; i < arglist->child_count; i++) {
             AstNode *inner = arglist->children[i];
@@ -1559,14 +1573,43 @@ static AstNode *parse_call_or_array(Parser *p, const char *name, int lineno, boo
                      * to match Python (e.g. fixture 50: error at line
                      * 2, the substring site, not line 1, where `a$` was
                      * first declared). */
-                    AstNode *cast = make_typecast(p->cs, str_idx, bound,
-                                                  lineno);
+                    AstNode *pre = make_typecast(p->cs, str_idx, bound,
+                                                 lineno);
                     /* make_typecast returns NULL on type error and
                      * already emitted the message; leave the child
                      * untouched in that case so downstream code does
                      * not deref NULL.  On success it returns either the
                      * same node (type already matches) or a fresh
                      * TYPECAST wrapper. */
+                    if (!pre) continue;
+                    /* MINUS — READ vs WRITE differ for the TO form:
+                     *
+                     * READ (expr_context): STRSLICE.make_node wraps each
+                     * bound in MINUS(bound, string_base) UNCONDITIONALLY
+                     * (strslice.py:74-83).  The `substr` non-terminal
+                     * already pre-typecast the bound to uinteger
+                     * (zxbparser.py:2600-2638) — that is `pre` — so the
+                     * MINUS common-types to u16 (`cast; subu16`).  base is
+                     * auto-inferred (NULL) like Python's NUMBER(string_base).
+                     *
+                     * WRITE (!expr_context): the TO lvalue `s$(i TO j) = rhs`
+                     * is Python's p_str_assign (zxbparser.py:1308-1335),
+                     * which builds LETSUBSTR with the RAW substr bounds and
+                     * applies NO MINUS for ANY base; visit_LETSUBSTR
+                     * (translator.py:366-402) / the C tr_letsubstr_emit
+                     * subtract per their own contract.  So the WRITE keeps
+                     * ONLY the typecast (`pre`) — byte-for-byte the parent
+                     * c9c34b2c form (which applied only the typecast here). */
+                    AstNode *cast;
+                    if (expr_context) {
+                        AstNode *sub = make_binary_node(
+                            p->cs, "MINUS", pre,
+                            make_number(p, p->cs->opts.string_base, lineno, NULL),
+                            lineno, NULL);
+                        cast = make_typecast(p->cs, str_idx, sub, lineno);
+                    } else {
+                        cast = pre;  /* parent form: typecast only, no MINUS */
+                    }
                     if (cast) inner->children[j] = cast;
                 }
                 /* Flatten: Python's STRSLICE has 3 direct children
@@ -1810,18 +1853,26 @@ static AstNode *parse_call_or_array(Parser *p, const char *name, int lineno, boo
          * TYPECAST(STR_INDEX_TYPE=uinteger, MINUS(idx, string_base)).
          * lower and upper are the SAME index node value (args[0].value
          * twice); build two independent bound chains so a later in-place
-         * retype of one does not alias the other. */
-        int sbase = p->cs->opts.string_base;
+         * retype of one does not alias the other.
+         *
+         * The MINUS is applied UNCONDITIONALLY (Python never special-cases
+         * base==0): BINARY.make_node folds `idx - 0` to `idx` for a
+         * constant bound (binary.py:103-111), but for a NON-constant bound
+         * it builds a real BINARY MINUS node (binary.py:144) which lowers
+         * to a `subu16 t, idx, 0` quad -> an extra `pop hl; push hl` at -O0
+         * (sub16, _16bit.py:189-195; the peephole optimizer removes it at
+         * O>0 — which is why a prior `if (base != 0)` guard looked
+         * harmless above -O0). make_binary_node mirrors the same fold, so
+         * constant bounds stay byte-identical while expression bounds get
+         * the faithful round-trip. */
         TypeInfo *uint_t = p->cs->symbol_table->basic_types[TYPE_uinteger];
-        AstNode *lo = idx, *up = idx;
-        if (sbase != 0) {
-            lo = make_binary_node(p->cs, "MINUS", idx,
-                                  make_number(p, sbase, lineno, uint_t),
-                                  lineno, NULL);
-            up = make_binary_node(p->cs, "MINUS", idx,
-                                  make_number(p, sbase, lineno, uint_t),
-                                  lineno, NULL);
-        }
+        AstNode *lo, *up;
+        lo = make_binary_node(p->cs, "MINUS", idx,
+                              make_number(p, p->cs->opts.string_base, lineno, NULL),
+                              lineno, NULL);
+        up = make_binary_node(p->cs, "MINUS", idx,
+                              make_number(p, p->cs->opts.string_base, lineno, NULL),
+                              lineno, NULL);
         lo = make_typecast(p->cs, uint_t, lo, lineno);
         up = make_typecast(p->cs, uint_t, up, lineno);
         if (!lo || !up) return NULL;
@@ -1926,8 +1977,42 @@ static AstNode *parse_call_or_array(Parser *p, const char *name, int lineno, boo
                     parent = ch;
                     parent_idx = 0;
                 }
+                /* MINUS — the READ and WRITE substring shapes have DIFFERENT
+                 * faithful sources in Python, so they must be emitted
+                 * differently here (this site builds the STRSLICE bound for
+                 * both the `s$(n)` READ and the `s$(n)=rhs` WRITE lvalue).
+                 *
+                 * READ (expr_context): STRSLICE.make_node (strslice.py:74-83,
+                 * the `string : ID substr` / make_call branch) wraps each
+                 * bound in TYPECAST(uinteger, MINUS(idx, NUMBER(string_base)))
+                 * UNCONDITIONALLY.  BINARY.make_node folds `idx - 0` for a
+                 * constant bound but builds a real MINUS for a non-constant
+                 * one -> the extra `subu16/subu8 t, idx, 0` round-trip at -O0
+                 * (binary.py:144).  base is AUTO-INFERRED (NULL) exactly like
+                 * Python's bare NUMBER(string_base) (number.py:47-53): 0 ->
+                 * ubyte, so `MINUS(ubyte_idx, ubyte_0)` stays at 8-bit
+                 * (push af/pop af) and the outer TYPECAST then widens — a
+                 * bare ubyte index (slice2's thingToPrint$(n)) must subtract
+                 * at 8-bit.  The READ never reaches tr_letsubstr_emit.
+                 *
+                 * WRITE (!expr_context): the single-index lvalue
+                 * `s$(idx) = rhs` is Python's p_substr_assignment_no_let
+                 * (zxbparser.py:1221-1245), which applies the MINUS with the
+                 * base typed UINTEGER (`_TYPE(gl.STR_INDEX_TYPE)`, :1236) and
+                 * ONLY when string_base != 0 in effect — for base 0 the
+                 * translator (tr_letsubstr_emit, translator.c:2851,
+                 * `parser_did_rewrite=(string_base!=0)`) supplies it.  This
+                 * is byte-for-byte the parent c9c34b2c form: a 16-bit (not
+                 * 8-bit) subtract, gated base!=0, base typed str_idx (NOT
+                 * NULL).  Applying the READ form here would (a) double the
+                 * round-trip for base 0 and (b) subtract at the wrong width
+                 * (8-bit) for a ubyte index at base!=0. */
                 AstNode *val = idx;
-                if (strbase != 0) {
+                if (expr_context) {
+                    AstNode *base = make_number(p, strbase, lineno, NULL);
+                    val = make_binary_node(p->cs, "MINUS", idx, base,
+                                           lineno, NULL);
+                } else if (strbase != 0) {
                     AstNode *base = make_number(p, strbase, lineno, str_idx);
                     val = make_binary_node(p->cs, "MINUS", val, base,
                                            lineno, NULL);
@@ -2094,7 +2179,10 @@ static AstNode *parse_postfix(Parser *p, AstNode *left, bool expr_context) {
              * make_strslice -> STRSLICE.make_node (strslice.py:59-111) and
              * the canonical NAME-form site (parse_call_or_array:1531-1592):
              *   - each bound: TYPECAST(uinteger, MINUS(bound, string_base))
-             *     (the MINUS folds to a no-op for the default base 0);
+             *     applied UNCONDITIONALLY — make_binary_node folds the
+             *     MINUS for a constant bound but keeps a real node for a
+             *     non-constant one (the extra `subu16 t, bound, 0` ->
+             *     `pop hl; push hl` at -O0; binary.py:144);
              *   - flatten the per-group inner AST_STRSLICE wrappers into the
              *     outer's 3 direct children [s, lower, upper];
              *   - run strslice_fold (the constant-fold tail) on the result.
@@ -2109,15 +2197,26 @@ static AstNode *parse_postfix(Parser *p, AstNode *left, bool expr_context) {
                 AstNode *inner = arglist->children[i];
                 if (!inner) continue;
                 if (inner->tag == AST_STRSLICE) {
-                    /* TO group: children are [lower, upper]. */
+                    /* TO group: children are [lower, upper].  The `substr`
+                     * non-terminal (zxbparser.py:2600-2638, p_subind_str /
+                     * p_subind_strTO / p_subind_TOstr / p_subind_TO) ALREADY
+                     * `make_typecast(TYPE.uinteger, bound)` each TO bound
+                     * BEFORE make_strslice runs.  So the MINUS in
+                     * STRSLICE.make_node sees an already-uinteger operand and
+                     * common-types to u16 -> `cast ...; subu16 ...,0` (the
+                     * MINUS is at 16-bit, AFTER the widening cast).  Mirror
+                     * that pre-typecast here, then apply make_node's
+                     * MINUS(base)+TYPECAST. */
                     for (int j = 0; j < inner->child_count; j++) {
                         AstNode *bound = inner->children[j];
                         if (!bound) continue;
-                        if (sbase != 0)
-                            bound = make_binary_node(
-                                p->cs, "MINUS", bound,
-                                make_number(p, sbase, lineno, uint_t),
-                                lineno, NULL);
+                        AstNode *pre = make_typecast(p->cs, uint_t, bound,
+                                                     lineno);
+                        if (pre) bound = pre;
+                        bound = make_binary_node(
+                            p->cs, "MINUS", bound,
+                            make_number(p, sbase, lineno, NULL),
+                            lineno, NULL);
                         AstNode *cast = make_typecast(p->cs, uint_t, bound,
                                                       lineno);
                         ast_add_child(p->cs, n, cast ? cast : inner->children[j]);
@@ -2130,15 +2229,13 @@ static AstNode *parse_postfix(Parser *p, AstNode *left, bool expr_context) {
                     AstNode *idx = (inner->tag == AST_ARGUMENT &&
                                     inner->child_count > 0)
                                        ? inner->children[0] : inner;
-                    AstNode *lo = idx, *up = idx;
-                    if (sbase != 0) {
-                        lo = make_binary_node(
-                            p->cs, "MINUS", idx,
-                            make_number(p, sbase, lineno, uint_t), lineno, NULL);
-                        up = make_binary_node(
-                            p->cs, "MINUS", idx,
-                            make_number(p, sbase, lineno, uint_t), lineno, NULL);
-                    }
+                    AstNode *lo, *up;
+                    lo = make_binary_node(
+                        p->cs, "MINUS", idx,
+                        make_number(p, sbase, lineno, NULL), lineno, NULL);
+                    up = make_binary_node(
+                        p->cs, "MINUS", idx,
+                        make_number(p, sbase, lineno, NULL), lineno, NULL);
                     lo = make_typecast(p->cs, uint_t, lo, lineno);
                     up = make_typecast(p->cs, uint_t, up, lineno);
                     ast_add_child(p->cs, n, lo ? lo : idx);
