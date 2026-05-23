@@ -650,6 +650,28 @@ bool check_is_string_node(const AstNode *a, const AstNode *b) {
     return a_str && b_str;
 }
 
+/* Resolve a string-constant operand to its underlying AST_STRING value node.
+ * Mirrors Python ConstRef.value (constref.py:35-40): for a CLASS.const id of
+ * string type, the stored value is the declared STRING (folded onto the
+ * entry's default_value at declaration). A bare AST_STRING resolves to
+ * itself. Returns NULL for anything else (caller already gated via
+ * check_is_string_node, so this is the value-extraction half). */
+const AstNode *const_string_value_node(const AstNode *n) {
+    if (!n) return NULL;
+    if (n->tag == AST_STRING) return n;
+    if (n->tag == AST_ID && n->u.id.class_ == CLASS_const) {
+        const AstNode *dv = n->u.id.default_value_expr;
+        /* Unwrap CONSTEXPR/TYPECAST wrappers defensively (a string const's
+         * value is the bare STRING, but stay 1:1 with the numeric folder's
+         * chain-unwrap above). */
+        while (dv && (dv->tag == AST_CONSTEXPR || dv->tag == AST_TYPECAST) &&
+               dv->child_count > 0)
+            dv = dv->children[0];
+        if (dv && dv->tag == AST_STRING) return dv;
+    }
+    return NULL;
+}
+
 bool check_is_null(const AstNode *node) {
     if (!node) return true;
     if (node->tag == AST_NOP) return true;
@@ -999,15 +1021,36 @@ AstNode *make_binary_node(CompilerState *cs, const char *operator, AstNode *left
         }
     }
 
-    /* String constant folding (concatenation) */
+    /* String constant folding (concatenation). Python binary.py:118-120:
+     *   if check.is_string(a, b) and func is not None:   # both string-CONST
+     *       if operator == "PLUS":
+     *           return SymbolSTRING(func(a.value, b.value), lineno)
+     * `check.is_string` (check.py:286-290) is true for a bare STRING node OR
+     * a CLASS.const id of string type — both resolve via ConstRef.value
+     * (constref.py:35-40 -> the stored STRING's .value). So a `LET cs =
+     * xs + ys` with two string CONSTs folds to ONE static STRING at compile
+     * time (one __LABEL data row + ld de,LBL/__STORE_STR), not a runtime
+     * __ADDSTR. The prior C gate only folded literal STRING<>STRING; a
+     * const-string operand (AST_ID) slipped through to the runtime path.
+     * (Only PLUS is reachable: the comparison branch at binary.py:122 uses
+     * a.text, which SymbolSTRING does not define — dead for STRING constants
+     * — so no string-comparison fold is ported.) NUL-safe: copy by the
+     * tracked .length, never strlen/strcat. */
     if (check_is_string_node(left, right) && strcmp(operator, "PLUS") == 0) {
-        if (left->tag == AST_STRING && right->tag == AST_STRING) {
-            size_t len = strlen(left->u.string.value) + strlen(right->u.string.value);
-            char *concat = arena_alloc(&cs->arena, len + 1);
-            strcpy(concat, left->u.string.value);
-            strcat(concat, right->u.string.value);
+        const AstNode *ls = const_string_value_node(left);
+        const AstNode *rs = const_string_value_node(right);
+        if (ls && rs) {
+            int llen = ls->u.string.length;
+            int rlen = rs->u.string.length;
+            const char *lv = ls->u.string.value ? ls->u.string.value : "";
+            const char *rv = rs->u.string.value ? rs->u.string.value : "";
+            size_t len = (size_t)llen + (size_t)rlen;
+            char *buf = arena_alloc(&cs->arena, len + 1);
+            memcpy(buf, lv, (size_t)llen);
+            memcpy(buf + llen, rv, (size_t)rlen);
+            buf[len] = '\0';
             AstNode *s = ast_new(cs, AST_STRING, lineno);
-            s->u.string.value = concat;
+            s->u.string.value = buf;
             s->u.string.length = (int)len;
             s->type_ = st->basic_types[TYPE_string];
             return s;

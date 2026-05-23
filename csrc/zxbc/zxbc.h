@@ -537,6 +537,7 @@ void mark_label_accessed(AstNode *label);     /* LabelRef.accessed cascade */
 void label_capture_scope_owner(CompilerState *cs, AstNode *label); /* access_label */
 bool check_is_numeric(const AstNode *a, const AstNode *b); /* both have numeric type */
 bool check_is_string_node(const AstNode *a, const AstNode *b); /* both are STRING constants */
+const AstNode *const_string_value_node(const AstNode *n); /* ConstRef.value -> AST_STRING */
 bool check_is_null(const AstNode *node);      /* NULL, NOP, or empty BLOCK */
 
 /* Type promotion — matching check.common_type() */

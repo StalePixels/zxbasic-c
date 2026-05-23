@@ -1759,6 +1759,80 @@ static AstNode *parse_call_or_array(Parser *p, const char *name, int lineno, boo
         return n;
     }
 
+    /* Python make_call CONST-string branch (zxbparser.py:399-416):
+     *   if entry.class_ in (CLASS.var, CLASS.const):
+     *       if len(args) > 1: errmsg.syntax_error_not_array_nor_func; None
+     *       ... (var re-resolved via access_var; handled by the CLASS_var
+     *            branch below)
+     *       if len(args) == 1:
+     *           # it's a const
+     *           return make_strslice(lineno,
+     *                       sym.STRING(entry.value, lineno),
+     *                       args[0].value, args[0].value)
+     *       mark_entry_as_accessed(entry); return entry
+     *
+     * A CONST-string call (`ys(2)` / `ys()` / `ys(2 TO)` where ys is a
+     * string CONST) must NOT fall through to the FUNCCALL path (it is not
+     * a function). The no-TO single-index and zero-arg forms reach here
+     * (the `i TO j` form is taken by the has_to slice branch above, which
+     * already resolves CONST bases through strslice_fold). For a single
+     * index Python slices the const's *value* (wrapped in a fresh STRING)
+     * and folds to a STRING constant; for zero args it returns the const
+     * id itself (so `xs + ys()` const-folds via the PLUS path). Mirrors
+     * ConstRef.value (constref.py:35-40) -> the stored STRING literal. */
+    if (entry && entry->u.id.class_ == CLASS_const &&
+        type_is_string(entry->type_)) {
+        if (arglist->child_count > 1) {
+            err_not_array_nor_func(p->cs, lineno, name);
+            return NULL;
+        }
+        if (arglist->child_count == 0) {
+            /* len(args) == 0: mark_entry_as_accessed; return entry. */
+            if (expr_context)
+                entry->u.id.accessed = true;
+            return entry;
+        }
+        /* len(args) == 1: make_strslice(STRING(entry.value), idx, idx). */
+        const AstNode *vnode = const_string_value_node(entry);
+        AstNode *base_str;
+        if (vnode) {
+            base_str = make_string(p, vnode->u.string.value
+                                          ? vnode->u.string.value : "",
+                                   lineno);
+            base_str->u.string.length = vnode->u.string.length;
+        } else {
+            base_str = make_string(p, "", lineno);
+        }
+        AstNode *a0 = arglist->children[0];
+        AstNode *idx = (a0 && a0->tag == AST_ARGUMENT && a0->child_count > 0)
+                           ? a0->children[0] : a0;
+        /* STRSLICE.make_node (strslice.py:74-83): each bound is
+         * TYPECAST(STR_INDEX_TYPE=uinteger, MINUS(idx, string_base)).
+         * lower and upper are the SAME index node value (args[0].value
+         * twice); build two independent bound chains so a later in-place
+         * retype of one does not alias the other. */
+        int sbase = p->cs->opts.string_base;
+        TypeInfo *uint_t = p->cs->symbol_table->basic_types[TYPE_uinteger];
+        AstNode *lo = idx, *up = idx;
+        if (sbase != 0) {
+            lo = make_binary_node(p->cs, "MINUS", idx,
+                                  make_number(p, sbase, lineno, uint_t),
+                                  lineno, NULL);
+            up = make_binary_node(p->cs, "MINUS", idx,
+                                  make_number(p, sbase, lineno, uint_t),
+                                  lineno, NULL);
+        }
+        lo = make_typecast(p->cs, uint_t, lo, lineno);
+        up = make_typecast(p->cs, uint_t, up, lineno);
+        if (!lo || !up) return NULL;
+        AstNode *slice = ast_new(p->cs, AST_STRSLICE, lineno);
+        ast_add_child(p->cs, slice, base_str);
+        ast_add_child(p->cs, slice, lo);
+        ast_add_child(p->cs, slice, up);
+        slice->type_ = p->cs->symbol_table->basic_types[TYPE_string];
+        return strslice_fold(p, slice);
+    }
+
     /* Python make_call (zxbparser.py:386-388):
      *   if entry.class_ is CLASS.unknown and entry.type_ == TYPE.string
      *      and len(args) == 1 and is_numeric(args[0]):
@@ -5431,7 +5505,31 @@ static AstNode *parse_dim_statement(Parser *p) {
             bool is_str = value && type_is_string(value->type_);
             if (stat && !is_str) {
                 id_node->u.id.default_value_expr = value;
-            } else if (!is_const && value) {
+            } else if (is_const) {
+                /* p_var_decl_ini CONST branch (zxbparser.py:712-720):
+                 *   if defval is None:                 # i.e. !(static && !string)
+                 *       if not is_static_str(value):    # value.token != "STRING"
+                 *           errmsg.syntax_error_not_constant(...); return
+                 *       defval = value
+                 *   declare_const(..., default_value=defval)
+                 *
+                 * A static-string CONST (`CONST a$ = "x"`) has its STRING
+                 * value folded into the entry's default_value — NOT a
+                 * deferred LET (consts have no runtime store). is_static_str
+                 * is `value.token == "STRING"` (check.py:319-320), so the
+                 * folded value must be the bare AST_STRING node; a const of
+                 * any other non-static-non-numeric shape is a hard error
+                 * (errmsg.py:217-218). Without this fold a string-CONST
+                 * reference resolves to an empty ConstRef.t and the LET
+                 * store falls through to a temporary (__STORE_STR2/pop de)
+                 * instead of the static label load (__STORE_STR/ld de,LBL). */
+                if (value && value->tag == AST_STRING) {
+                    id_node->u.id.default_value_expr = value;
+                } else {
+                    err_not_constant(p->cs, lineno);
+                    return NULL;
+                }
+            } else if (value) {
                 /* p_var_decl_ini (zxbparser.py:722-728):
                  *   if defval is None:  # delayed initialization
                  *       p[0] = make_sentence("LET",
