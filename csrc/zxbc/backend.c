@@ -3160,6 +3160,69 @@ static StrVec emit_astoref(Backend *b, Quad *q) {
     return out;
 }
 
+/* _astorestr (_array.py:314-372): verbatim port. Stores a STRING value
+ * (2nd operand) into the GLOBAL array element at the offset computed from
+ * the 1st operand. Uses _addr (s_array_addr → __ARRAY) to put the element
+ * address in HL, then __STORE_STR / __STORE_STR2 (heap-aware) to copy the
+ * string. Allows immediate-string ('#') as the 2nd operand. Unlike
+ * _pastorestr the value branch first handles an integer op (a ptr) and
+ * treats both '.' and '_' as identifiers. */
+static StrVec emit_astorestr(Backend *b, Quad *q) {
+    StrVec out = sv_new();
+    s_array_addr(b, &out, q_ins(q, 1));
+
+    const char *op = q_ins(q, 2);
+    bool indirect = (op[0] == '*');
+    if (indirect) op++;
+    bool immediate = (op[0] == '#');
+    if (immediate) op++;
+    bool temporal = (op[0] != '$');
+    if (!temporal) op++;
+
+    if (s_is_int(op)) {
+        long v = s_int_val(op) & 0xFFFF;
+        if (indirect) {
+            if (immediate) {  /* *#<addr> = ld de, (number) */
+                sv_pushf(b, &out, "ld de, (%ld)", v);
+            } else {
+                sv_pushf(b, &out, "ld de, (%ld)", v);
+                sv_push(b, &out, s_runtime_call(b, RL_LOAD_DE_DE));
+            }
+        } else {
+            /* Integer does not make sense here (unless it's a ptr) */
+            fprintf(stderr, "zxbc: invalid IC: astorestr %s, %s\n",
+                    q_ins(q, 1), q_ins(q, 2));
+            return out;
+        }
+    } else if (op[0] == '.' || op[0] == '_') {  /* an identifier */
+        temporal = false;  /* Global var is not a temporary string */
+        if (indirect) {
+            if (immediate) {  /* *#_id = _id */
+                sv_pushf(b, &out, "ld de, (%s)", op);
+            } else {  /* *_id */
+                sv_pushf(b, &out, "ld de, (%s)", op);
+                sv_push(b, &out, s_runtime_call(b, RL_LOAD_DE_DE));
+            }
+        } else {
+            if (immediate)
+                sv_pushf(b, &out, "ld de, %s", op);
+            else
+                sv_pushf(b, &out, "ld de, (%s)", op);
+        }
+    } else {  /* tn */
+        sv_push(b, &out, "pop de");
+        if (indirect)
+            sv_push(b, &out, s_runtime_call(b, RL_LOAD_DE_DE));
+    }
+
+    if (!temporal)
+        sv_push(b, &out, s_runtime_call(b, RL_STORE_STR));
+    else  /* A value already on dynamic memory */
+        sv_push(b, &out, s_runtime_call(b, RL_STORE_STR2));
+
+    return out;
+}
+
 /* _parray.py:_paddr (17-46): the IX-relative element-address helper.
  * Like _paddr (params) but ends with a __ARRAY/__ARRAY_PTR call. */
 static void s_parray_addr(Backend *b, StrVec *out, const char *offset) {
@@ -5619,6 +5682,7 @@ static StrVec quad_emit(Backend *b, Quad *q) {
     if (strcmp(I, "astorei16") == 0 || strcmp(I, "astoreu16")== 0) return emit_astore16(b, q);
     if (strcmp(I, "astorei32") == 0 || strcmp(I, "astoreu32")== 0) return emit_astore32(b, q);
     if (strcmp(I, "astoref")   == 0) return emit_astoref(b, q);
+    if (strcmp(I, "astorestr") == 0) return emit_astorestr(b, q);
     if (strcmp(I, "paaddr")    == 0) return emit_paaddr(b, q);
     if (strcmp(I, "paloadi8")  == 0 || strcmp(I, "paloadu8")  == 0) return emit_paload8(b, q);
     if (strcmp(I, "paloadi16") == 0 || strcmp(I, "paloadu16") == 0) return emit_paload16(b, q);
