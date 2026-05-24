@@ -3485,6 +3485,10 @@ static AstNode *parse_for_statement(Parser *p);
 static AstNode *parse_while_statement(Parser *p);
 static AstNode *parse_do_statement(Parser *p);
 static AstNode *parse_dim_statement(Parser *p);
+static AstNode *dim_build_scalar(Parser *p, const char **names, int name_count,
+                                 const char *name, TypeInfo *type,
+                                 bool had_as_clause, AstNode *at_expr,
+                                 AstNode *init_expr, bool is_const, int lineno);
 static AstNode *parse_print_statement(Parser *p);
 static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function, bool is_declare);
 
@@ -6694,6 +6698,21 @@ static AstNode *parse_dim_statement(Parser *p) {
      *     -> "Only one variable at a time can be declared this way".
      *   - p_var_decl_ini (zxbparser.py:693-695): `DIM idlist typedef EQ expr`
      *     -> "Initialized variables must be declared one by one." */
+    return dim_build_scalar(p, names, name_count, name, type, had_as_clause,
+                            at_expr, init_expr, is_const, lineno);
+}
+
+/* Scalar DIM/CONST declaration builder (extracted from parse_dim_statement so
+ * the Phase-D PLY var_decl reduce-actions build the byte-for-byte same tree +
+ * symbol-table state — C-vs-C identity by construction). Behaviour-preserving
+ * extraction: takes the already-parsed pieces (names[], the resolved typedef,
+ * whether an explicit AS clause was present, the AT and = initialiser exprs,
+ * the CONST flag, and the DIM line) and performs the declare + tree build that
+ * was inline. Faithful to p_var_decl / p_var_decl_at / p_var_decl_ini. */
+static AstNode *dim_build_scalar(Parser *p, const char **names, int name_count,
+                                 const char *name, TypeInfo *type,
+                                 bool had_as_clause, AstNode *at_expr,
+                                 AstNode *init_expr, bool is_const, int lineno) {
     if (name_count != 1) {
         if (at_expr) {
             zxbc_error(p->cs, lineno,
@@ -8131,6 +8150,34 @@ static PdId *pd_new_id(Parser *p, const char *name, int lineno) {
     return id;
 }
 
+/* A growable Id list — the value of the `idlist` nonterminal (Python: a
+ * Python list of Id tuples). */
+typedef struct PdIdList {
+    PdId **ids;
+    int count;
+    int cap;
+} PdIdList;
+
+static PdIdList *pd_new_idlist(Parser *p, PdId *first) {
+    PdIdList *l = arena_alloc(&p->cs->arena, sizeof(PdIdList));
+    l->cap = 4;
+    l->ids = arena_alloc(&p->cs->arena, sizeof(PdId *) * l->cap);
+    l->ids[0] = first;
+    l->count = 1;
+    return l;
+}
+
+static void pd_idlist_append(Parser *p, PdIdList *l, PdId *id) {
+    if (l->count == l->cap) {
+        int nc = l->cap * 2;
+        PdId **ni = arena_alloc(&p->cs->arena, sizeof(PdId *) * nc);
+        memcpy(ni, l->ids, sizeof(PdId *) * l->count);
+        l->ids = ni;
+        l->cap = nc;
+    }
+    l->ids[l->count++] = id;
+}
+
 /* is_null (api/check.py:is_null): None, NOP, or a BLOCK that is recursively
  * all-null. */
 static bool pd_is_null(const AstNode *n) {
@@ -8293,6 +8340,84 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
     case 19: /* statement : var_decl */
         r = PD_NODE(1);
         break;
+
+    /* ---- DIM / var_decl declaration subsystem ----
+     * The scalar var_decl forms reuse dim_build_scalar (extracted from the
+     * production parser's parse_dim_statement) so the tree + symbol-table
+     * state are byte-identical to the production parser by construction.
+     * Supporting productions: singleid/idlist (Id list), type/typedef. */
+    case 35: case 36: /* singleid : ID | ARRAY_ID -> Id(name,lineno) */
+        *out = pd_new_id(p, PD_SVAL(1), PD_LINENO(1));
+        *out_lineno = PD_LINENO(1);
+        return true;
+    case 37: /* idlist : singleid -> [singleid] */
+        *out = pd_new_idlist(p, (PdId *)rhs[0].value);
+        *out_lineno = PD_LINENO(1);
+        return true;
+    case 38: { /* idlist : idlist COMMA singleid -> append */
+        PdIdList *l = (PdIdList *)rhs[0].value;
+        pd_idlist_append(p, l, (PdId *)rhs[2].value);
+        *out = l;
+        *out_lineno = PD_LINENO(1);
+        return true;
+    }
+    case 360: case 361: case 362: case 363: case 364:
+    case 365: case 366: case 367: case 368: { /* type : <basic-type> */
+        BasicType bt =
+            (prodno == 360) ? TYPE_byte :
+            (prodno == 361) ? TYPE_ubyte :
+            (prodno == 362) ? TYPE_integer :
+            (prodno == 363) ? TYPE_uinteger :
+            (prodno == 364) ? TYPE_long :
+            (prodno == 365) ? TYPE_ulong :
+            (prodno == 366) ? TYPE_fixed :
+            (prodno == 367) ? TYPE_float : TYPE_string;
+        TypeInfo *t = type_new_ref(p->cs, st->basic_types[bt], PD_LINENO(1), false);
+        *out = t;
+        *out_lineno = PD_LINENO(1);
+        return true;
+    }
+    case 358: /* typedef : <empty> — NULL so dim_build_scalar infers (matches
+               * the production parser, where parse_typedef returns NULL for no
+               * AS clause). had_as_clause is derived as (typedef != NULL). */
+        *out = NULL;
+        *out_lineno = p->lexer.lineno;
+        return true;
+    case 359: /* typedef : AS type -> the type (non-implicit) */
+        *out = rhs[1].value;
+        *out_lineno = PD_LINENO(2);
+        return true;
+
+    case 31: { /* var_decl : DIM idlist typedef (p_var_decl) */
+        PdIdList *l = (PdIdList *)rhs[1].value;
+        TypeInfo *type = (TypeInfo *)rhs[2].value;
+        const char *names[64];
+        int n = l->count > 64 ? 64 : l->count;
+        for (int i = 0; i < n; i++) names[i] = l->ids[i]->name;
+        r = dim_build_scalar(p, names, n, names[0], type, type != NULL,
+                             NULL, NULL, false, PD_LINENO(1));
+        break;
+    }
+    case 32: { /* var_decl : DIM idlist typedef AT expr (p_var_decl_at) */
+        PdIdList *l = (PdIdList *)rhs[1].value;
+        TypeInfo *type = (TypeInfo *)rhs[2].value;
+        const char *names[64];
+        int n = l->count > 64 ? 64 : l->count;
+        for (int i = 0; i < n; i++) names[i] = l->ids[i]->name;
+        r = dim_build_scalar(p, names, n, names[0], type, type != NULL,
+                             PD_NODE(5), NULL, false, PD_LINENO(1));
+        break;
+    }
+    case 33: case 34: { /* var_decl : DIM|CONST idlist typedef EQ expr */
+        PdIdList *l = (PdIdList *)rhs[1].value;
+        TypeInfo *type = (TypeInfo *)rhs[2].value;
+        const char *names[64];
+        int n = l->count > 64 ? 64 : l->count;
+        for (int i = 0; i < n; i++) names[i] = l->ids[i]->name;
+        r = dim_build_scalar(p, names, n, names[0], type, type != NULL,
+                             NULL, PD_NODE(5), prodno == 34, PD_LINENO(1));
+        break;
+    }
 
     /* ---- assignment family ----
      * lexpr : ID EQ | LET ID EQ  (p_lexpr, zxbparser.py:1119): returns the
