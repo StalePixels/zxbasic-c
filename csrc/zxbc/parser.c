@@ -3489,6 +3489,9 @@ static AstNode *dim_build_scalar(Parser *p, const char **names, int name_count,
                                  const char *name, TypeInfo *type,
                                  bool had_as_clause, AstNode *at_expr,
                                  AstNode *init_expr, bool is_const, int lineno);
+static AstNode *dim_build_array(Parser *p, const char *name, AstNode *bounds,
+                                TypeInfo *type, AstNode *arr_at_expr,
+                                AstNode *init, int lineno);
 static AstNode *parse_print_statement(Parser *p);
 static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function, bool is_declare);
 
@@ -6528,104 +6531,7 @@ static AstNode *parse_dim_statement(Parser *p) {
             }
         }
 
-        AstNode *decl = ast_new(p->cs, AST_ARRAYDECL, lineno);
-        /* Strip deprecated suffix for symbol table key (a$ → a, matching access_id) */
-        const char *dim_name = name;
-        size_t dim_nlen = strlen(name);
-        char dim_stripped[256];
-        if (dim_nlen > 0 && dim_nlen < sizeof(dim_stripped) && is_deprecated_suffix(name[dim_nlen - 1])) {
-            memcpy(dim_stripped, name, dim_nlen - 1);
-            dim_stripped[dim_nlen - 1] = '\0';
-            dim_name = dim_stripped;
-        }
-        AstNode *id_node = symboltable_declare(p->cs->symbol_table, p->cs, dim_name, lineno, CLASS_array);
-        /* declare_array reconciliation (symboltable.py:677-... -> to_vararray,
-         * _id.py:165): a pre-existing CLASS_unknown entry — e.g. one
-         * implicitly created by a forward `@a` (p_addr_of_id's access_id,
-         * default_class=CLASS.unknown) appearing in this DIM's own
-         * initializer `{@a, ...}` — is converted to the array here.
-         * symboltable_declare returns the shared entry as-is; without
-         * this it stays CLASS_unknown and a later `a(i)` access fails
-         * with "neither an array nor a function". (Previously the
-         * @-operand was a detached node so no entry pre-existed; the
-         * faithful shared-entry @-path now requires this Python step.) */
-        if (id_node->u.id.class_ == CLASS_unknown)
-            id_node->u.id.class_ = CLASS_array;
-        id_node->type_ = type;
-        /* Port C support — the declared bound list is the faithful
-         * analogue of Python entry.bounds (symboltable.declare_array),
-         * read by arrayaccess.make_node's dim-count check at every
-         * array-access site.  symboltable_access_array returns this
-         * same shared symbol node, so stamp the boundlist on the entry
-         * for ALL arrays (the SCOPE_local block below additionally
-         * needs arr_init/is_zero_based; this stamp is strictly additive
-         * u.id metadata — not serialised by zxbc-ast-dump). */
-        id_node->u.id.arr_boundlist = bounds;
-        ast_add_child(p->cs, decl, id_node);
-        ast_add_child(p->cs, decl, bounds);
-        if (arr_at_expr) ast_add_child(p->cs, decl, arr_at_expr);
-        if (init) ast_add_child(p->cs, decl, init);
-        /* Stamp entry.addr on the shared array ID entry (faithful
-         * analogue of Python's `entry.addr = tmp` on the symbol
-         * itself — zxbparser.py p_dim_arr_at/p_dim_arr_addr branches).
-         * The vt_visit_arraydecl walk still reads addr_expr from the
-         * ARRAYDECL's children (unchanged) but p_let_arr's
-         * `if entry.addr is not None: mark_entry_as_accessed(entry)`
-         * (zxbparser.py:1215-1216) at the LETARRAY write target needs
-         * to see it on the entry — otherwise a write-only AT-array is
-         * silently dropped by visit_ARRAYDECL's O>1 DCE early-out. */
-        if (arr_at_expr) id_node->u.id.addr_expr = arr_at_expr;
-        decl->type_ = type;
-        /* Bug A: local SUB/FUNCTION array declared AT <const-addr> is
-         * promoted to global (faithful analog of zxbparser.py:785-786 +
-         * symboltable.make_static, symboltable.py:307-320). Python sets
-         * entry.scope = SCOPE.global_ and registers the entry under its
-         * mangled name in the global scope; the C `sym_entries_ordered`
-         * is a single insertion list (compiler.c:260) that codegen.c:435
-         * filters by scope==SCOPE_global to build data_ast for
-         * VarTranslator. Promoting scope here is sufficient:
-         *   • codegen picks the entry up and VarTranslator.visit_ARRAYDECL
-         *     emits the global-style descriptor (mangled `_<sub>.a` namespace
-         *     prefix is already stamped at declare time);
-         *   • FunctionTranslator's local-array ic_larrd branch
-         *     (translator.c:3974) and MEM_FREE dtor branch (translator.c
-         *     :4148, scope==local/parameter gate) auto-skip it;
-         *   • compute_offsets s_entry_size already returns 0 for entries
-         *     with addr_expr (compiler.c:171), so no stack slot is
-         *     allocated either way — but the scope-gate is the load-
-         *     bearing change. */
-        if (arr_at_expr && id_node->u.id.scope == SCOPE_local) {
-            id_node->u.id.scope = SCOPE_global;
-        }
-        /* S5.7d — a LOCAL array (inside a SUB/FUNCTION) is allocated on
-         * the stack frame; the FunctionTranslator :58-116 walk needs its
-         * geometry (bounds + init image + is_zero_based). The global
-         * VarTranslator path keeps reading these off the ARRAYDECL node
-         * (unchanged); stamp them on the ID only for the local case so
-         * compute_offsets' memsize (arrayref.py:230-233) and the
-         * :68-100 ic_larrd branch can run after the parse-time scope pop.
-         * is_dynamically_accessed / lbound_used / ubound_used stay false
-         * for the zero-based numeric corpus, exactly as the global path
-         * (var_translator.c:459-463). */
-        if (id_node->u.id.scope == SCOPE_local) {
-            /* arr_boundlist already stamped above for all arrays. */
-            id_node->u.id.arr_init = init;
-            bool zb = true;
-            for (int bi = 0; bi < bounds->child_count; bi++) {
-                AstNode *bd = bounds->children[bi];
-                AstNode *lo = (bd && bd->child_count > 0) ? bd->children[0]
-                                                          : NULL;
-                long lv = 0;
-                if (lo && lo->tag == AST_NUMBER) lv = (long)lo->u.number.value;
-                else if (lo && lo->tag == AST_CONSTEXPR &&
-                         lo->child_count > 0 &&
-                         lo->children[0]->tag == AST_NUMBER)
-                    lv = (long)lo->children[0]->u.number.value;
-                if (lv != 0) { zb = false; break; }
-            }
-            id_node->u.id.is_zero_based = zb;
-        }
-        return decl;
+        return dim_build_array(p, name, bounds, type, arr_at_expr, init, lineno);
     }
 
     /* Scalar: collect comma-separated names, then AS type, then AT/= */
@@ -7011,6 +6917,63 @@ static AstNode *dim_build_scalar(Parser *p, const char **names, int name_count,
         }
     }
     return block;
+}
+
+/* Array DIM declaration builder (extracted from parse_dim_statement so the
+ * Phase-D array var_decl reduce-actions build the byte-for-byte same tree +
+ * symbol-table state — C-vs-C identity by construction). Takes the parsed
+ * pieces (name, bounds BOUNDLIST, resolved type, AT-address expr, init image,
+ * DIM line). The caller runs check_bound + string-init checks first
+ * (order-faithful). Faithful to p_decl_arr / p_arr_decl_attr /
+ * p_arr_decl_initialized. Behaviour-preserving extraction. */
+static AstNode *dim_build_array(Parser *p, const char *name, AstNode *bounds,
+                               TypeInfo *type, AstNode *arr_at_expr,
+                               AstNode *init, int lineno) {
+        AstNode *decl = ast_new(p->cs, AST_ARRAYDECL, lineno);
+        /* Strip deprecated suffix for symbol table key (a$ → a, matching access_id) */
+        const char *dim_name = name;
+        size_t dim_nlen = strlen(name);
+        char dim_stripped[256];
+        if (dim_nlen > 0 && dim_nlen < sizeof(dim_stripped) && is_deprecated_suffix(name[dim_nlen - 1])) {
+            memcpy(dim_stripped, name, dim_nlen - 1);
+            dim_stripped[dim_nlen - 1] = '\0';
+            dim_name = dim_stripped;
+        }
+        AstNode *id_node = symboltable_declare(p->cs->symbol_table, p->cs, dim_name, lineno, CLASS_array);
+        /* declare_array reconciliation (symboltable.py:677 -> to_vararray):
+         * a pre-existing CLASS_unknown entry (e.g. forward `@a`) is converted
+         * to the array here. */
+        if (id_node->u.id.class_ == CLASS_unknown)
+            id_node->u.id.class_ = CLASS_array;
+        id_node->type_ = type;
+        id_node->u.id.arr_boundlist = bounds;
+        ast_add_child(p->cs, decl, id_node);
+        ast_add_child(p->cs, decl, bounds);
+        if (arr_at_expr) ast_add_child(p->cs, decl, arr_at_expr);
+        if (init) ast_add_child(p->cs, decl, init);
+        if (arr_at_expr) id_node->u.id.addr_expr = arr_at_expr;
+        decl->type_ = type;
+        if (arr_at_expr && id_node->u.id.scope == SCOPE_local) {
+            id_node->u.id.scope = SCOPE_global;
+        }
+        if (id_node->u.id.scope == SCOPE_local) {
+            id_node->u.id.arr_init = init;
+            bool zb = true;
+            for (int bi = 0; bi < bounds->child_count; bi++) {
+                AstNode *bd = bounds->children[bi];
+                AstNode *lo = (bd && bd->child_count > 0) ? bd->children[0]
+                                                          : NULL;
+                long lv = 0;
+                if (lo && lo->tag == AST_NUMBER) lv = (long)lo->u.number.value;
+                else if (lo && lo->tag == AST_CONSTEXPR &&
+                         lo->child_count > 0 &&
+                         lo->children[0]->tag == AST_NUMBER)
+                    lv = (long)lo->children[0]->u.number.value;
+                if (lv != 0) { zb = false; break; }
+            }
+            id_node->u.id.is_zero_based = zb;
+        }
+        return decl;
 }
 
 /* ----------------------------------------------------------------
@@ -8418,6 +8381,77 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
                              NULL, PD_NODE(5), prodno == 34, PD_LINENO(1));
         break;
     }
+
+    /* ---- array DIM ----
+     * bound : expr (p_bound) -> make_bound(make_number(array_base), p[1]);
+     * bound : expr TO expr (p_bound_to_bound) -> make_bound(p[1], p[3]).
+     * The C make_bound takes a pre-built BOUND node ([lower,upper]) and
+     * validates it (returns NULL on a bad/non-constant bound). To match the
+     * production parser, an invalid bound is dropped from the boundlist
+     * (make_bound_list skips a NULL). */
+    case 47: { /* bound : expr */
+        AstNode *bd = ast_new(p->cs, AST_BOUND, PD_LINENO(1));
+        AstNode *lo = make_number(p, p->cs->opts.array_base, PD_LINENO(1), NULL);
+        ast_add_child(p->cs, bd, lo);
+        ast_add_child(p->cs, bd, PD_NODE(1));
+        *out = make_bound(p, bd, p->lexer.lineno); /* NULL if invalid */
+        *out_lineno = PD_LINENO(1);
+        return true;
+    }
+    case 48: { /* bound : expr TO expr */
+        AstNode *bd = ast_new(p->cs, AST_BOUND, PD_LINENO(2));
+        ast_add_child(p->cs, bd, PD_NODE(1));
+        ast_add_child(p->cs, bd, PD_NODE(3));
+        *out = make_bound(p, bd, PD_LINENO(2));
+        *out_lineno = PD_LINENO(2);
+        return true;
+    }
+    case 45: { /* bound_list : bound -> BOUNDLIST[bound] (skip NULL) */
+        AstNode *bl = ast_new(p->cs, AST_BOUNDLIST, PD_LINENO(1));
+        if (rhs[0].value) ast_add_child(p->cs, bl, (AstNode *)rhs[0].value);
+        r = bl;
+        break;
+    }
+    case 46: { /* bound_list : bound_list COMMA bound -> append (skip NULL) */
+        AstNode *bl = (AstNode *)rhs[0].value;
+        if (rhs[2].value) ast_add_child(p->cs, bl, (AstNode *)rhs[2].value);
+        r = bl;
+        break;
+    }
+    case 42: { /* var_arr_decl : DIM idlist LP bound_list RP typedef
+                * (p_decl_arr): declare the array; the production parser
+                * returns the ARRAYDECL node as the statement (parse_dim_
+                * statement array path), so match that for the C-vs-C compare. */
+        PdIdList *l = (PdIdList *)rhs[1].value;
+        AstNode *bounds = (AstNode *)rhs[3].value;
+        TypeInfo *type = (TypeInfo *)rhs[5].value;
+        int ln = PD_LINENO(1);
+        if (l->count != 1) {
+            zxbc_error(p->cs, ln,
+                       "Array declaration only allows one variable name at a time");
+            r = NULL;
+            break;
+        }
+        /* typedef NULL (no AS) -> infer from suffix / default, mirroring the
+         * production array path (parse_typedef NULL -> the !type block). */
+        const char *aname = l->ids[0]->name;
+        if (!type) {
+            size_t nl = strlen(aname);
+            if (nl > 0 && is_deprecated_suffix(aname[nl - 1]))
+                type = st->basic_types[suffix_to_type(aname[nl - 1])];
+            else {
+                type = type_new_ref(p->cs, p->cs->default_type, ln, true);
+                if (p->cs->opts.strict)
+                    zxbc_error(p->cs, ln,
+                               "strict mode: missing type declaration for '%s'", aname);
+            }
+        }
+        r = dim_build_array(p, aname, bounds, type, NULL, NULL, ln);
+        break;
+    }
+    case 39: case 40: /* var_decl : var_arr_decl | var_arr_decl_addr */
+        r = PD_NODE(1);
+        break;
 
     /* ---- assignment family ----
      * lexpr : ID EQ | LET ID EQ  (p_lexpr, zxbparser.py:1119): returns the
