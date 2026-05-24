@@ -245,6 +245,45 @@ static AstNode *make_number(Parser *p, double value, int lineno, TypeInfo *type)
     return n;
 }
 
+/* Constant-fold a floating-point math builtin (SIN/COS/TAN/ASN/ACS/ATN/
+ * LN/EXP/SQR) at parse time, exactly mirroring p_expr_trig's math-function
+ * table (src/zxbc/zxbparser.py:3505-3517) fed through BUILTIN.make_node's
+ * fold (src/symbols/builtin.py:74-77 -> SymbolNUMBER(func(value), float_)).
+ *
+ * Each branch is the SAME libm call Python's `math.*` dispatches to — on
+ * macOS both engines link the system libm, so the IEEE-754 double result
+ * is bit-identical, and the shared Z80 40-bit FP encoder turns it into the
+ * same 5-byte constant.  CRITICAL faithfulness point: Python computes LN as
+ * `math.log(y, math.exp(1))` — the TWO-argument log, i.e. log(y)/log(e) —
+ * NOT the natural log `math.log(y)`.  These can differ in the last ULP, so
+ * the C MUST replicate the division form character-for-character.
+ *
+ * Returns true if kw is one of the nine math builtins (the caller then
+ * inspects *out).  Domain/range errors: Python's `math.*` RAISES for them
+ * (math.asin(2)/math.acos(2)/math.log(0)/math.sqrt(-1) -> ValueError "math
+ * domain error"; math.exp(710) -> OverflowError "math range error"), and
+ * p_expr_trig does not catch it, so the exception propagates uncaught and
+ * crashes the compiler with exit code 1 (verified: a Python traceback ending
+ * in builtin.py:76 `func(operands[0].value)`).  C's libm instead returns a
+ * NaN/Inf there, which the caller must NOT fold (a NaN/Inf NUMBER both
+ * mis-encodes AND hangs the Z80 40-bit FP encoder on infinities) — the
+ * caller detects the non-finite result and fails the compile (exit 1) to
+ * match Python's exit code rather than silently producing a bogus binary. */
+static bool math_fn_fold(BTokenType kw, double v, double *out) {
+    switch (kw) {
+        case BTOK_SIN: *out = sin(v);  return true;
+        case BTOK_COS: *out = cos(v);  return true;
+        case BTOK_TAN: *out = tan(v);  return true;
+        case BTOK_ASN: *out = asin(v); return true;   /* ASN -> math.asin */
+        case BTOK_ACS: *out = acos(v); return true;   /* ACS -> math.acos */
+        case BTOK_ATN: *out = atan(v); return true;   /* ATN -> math.atan */
+        case BTOK_LN:  *out = log(v) / log(exp(1.0)); return true;  /* log(y, e) */
+        case BTOK_EXP: *out = exp(v);  return true;
+        case BTOK_SQR: *out = sqrt(v); return true;
+        default:       return false;
+    }
+}
+
 static AstNode *make_string(Parser *p, const char *value, int lineno) {
     AstNode *n = ast_new(p->cs, AST_STRING, lineno);
     n->u.string.value = arena_strdup(&p->cs->arena, value);
@@ -970,6 +1009,37 @@ static AstNode *parse_builtin_func(Parser *p, const char *fname, BTokenType kw) 
                 AstNode *cast = make_typecast(p->cs,
                     st->basic_types[TYPE_float], arg, lineno);
                 if (cast) n->children[0] = cast;
+                /* p_expr_trig fold (zxbparser.py:3502-3520 ->
+                 * builtin.py:74-77): make_builtin receives the float-cast
+                 * arg; BUILTIN.make_node folds when func!=None, len==1, and
+                 * is_number(operand) -> SymbolNUMBER(func(operand.value),
+                 * type_=float_).  After the make_typecast above a constant
+                 * NUMBER (or numeric CONST id) stays is_number with its
+                 * value already float()-cast, so a compile-time argument
+                 * folds straight to the resulting FP constant (the shared
+                 * Z80 float encoder then emits the 5-byte literal) instead
+                 * of the runtime `call .core.SIN` + FP-stack.  is_number is
+                 * exactly check_is_number — a non-constant variable STAYS
+                 * runtime (Python's else branch keeps the BUILTIN node). */
+                AstNode *cn = n->children[0];
+                double av, fv;
+                if (check_is_number(cn) && zxbc_eval_to_num(cn, &av) &&
+                    math_fn_fold(kw, av, &fv)) {
+                    /* Domain/range error parity: Python's math.* RAISES
+                     * (uncaught -> compiler exits 1) exactly when the IEEE
+                     * result would be NaN/Inf (e.g. ASN 2, ACS 2, LN 0,
+                     * SQR(-1), EXP 710).  C's libm returns NaN/Inf instead,
+                     * so guard isfinite: fold only a finite result; on a
+                     * non-finite result fail the compile (exit 1) to match
+                     * Python rather than fold a bogus constant — without
+                     * this an Inf NUMBER also hangs the FP encoder. */
+                    if (isfinite(fv)) {
+                        return make_number(p, fv, lineno,
+                                           st->basic_types[TYPE_float]);
+                    }
+                    zxbc_error(p->cs, lineno, "math domain error");
+                    return NULL;
+                }
             }
             break;
         case BTOK_LEN:
