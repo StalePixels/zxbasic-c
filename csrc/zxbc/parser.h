@@ -29,6 +29,17 @@ void parser_init(Parser *p, CompilerState *cs, const char *input);
 AstNode *parser_parse(Parser *p);
 
 /* ----------------------------------------------------------------
+ * Phase D — PLY engine parallel parser (validation; not the production path)
+ * ---------------------------------------------------------------- */
+/* Init without priming the first token (engine pulls tokens itself). */
+void parser_init_noprime(Parser *p, CompilerState *cs, const char *input);
+/* Parse the program via the ported PLY LALR(1) engine + reduce-actions.
+ * Returns the program AST (start-symbol value). *unwired_out is set true if
+ * any not-yet-ported production (or p_error) fired; *unwired_prod_out gets the
+ * first such production number (or -1 for p_error). */
+AstNode *plyparse_program(Parser *p, bool *unwired_out, int *unwired_prod_out);
+
+/* ----------------------------------------------------------------
  * Expression parsing (Pratt parser)
  * ---------------------------------------------------------------- */
 

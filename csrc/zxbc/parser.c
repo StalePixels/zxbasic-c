@@ -8088,3 +8088,273 @@ AstNode *parser_parse(Parser *p) {
     p->cs->ast = program;
     return p->had_error ? NULL : program;
 }
+
+/* ================================================================
+ * PHASE D — PLY engine integration (PARALLEL parser, behind a flag).
+ *
+ * This wires the authoritative LALR(1) engine (csrc/zxbc/plyparser/) to the
+ * EXISTING C AST representation: each reduce-action builds the byte-for-byte
+ * same AstNode the recursive-descent parser above builds, per the real action
+ * bodies in src/zxbc/zxbparser.py. It is ADDITIVE — the production entry
+ * points (parser_init/parser_parse) are unchanged; this runs only when
+ * explicitly invoked by the Phase-D AST-compare harness (plyparse_program),
+ * so production output stays byte-identical until the Phase E swap.
+ *
+ * Validation vehicle: build the program two ways (recursive-descent vs PLY
+ * engine) and deep-compare the ASTs (pd_ast_equal). A production whose action
+ * is not yet ported sets *pd_unwired so the harness reports the file as
+ * "not-yet-wired" rather than silently producing a wrong tree.
+ * ================================================================ */
+#include "plyparser/ply_engine.h"
+
+/* Per-parse context threaded through the engine callbacks as `ud`. */
+typedef struct PdCtx {
+    Parser *p;             /* the production Parser (lexer + CompilerState) */
+    bool unwired;          /* set when a reduce hits an unported production */
+    int unwired_prod;      /* first such production number (for reporting) */
+    int last_lineno;       /* lexer.lineno tracker (== p.lexer.lineno) */
+    bool in_preproc;       /* lex-adapter preproc-state tracker */
+} PdCtx;
+
+/* is_null (api/check.py:is_null): None, NOP, or a BLOCK that is recursively
+ * all-null. */
+static bool pd_is_null(const AstNode *n) {
+    if (n == NULL) return true;
+    if (n->tag == AST_NOP) return true;
+    if (n->tag == AST_BLOCK) {
+        for (int i = 0; i < n->child_count; i++)
+            if (!pd_is_null(n->children[i])) return false;
+        return true;
+    }
+    return false;
+}
+
+/* make_block / SymbolBLOCK.append (symbols/block.py): build a BLOCK, append
+ * each arg skipping nulls and FLATTENING child BLOCKs. */
+static void pd_block_append(Parser *p, AstNode *blk, AstNode *arg) {
+    if (pd_is_null(arg)) return;
+    if (arg->tag == AST_BLOCK) {
+        for (int i = 0; i < arg->child_count; i++)
+            pd_block_append(p, blk, arg->children[i]);
+    } else {
+        ast_add_child(p->cs, blk, arg);
+    }
+}
+
+static AstNode *pd_make_block2(Parser *p, AstNode *a, AstNode *b) {
+    AstNode *blk = make_block_node(p, p->current.lineno);
+    pd_block_append(p, blk, a);
+    if (b) pd_block_append(p, blk, b);
+    return blk;
+}
+
+/* ---- lex adapter: BToken -> PlySym, applying the Phase-A-documented
+ * translations (NEWLINE lineno -1; preproc NUMBER->INTEGER / STRC->STRING;
+ * ERROR carries the offending char). ID/ARRAY_ID resolution is whatever the
+ * lexer returns when driven here — with the engine mutating the SAME symbol
+ * table at PLY's reduce timing, this is the faithful stream (validated in the
+ * harness). ---- */
+static bool pd_lex(void *ud, PlySym *out) {
+    PdCtx *c = ud;
+    Parser *p = c->p;
+    BToken t;
+    for (;;) {
+        t = blexer_next(&p->lexer);
+        /* Unlike the production advance(), the engine MUST see ERROR tokens
+         * (PLY's parser does) — do not skip them. */
+        break;
+    }
+    c->last_lineno = p->lexer.lineno;
+    if (t.type == BTOK_EOF)
+        return false; /* $end */
+
+    memset(out, 0, sizeof(*out));
+    const char *name = btok_name(t.type);
+    int id = ply_term_id(name);
+    out->lineno = t.lineno;
+
+    bool was_preproc = c->in_preproc;
+    if (t.type == BTOK__PRAGMA || t.type == BTOK__INIT ||
+        t.type == BTOK__REQUIRE || t.type == BTOK__LINE ||
+        t.type == BTOK__PUSH || t.type == BTOK__POP)
+        c->in_preproc = true;
+    else if (t.type == BTOK_NEWLINE)
+        c->in_preproc = false;
+
+    if (t.type == BTOK_NEWLINE) {
+        out->type = id;
+        out->lineno = t.lineno - 1; /* PLY captures pre-increment lineno */
+        out->sval = "\n";
+        return true;
+    }
+    if (was_preproc && t.type == BTOK_NUMBER) {
+        out->type = ply_term_id("INTEGER");
+        out->sval = t.sval;       /* raw digit string */
+        out->num = t.numval;
+        return true;
+    }
+    if (was_preproc && t.type == BTOK_STRC) {
+        out->type = ply_term_id("STRING");
+        out->sval = t.sval;
+        return true;
+    }
+    out->type = id;
+    out->num = t.numval;
+    out->sval = t.sval;
+    return true;
+}
+
+/* p[N] accessor: the value of RHS symbol N (1-based, as in PLY p[1..len]).
+ * For a nonterminal this is the built AstNode; for a leaf-terminal the action
+ * reads .num/.sval directly off rhs[N-1]. */
+#define PD_NODE(i)   ((AstNode *)rhs[(i) - 1].value)
+#define PD_LINENO(i) (rhs[(i) - 1].lineno)
+#define PD_NUM(i)    (rhs[(i) - 1].num)
+#define PD_SVAL(i)   (rhs[(i) - 1].sval)
+
+/* ---- reduce-action dispatch. Returns false on a SyntaxError-raising action
+ * (none wired yet). Sets *out to p[0]. ---- */
+static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
+                      void **out, int *out_lineno) {
+    PdCtx *c = ud;
+    Parser *p = c->p;
+    SymbolTable *st = p->cs->symbol_table;
+    AstNode *r = NULL;
+    int rln = (len > 0) ? rhs[0].lineno : p->lexer.lineno;
+
+    switch (prodno) {
+    /* ---- program spine ---- */
+    case 1: { /* start : program
+               * p_start (zxbparser.py:505): ast = p[1]; if ast is a BLOCK and
+               * its last child is not an ender, append a sentinel END(0). For
+               * Phase-D comparability with parser_parse's finalisation we
+               * reproduce the implicit-END append + the top-level flatten.
+               * (Symbol-table label/class checks, data_ast, pending-call
+               * checks — Phase E.) */
+        AstNode *prog = PD_NODE(1);
+        AstNode *flat = make_block_node(p, prog ? prog->lineno : p->lexer.lineno);
+        if (prog) pd_block_append(p, flat, prog);
+        /* implicit END sentinel (parser_parse tail / p_start make_sentence
+         * END make_number(0) sentinel=True). */
+        AstNode *end = make_sentence_node(p, "END", p->lexer.lineno);
+        end->u.sentence.sentinel = true;
+        ast_add_child(p->cs, end,
+            make_number(p, 0, p->lexer.lineno, st->basic_types[TYPE_uinteger]));
+        ast_add_child(p->cs, flat, end);
+        r = flat;
+        break;
+    }
+    case 2: /* program : program_line */
+        r = pd_make_block2(p, PD_NODE(1), NULL);
+        break;
+    case 3: /* program : program program_line */
+        r = pd_make_block2(p, PD_NODE(1), PD_NODE(2));
+        break;
+    case 4: case 5: case 6: case 7: case 8: case 9:
+        /* program_line : X NEWLINE  -> p[1] */
+        r = PD_NODE(1);
+        break;
+    case 10: /* program_line : NEWLINE -> NOP */
+        r = make_nop(p);
+        break;
+    case 11: case 12: /* co_statements_co : co_statements[_co] CO -> p[1] */
+        r = PD_NODE(1);
+        break;
+    case 13: /* co_statements_co : CO -> NOP */
+        r = make_nop(p);
+        break;
+    case 14: /* co_statements : co_statements_co statement */
+        r = pd_make_block2(p, PD_NODE(1), PD_NODE(2));
+        break;
+    case 15: case 16: /* statements_co : statements[_co] CO -> p[1] */
+        r = PD_NODE(1);
+        break;
+    case 17: /* statements : statement */
+        r = pd_make_block2(p, PD_NODE(1), NULL);
+        break;
+    case 18: /* statements : statements_co statement */
+        r = pd_make_block2(p, PD_NODE(1), PD_NODE(2));
+        break;
+    case 19: /* statement : var_decl */
+        r = PD_NODE(1);
+        break;
+
+    /* ---- leaf expressions ---- */
+    case 280: /* bexpr : NUMBER */
+        r = make_number(p, PD_NUM(1), PD_LINENO(1), NULL);
+        break;
+    case 281: /* bexpr : PI */
+        r = make_number(p, M_PI, PD_LINENO(1), st->basic_types[TYPE_float]);
+        break;
+    case 282: /* bexpr : string */
+        r = PD_NODE(1);
+        break;
+    case 285: /* string : STRC */
+        r = make_string(p, PD_SVAL(1) ? PD_SVAL(1) : "", PD_LINENO(1));
+        break;
+    case 297: /* expr : bexpr */
+        r = PD_NODE(1);
+        break;
+
+    /* ---- simplest statements ---- */
+    case 56: /* statement : BORDER expr */
+        r = make_sentence_node(p, "BORDER", PD_LINENO(1));
+        ast_add_child(p->cs, r,
+            make_typecast(p->cs, st->basic_types[TYPE_ubyte], PD_NODE(2), PD_LINENO(1)));
+        break;
+    case 65: /* statement : CLS */
+        r = make_sentence_node(p, "CLS", PD_LINENO(1));
+        break;
+
+    default:
+        /* Production not yet ported — flag for the harness. */
+        c->unwired = true;
+        if (c->unwired_prod == 0) c->unwired_prod = prodno;
+        r = make_nop(p); /* keep the parse going so we can survey coverage */
+        break;
+    }
+
+    *out = r;
+    *out_lineno = (r ? r->lineno : rln);
+    return true;
+}
+
+static void pd_error(void *ud, const PlySym *errtoken) {
+    /* Phase C-full will implement p_error here. For Phase D (valid programs)
+     * this is not exercised; mark the parse as unusable if it fires. */
+    PdCtx *c = ud;
+    (void)errtoken;
+    c->unwired = true;
+    if (c->unwired_prod == 0) c->unwired_prod = -1; /* -1 == hit p_error */
+}
+
+/* Init for the PLY-engine path: like parser_init but WITHOUT priming the
+ * first token (the engine pulls tokens itself via pd_lex). */
+void parser_init_noprime(Parser *p, CompilerState *cs, const char *input) {
+    memset(p, 0, sizeof(*p));
+    p->cs = cs;
+    blexer_init(&p->lexer, cs, input);
+    p->had_error = false;
+    p->panic_mode = false;
+    tokdump_init();
+}
+
+/* Build the program via the PLY engine. Returns the engine's `start` value
+ * (the program BLOCK before the implicit-END / data-decl finalisation, which
+ * Phase E will add). *unwired_out reports whether any unported production or
+ * p_error fired. */
+AstNode *plyparse_program(Parser *p, bool *unwired_out, int *unwired_prod_out) {
+    PdCtx c;
+    memset(&c, 0, sizeof(c));
+    c.p = p;
+    c.last_lineno = p->lexer.lineno;
+
+    PlyParser eng;
+    ply_parser_init(&eng, pd_lex, pd_action, pd_error, &c);
+    eng.cur_lineno = p->lexer.lineno;
+    void *res = ply_parse(&eng);
+
+    if (unwired_out) *unwired_out = c.unwired;
+    if (unwired_prod_out) *unwired_prod_out = c.unwired_prod;
+    return (AstNode *)res;
+}

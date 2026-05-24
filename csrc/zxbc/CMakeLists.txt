@@ -16,6 +16,7 @@ add_library(zxbc_parser_lib STATIC
     parser.c
     lexer.c
     plyparser/ply_tables.c
+    plyparser/ply_engine.c
     ast.c
     errmsg.c
     compiler.c
@@ -82,3 +83,11 @@ add_executable(zxbc-ply-lexdump
     plyparser/ply_lexdump_harness.c
 )
 target_link_libraries(zxbc-ply-lexdump PRIVATE zxbc_parser_lib)
+
+# Phase D parallel AST-compare harness: parses each .bas with both the
+# production recursive-descent parser and the PLY engine + reduce-actions and
+# deep-compares the ASTs. The Phase-D meter (grow EQUAL across the corpus).
+add_executable(zxbc-ply-astcmp
+    plyparser/ply_astcmp_harness.c
+)
+target_link_libraries(zxbc-ply-astcmp PRIVATE zxbc_parser_lib)

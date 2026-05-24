@@ -24,7 +24,15 @@
 typedef struct PlySym {
     int type;        /* symbol id (terminal/$end/error/nonterminal) */
     int lineno;      /* source line (LexToken.lineno) */
-    void *value;     /* semantic value (token value or built AST node) */
+    void *value;     /* semantic value: for a NONTERMINAL, the built AST node
+                      * (PLY's p[0] of the reducing production); for a
+                      * TERMINAL, the action reads num/sval below (== PLY's
+                      * token value p[N]). */
+    /* Terminal token payload (== PLY LexToken.value, as seen by p[N]). The
+     * lex adapter fills these for terminals; actions for leaf productions
+     * (e.g. `bexpr : NUMBER`) read them. Unused for nonterminals. */
+    double num;          /* NUMBER token value */
+    const char *sval;    /* ID/STRC/LABEL/ASM/ERROR/keyword text */
 } PlySym;
 
 struct PlyParser;

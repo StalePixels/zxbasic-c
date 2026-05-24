@@ -178,6 +178,7 @@ void *ply_parse(PlyParser *p) {
                 int pname = pr->name_sym;
 
                 PlySym sym;
+                memset(&sym, 0, sizeof(sym)); /* zero num/sval (nonterminal) */
                 sym.type = pname;
                 sym.lineno = 0;
                 sym.value = NULL;
