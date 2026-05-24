@@ -1241,6 +1241,40 @@ static AstNode *make_block_node(Parser *p, int lineno) {
     return ast_new(p->cs, AST_BLOCK, lineno);
 }
 
+/* Label DEFINITION at a label site (`<label>:` / line-number label). Performs
+ * the symbol-table side effects (Python make_label -> declare_label +
+ * DATA_LABELS, zxbparser.py:453-458; the C uses access_label as its
+ * declare_label analogue) and returns the SENTENCE("LABEL") > AST_ID node the
+ * production parser emits for a label. Extracted from parse_statement's label
+ * branch so the Phase-D `label : LABEL` reduce-action builds the byte-for-byte
+ * same tree + symbol-table state (C-vs-C identity). Behaviour-preserving. */
+static AstNode *label_define(Parser *p, const char *label_text, int lineno) {
+    /* Create label in symbol table (labels are always global) */
+    AstNode *label_node = symboltable_access_label(p->cs->symbol_table, p->cs,
+                                                    label_text, lineno);
+    if (label_node && label_node->u.id.class_ == CLASS_label) {
+        if (label_node->u.id.declared) {
+            zxbc_error(p->cs, lineno, "Label '%s' already used at %s:%d",
+                       label_text, p->cs->current_file, label_node->lineno);
+        }
+        label_node->u.id.declared = true;
+        /* declare_label (symboltable.py:626): entry.type_ = PTR_TYPE. */
+        label_node->type_ = p->cs->symbol_table->basic_types[TYPE_uinteger];
+    }
+    if (label_node)
+        label_capture_scope_owner(p->cs, label_node);
+    if (label_node)
+        hashmap_set(&p->cs->data_labels, label_text,
+                    p->cs->data_ptr_current ? p->cs->data_ptr_current : "");
+
+    AstNode *lbl_sent = make_sentence_node(p, "LABEL", lineno);
+    AstNode *lbl_id = ast_new(p->cs, AST_ID, lineno);
+    lbl_id->u.id.name = arena_strdup(&p->cs->arena, label_text);
+    lbl_id->u.id.class_ = CLASS_label;
+    ast_add_child(p->cs, lbl_sent, lbl_id);
+    return lbl_sent;
+}
+
 static AstNode *make_asm_node(Parser *p, const char *code, int lineno) {
     AstNode *n = ast_new(p->cs, AST_ASM, lineno);
     n->u.asm_block.code = arena_strdup(&p->cs->arena, code);
@@ -3570,49 +3604,9 @@ static AstNode *parse_statement(Parser *p) {
             label_text = label_buf;
         }
 
-        /* Create label in symbol table (labels are always global) */
-        AstNode *label_node = symboltable_access_label(p->cs->symbol_table, p->cs,
-                                                        label_text, p->previous.lineno);
-        if (label_node && label_node->u.id.class_ == CLASS_label) {
-            if (label_node->u.id.declared) {
-                zxbc_error(p->cs, p->previous.lineno,
-                           "Label '%s' already used at %s:%d",
-                           label_text, p->cs->current_file, label_node->lineno);
-            }
-            label_node->u.id.declared = true;
-            /* declare_label (symboltable.py:626): entry.type_ =
-             * self.basic_types[global_.PTR_TYPE]. The C label-definition
-             * site is Python's declare_label analogue (p_label:455 ->
-             * declare_label). Without this a defined-first label keeps
-             * type_==NULL, so check_is_dynamic (is_dynamic, check.py:370)
-             * mis-classifies `@label` as dynamic and p_addr_of_id skips
-             * the CONSTEXPR wrap (parser.c:688) — making `DIM x AT @label`
-             * (label defined before) error "Address must be a numeric
-             * constant expression" instead of taking Python's CONSTEXPR
-             * branch. PTR_TYPE == gl.PTR_TYPE == TYPE_uinteger. */
-            label_node->type_ =
-                p->cs->symbol_table->basic_types[TYPE_uinteger];
-        }
-        /* symboltable.access_label scope_owner capture
-         * (symboltable.py:621-623): if gl.FUNCTION_LEVEL,
-         * entry.ref.scope_owner = list(gl.FUNCTION_LEVEL). The
-         * LabelRef.scope_owner setter (labelref.py:42-45) refreshes
-         * `accessed` — so a label DEFINED inside a SUB whose address was
-         * already taken (`@label` earlier -> entry.accessed) now
-         * cascades accessed onto the enclosing SUB(s), keeping them from
-         * O>1 prune.  Order-independent: if `@label` comes AFTER the
-         * def, mark_label_accessed there walks this same scope_owner. */
-        if (label_node)
-            label_capture_scope_owner(p->cs, label_node);
-        /* S5.8d — make_label's DATA_LABELS write (zxbparser.py:457):
-         * EVERY declared label records data_labels[id]=data_ptr_current
-         * ("This label points to the current DATA block index"); how
-         * RESTORE label resolves (visit_RESTORE:491). Strictly additive
-         * to the existing p_label path; no AST/parse-surface effect. */
-        if (label_node)
-            hashmap_set(&p->cs->data_labels, label_text,
-                        p->cs->data_ptr_current ? p->cs->data_ptr_current
-                                                : "");
+        /* Label definition + the SENTENCE("LABEL") node (extracted to
+         * label_define so the Phase-D `label : LABEL` reduce reuses it). */
+        AstNode *lbl_sent = label_define(p, label_text, p->previous.lineno);
 
         /* If followed by ':', consume it */
         match(p, BTOK_CO);
@@ -3626,21 +3620,11 @@ static AstNode *parse_statement(Parser *p) {
             !check(p, BTOK_END)) {
             AstNode *stmt = parse_statement(p);
             AstNode *block = make_block_node(p, lineno);
-            AstNode *lbl_sent = make_sentence_node(p, "LABEL", lineno);
-            AstNode *lbl_id = ast_new(p->cs, AST_ID, lineno);
-            lbl_id->u.id.name = arena_strdup(&p->cs->arena, label_text);
-            lbl_id->u.id.class_ = CLASS_label;
-            ast_add_child(p->cs, lbl_sent, lbl_id);
             ast_add_child(p->cs, block, lbl_sent);
             if (stmt) ast_add_child(p->cs, block, stmt);
             return block;
         }
 
-        AstNode *lbl_sent = make_sentence_node(p, "LABEL", lineno);
-        AstNode *lbl_id = ast_new(p->cs, AST_ID, lineno);
-        lbl_id->u.id.name = arena_strdup(&p->cs->arena, label_text);
-        lbl_id->u.id.class_ = CLASS_label;
-        ast_add_child(p->cs, lbl_sent, lbl_id);
         return lbl_sent;
     }
 
@@ -8302,6 +8286,38 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         break;
     case 19: /* statement : var_decl */
         r = PD_NODE(1);
+        break;
+
+    /* ---- labels ----
+     * label : LABEL (20, p_label) -> label_define (declare + SENTENCE LABEL).
+     * The LABEL terminal value is the source text (sval) or, for a numeric
+     * label, the integer rendered as a string. */
+    case 20: {
+        const char *lt = PD_SVAL(1);
+        char lbuf[32];
+        if (!lt) { snprintf(lbuf, sizeof(lbuf), "%d", (int)PD_NUM(1)); lt = lbuf; }
+        r = label_define(p, lt, PD_LINENO(1));
+        break;
+    }
+    case 21: case 22: /* label_line : label statements | label co_statements
+                       * (p_program_line_label) -> make_block(label, p[2]) */
+        r = pd_make_block2(p, PD_NODE(1), PD_NODE(2));
+        break;
+    case 23: /* label_line : label_line_co -> p[1] */
+        r = PD_NODE(1);
+        break;
+    case 24: case 25: /* label_line_co : label statements_co|co_statements_co
+                       * (p_label_line_co, len 3) -> make_block(label, p[2]) */
+        r = pd_make_block2(p, PD_NODE(1), PD_NODE(2));
+        break;
+    case 26: /* label_line_co : label (len 2) -> the label */
+        r = PD_NODE(1);
+        break;
+    case 27: /* program_co : program -> p[1] */
+        r = PD_NODE(1);
+        break;
+    case 28: case 29: case 30: /* program_co : program X -> make_block(p[1],p[2]) */
+        r = pd_make_block2(p, PD_NODE(1), PD_NODE(2));
         break;
 
     /* ---- DIM / var_decl declaration subsystem ----
