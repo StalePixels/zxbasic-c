@@ -1431,6 +1431,9 @@ static bool is_right_assoc(BTokenType type) {
 
 /* Forward declarations for expression parsing */
 static AstNode *parse_call_or_array(Parser *p, const char *name, int lineno, bool expr_context, bool addressof_ctx);
+static AstNode *make_call_node(Parser *p, const char *name, int lineno,
+                               AstNode *arglist, bool expr_context,
+                               bool addressof_ctx, bool next_is_lp);
 static AstNode *parse_arglist(Parser *p);
 
 /* Forward decls used by the SymbolARRAYACCESS.offset port (computed at
@@ -2795,6 +2798,21 @@ static AstNode *parse_call_or_array(Parser *p, const char *name, int lineno, boo
         return strslice_fold(p, n);
     }
 
+    return make_call_node(p, name, lineno, arglist, expr_context,
+                          addressof_ctx, check(p, BTOK_LP));
+}
+
+/* make_call node-build core (zxbparser.py make_call :365-420 +
+ * make_func_call/make_array_access/make_strslice). Resolves the entry via
+ * access_call and builds ARRAYACCESS/ARRAYLOAD (array), STRSLICE (string
+ * var/const), or FUNCCALL — from an ALREADY-BUILT arglist. Extracted from
+ * parse_call_or_array so the Phase-D `func_call : ID|ARRAY_ID arg_list`
+ * reduce-actions reuse it (C-vs-C identity). `next_is_lp` is the caller's
+ * lookahead (was `check(p, BTOK_LP)` inline) for the chained-postfix
+ * string-array dim-count gate. Behaviour-preserving extraction. */
+static AstNode *make_call_node(Parser *p, const char *name, int lineno,
+                               AstNode *arglist, bool expr_context,
+                               bool addressof_ctx, bool next_is_lp) {
     /* Resolve via symbol table: auto-declares if needed (matching Python's access_call) */
     AstNode *entry = symboltable_access_call(p->cs->symbol_table, p->cs, name, lineno, NULL);
 
@@ -2917,7 +2935,7 @@ static AstNode *parse_call_or_array(Parser *p, const char *name, int lineno, boo
          * Python's make_array_substr_assign also typecasts its arglist,
          * and the cast is idempotent/harmless for the popped index.) */
         bool str_substr_assign_shape =
-            type_is_string(entry->type_) && !check(p, BTOK_LP);
+            type_is_string(entry->type_) && !next_is_lp;
 
         if (entry->u.id.scope != SCOPE_parameter && !str_substr_assign_shape) {
             int ndecl = entry->u.id.arr_boundlist
@@ -8539,6 +8557,56 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         r = addr_of_id(p, id->name, id->lineno);
         break;
     }
+
+    /* ---- call / array-access subsystem ----
+     * argument : expr (321, p_argument) -> make_argument(expr) = AST_ARGUMENT
+     * with byref=default_byref, child=expr, type_=expr->type_. */
+    case 321: {
+        AstNode *expr = PD_NODE(1);
+        if (!expr) { r = NULL; break; }
+        AstNode *arg = ast_new(p->cs, AST_ARGUMENT, expr->lineno);
+        arg->u.argument.byref = p->cs->opts.default_byref;
+        ast_add_child(p->cs, arg, expr);
+        arg->type_ = expr->type_;
+        r = arg;
+        break;
+    }
+    case 319: { /* arguments : argument -> ARGLIST[argument] */
+        if (!rhs[0].value) { r = NULL; break; }
+        AstNode *al = ast_new(p->cs, AST_ARGLIST, PD_LINENO(1));
+        ast_add_child(p->cs, al, (AstNode *)rhs[0].value);
+        r = al;
+        break;
+    }
+    case 320: { /* arguments : arguments COMMA argument -> append */
+        AstNode *al = (AstNode *)rhs[0].value;
+        if (!al || !rhs[2].value) { r = NULL; break; }
+        ast_add_child(p->cs, al, (AstNode *)rhs[2].value);
+        r = al;
+        break;
+    }
+    case 317: /* arg_list : LP RP -> empty ARGLIST */
+        r = ast_new(p->cs, AST_ARGLIST, PD_LINENO(1));
+        break;
+    case 318: /* arg_list : LP arguments RP -> the arguments ARGLIST */
+        r = PD_NODE(2);
+        break;
+    case 299: case 301: { /* func_call : ID arg_list | ARRAY_ID arg_list
+                           * (p_idcall_expr / p_arr_access_expr) -> make_call.
+                           * In the LALR grammar this is a READ (expr context);
+                           * the chained-postfix `(` is a separate production,
+                           * so next_is_lp=false. p_arr_access_expr also marks
+                           * the entry accessed — make_call_node's expr_context
+                           * path does that. */
+        const char *name = PD_SVAL(1);
+        AstNode *al = (AstNode *)rhs[1].value;
+        if (!al) { r = NULL; break; }
+        r = make_call_node(p, name, PD_LINENO(1), al, true, false, false);
+        break;
+    }
+    case 298: /* bexpr : func_call (p_expr_funccall) -> p[1] */
+        r = PD_NODE(1);
+        break;
     case 295: { /* bexpr : ID  (p_id_expr, zxbparser.py:2647). access_id with
                  * default_class=var, mark accessed, auto-type -> DEFAULT_TYPE
                  * + warning. Faithful to parser.c:2292-2314 scalar-read core.
