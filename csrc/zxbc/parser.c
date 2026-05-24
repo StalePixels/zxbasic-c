@@ -8129,6 +8129,17 @@ typedef struct PdFuncDef {
     bool rejected;         /* unported sub-form hit */
 } PdFuncDef;
 
+/* A single parameter carried by param_def/param_definition: the ARGUMENT node
+ * that goes in the PARAMLIST PLUS the body-scope symbol that param_def
+ * registered (Python declare_param makes ONE symbol that is both; the C
+ * production parser keeps them as separate nodes — parser.c:7397 ARGUMENT vs
+ * :7656 body symbol — so we carry both and copy the offset across at
+ * function_header_pre, exactly as the production does). */
+typedef struct PdParam {
+    AstNode *arg;          /* AST_ARGUMENT (PARAMLIST child) */
+    AstNode *body_sym;     /* body-scope symbol (for offset/byref copy) */
+} PdParam;
+
 /* A growable Id list — the value of the `idlist` nonterminal (Python: a
  * Python list of Id tuples). */
 typedef struct PdIdList {
@@ -8429,6 +8440,24 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
             fd->id_node->u.id.params = params;
             fd->id_node->u.id.param_size = parser_assign_param_offsets(p, params);
         }
+        /* After parser_assign_param_offsets stamps each ARGUMENT's cumulative
+         * offset, copy offset+byref onto the matching body-scope symbol — the
+         * production's dual-node reconciliation (parser.c:7675-7677). The body
+         * symbols were registered (by name) at the param_def reduces; find
+         * them in the current (body) scope. */
+        if (params) {
+            for (int i = 0; i < params->child_count; i++) {
+                AstNode *arg = params->children[i];
+                if (!arg || arg->tag != AST_ARGUMENT) continue;
+                AstNode *bsym = symboltable_lookup(p->cs->symbol_table,
+                                                   arg->u.argument.name);
+                if (bsym) {
+                    bsym->u.id.offset = arg->u.argument.offset;
+                    bsym->u.id.offset_set = true;
+                    bsym->u.id.byref = arg->u.argument.byref;
+                }
+            }
+        }
         *out = fd;
         *out_lineno = fd->lineno;
         return true;
@@ -8542,11 +8571,116 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
     }
 
     /* param_decl : <empty> | LP RP (337/338, p_param_decl_none) -> empty
-     * PARAMLIST. (LP param_decl_list RP and the param productions — the
-     * with-params case — are the next increment.) */
+     * PARAMLIST. */
     case 337: case 338:
         r = ast_new(p->cs, AST_PARAMLIST, p->lexer.lineno);
         break;
+    case 339: /* param_decl : LP param_decl_list RP -> the PARAMLIST */
+        r = PD_NODE(2);
+        break;
+
+    /* ---- parameters (scalar, no byval/array/sigil-conflict yet) ----
+     * param_def : singleid typedef default_arg_value (347, p_param_def_type):
+     * build the ARGUMENT node AND register the body-scope symbol (the scope is
+     * already active — function_def entered it). Faithful to the production's
+     * dual-node model (parser.c:7397 ARGUMENT + :7656 body symbol). Array
+     * params (348) and sigil-typed params are deferred -> UNWIRED. */
+    case 348: /* default_arg_value : <empty> -> NULL */
+        *out = NULL;
+        *out_lineno = p->lexer.lineno;
+        return true;
+    case 349: /* default_arg_value : EQ expr -> the expr */
+        *out = rhs[1].value;
+        *out_lineno = PD_LINENO(1);
+        return true;
+    case 347: {
+        PdId *id = (PdId *)rhs[0].value;
+        TypeInfo *td = (TypeInfo *)rhs[1].value;   /* typedef (NULL = implicit) */
+        AstNode *defval = (AstNode *)rhs[2].value; /* default_arg_value */
+        const char *pname = id->name;
+        /* Defer sigil-typed params (the conflict-diagnostic path) for now. */
+        size_t pnl = strlen(pname);
+        if (pnl > 0 && is_deprecated_suffix(pname[pnl - 1])) {
+            c->unwired = true;
+            if (c->unwired_prod == 0) c->unwired_prod = prodno;
+            r = make_nop(p);
+            break;
+        }
+        /* check_type_is_explicit (strict-only) */
+        if (p->cs->opts.strict && td && td->implicit)
+            err_undeclared_type(p->cs, id->lineno, pname);
+        TypeInfo *ptype = td;
+        if (!ptype)
+            ptype = type_new_ref(p->cs, p->cs->default_type, id->lineno, true);
+        AstNode *arg = ast_new(p->cs, AST_ARGUMENT, id->lineno);
+        arg->u.argument.name = arena_strdup(&p->cs->arena, pname);
+        arg->u.argument.is_array = false;
+        arg->type_ = ptype;
+        if (defval) {
+            defval = make_typecast(p->cs, ptype, defval, id->lineno);
+            if (defval) ast_add_child(p->cs, arg, defval);
+        }
+        /* Register the body-scope symbol (declare_param). */
+        AstNode *bsym = symboltable_declare(p->cs->symbol_table, p->cs,
+                                            pname, id->lineno, CLASS_var);
+        if (bsym) {
+            bsym->type_ = ptype;
+            bsym->u.id.declared = true;
+            bsym->u.id.scope = SCOPE_parameter;
+        }
+        PdParam *pp = arena_alloc(&p->cs->arena, sizeof(PdParam));
+        pp->arg = arg; pp->body_sym = bsym;
+        *out = pp;
+        *out_lineno = id->lineno;
+        return true;
+    }
+    case 345: { /* param_definition : param_def -> byref = default_byref */
+        PdParam *pp = (PdParam *)rhs[0].value;
+        if (pp && pp->arg) pp->arg->u.argument.byref = p->cs->opts.default_byref;
+        *out = pp; *out_lineno = PD_LINENO(1);
+        return true;
+    }
+    case 343: { /* param_definition : BYREF param_def -> byref = true */
+        PdParam *pp = (PdParam *)rhs[1].value;
+        if (pp && pp->arg) pp->arg->u.argument.byref = true;
+        *out = pp; *out_lineno = PD_LINENO(1);
+        return true;
+    }
+    case 344: { /* param_definition : BYVAL param_def -> byref = false
+                 * (array-byval rejection deferred -> UNWIRED via the array
+                 * param being UNWIRED already). */
+        PdParam *pp = (PdParam *)rhs[1].value;
+        if (pp && pp->arg) pp->arg->u.argument.byref = false;
+        *out = pp; *out_lineno = PD_LINENO(1);
+        return true;
+    }
+    case 341: { /* param_decl_list : param_definition -> PARAMLIST[arg] */
+        PdParam *pp = (PdParam *)rhs[0].value;
+        AstNode *pl = ast_new(p->cs, AST_PARAMLIST, PD_LINENO(1));
+        if (pp && pp->arg) ast_add_child(p->cs, pl, pp->arg);
+        r = pl;
+        break;
+    }
+    case 342: { /* param_decl_list : param_decl_list COMMA param_definition
+                 * mandatory-after-optional check (p_param_decl_list2). */
+        AstNode *pl = (AstNode *)rhs[0].value;
+        PdParam *pp = (PdParam *)rhs[2].value;
+        if (pl && pp && pp->arg) {
+            int n = pl->child_count;
+            AstNode *prev = n > 0 ? pl->children[n - 1] : NULL;
+            bool cur_has_default = (pp->arg->child_count > 0);
+            bool prev_has_default = (prev && prev->child_count > 0);
+            if (!cur_has_default && prev_has_default) {
+                zxbc_error(p->cs, pp->arg->lineno,
+                           "Can't declare mandatory param '%s' after optional param '%s'",
+                           pp->arg->u.argument.name,
+                           prev ? prev->u.argument.name : "");
+            }
+            ast_add_child(p->cs, pl, pp->arg);
+        }
+        r = pl;
+        break;
+    }
 
     /* function_body : ... END FUNCTION|SUB (350-357, p_function_body):
      * class-match check + return the body block. */
