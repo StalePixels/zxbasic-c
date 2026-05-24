@@ -309,6 +309,501 @@ static void py_number_str(double value, char *buf, size_t sz) {
         z80h_pyfloat_repr(value, buf, (int)sz);
 }
 
+/* ----------------------------------------------------------------
+ * VAL(<constant string>) constant-folder — a faithful re-implementation
+ * of Python's `float(eval(s, {}, {}))` over the NUMERIC sub-domain of
+ * Python expression syntax (p_val, src/zxbc/zxbparser.py:3447-3462 ->
+ * BUILTIN.make_node fold, src/symbols/builtin.py:74-77).
+ *
+ * Python's p_val evaluates a CONSTANT string argument at parse time with
+ * the local `val(s)` helper:
+ *     try:    x = float(eval(s, {}, {}))
+ *     except: x = 0; warning(lineno, "Invalid string numeric constant
+ *                                     '<s>' evaluated as 0")
+ * and feeds x to make_builtin's func, which (operand is a constant string)
+ * folds the BUILTIN to SymbolNUMBER(x, type_=float_).  So a compile-time
+ * VAL of a string never reaches the runtime `.core.VAL`; it bakes a FLOAT
+ * NUMBER constant whose value is the eval()'d expression float()-ed.
+ *
+ * We reproduce eval()'s NUMERIC domain EXACTLY (Python literal syntax, not
+ * BASIC): decimal / 0x / 0o / 0b integer literals (with PEP-515 numeric
+ * underscores and Python's no-leading-zero-decimal rule), float literals
+ * incl. scientific notation, and the operators  **  (right-assoc, power),
+ * unary +/-,  * / // %  (true-div, floor-div, Python modulo),  binary +/-,
+ * and parentheses, with Python's precedence and int-vs-float promotion.
+ * The whole result is then float()-coerced (see val_fold below).
+ *
+ * BOUNDARY: Python eval() is a strict superset — it also evaluates
+ * comparisons (`1<2`), subscripts (`[1,2][0]`), conditionals
+ * (`1 if 1 else 2`), function calls (`abs(-3)`), tuples (`1,2`), names,
+ * etc.  Those are OUTSIDE this numeric evaluator.  Crucially we NEVER
+ * accept-and-mis-evaluate: any input we cannot parse as a pure numeric
+ * expression fails (val_parse returns false) and the caller takes the
+ * except->0+warning path — the SAME outcome Python produces for genuinely
+ * invalid input, and a documented (flagged) divergence ONLY for the rare
+ * non-numeric-but-eval()-able strings that realistic VAL code never uses.
+ *
+ * Python int arithmetic is arbitrary precision; we use int64.  An int
+ * subexpression that overflows int64 is the flagged big-int boundary: we
+ * report failure (-> except->0) rather than fold a wrong value, which
+ * diverges from Python (it would succeed) but never emits a wrong number.
+ * ---------------------------------------------------------------- */
+
+/* A Python value in the numeric domain: an exact int (Python int) or a
+ * float.  `i` is meaningful iff is_int; otherwise `d` holds the float. */
+typedef struct {
+    bool is_int;
+    int64_t i;
+    double d;
+} PyNum;
+
+/* Cursor over the source string for the recursive-descent evaluator. */
+typedef struct {
+    const char *s;
+    size_t len;
+    size_t pos;
+    bool error;  /* set on any parse/eval failure (incl. int64 overflow) */
+} ValParser;
+
+static double pynum_to_double(PyNum v) { return v.is_int ? (double)v.i : v.d; }
+
+static void val_skip_ws(ValParser *vp) {
+    /* Python's tokenizer treats spaces/tabs/form-feed as insignificant
+     * between tokens (newlines are not expected in a VAL string). */
+    while (vp->pos < vp->len) {
+        char c = vp->s[vp->pos];
+        if (c == ' ' || c == '\t' || c == '\f' || c == '\r' || c == '\n')
+            vp->pos++;
+        else
+            break;
+    }
+}
+
+static bool val_parse_expr(ValParser *vp, PyNum *out);
+
+/* Scan an integer literal body in the given base, honouring PEP-515
+ * underscores (a single '_' allowed between digits, never leading/trailing
+ * or doubled).  Returns false on overflow or malformed underscore. */
+static bool val_scan_int_base(ValParser *vp, int base, int64_t *out) {
+    uint64_t acc = 0;
+    bool any = false;
+    bool last_us = true;  /* disallow leading underscore */
+    while (vp->pos < vp->len) {
+        char c = vp->s[vp->pos];
+        int dv;
+        if (c == '_') {
+            if (last_us) return false;  /* leading/doubled underscore */
+            last_us = true;
+            vp->pos++;
+            continue;
+        }
+        if (c >= '0' && c <= '9') dv = c - '0';
+        else if (c >= 'a' && c <= 'f') dv = c - 'a' + 10;
+        else if (c >= 'A' && c <= 'F') dv = c - 'A' + 10;
+        else break;
+        if (dv >= base) break;
+        /* overflow check: acc*base + dv must fit uint64 then int64 */
+        if (acc > (UINT64_MAX - (uint64_t)dv) / (uint64_t)base) return false;
+        acc = acc * (uint64_t)base + (uint64_t)dv;
+        any = true;
+        last_us = false;
+        vp->pos++;
+    }
+    if (!any || last_us) return false;       /* no digits / trailing '_' */
+    if (acc > (uint64_t)INT64_MAX) return false;  /* int64 boundary */
+    *out = (int64_t)acc;
+    return true;
+}
+
+/* Parse a numeric literal (Python syntax) at the cursor.  Handles the
+ * 0x/0o/0b integer prefixes, the decimal-int form (with the no-leading-zero
+ * rule), and float forms (fraction and/or exponent).  Underscores allowed
+ * per PEP-515. */
+static bool val_parse_number(ValParser *vp, PyNum *out) {
+    size_t start = vp->pos;
+    if (vp->pos >= vp->len) return false;
+
+    /* Prefixed integer literals: 0x.. 0o.. 0b.. */
+    if (vp->s[vp->pos] == '0' && vp->pos + 1 < vp->len) {
+        char p2 = vp->s[vp->pos + 1];
+        int base = 0;
+        if (p2 == 'x' || p2 == 'X') base = 16;
+        else if (p2 == 'o' || p2 == 'O') base = 8;
+        else if (p2 == 'b' || p2 == 'B') base = 2;
+        if (base) {
+            vp->pos += 2;
+            int64_t iv;
+            if (!val_scan_int_base(vp, base, &iv)) return false;
+            out->is_int = true;
+            out->i = iv;
+            return true;
+        }
+    }
+
+    /* Build a normalised buffer (digits/'.'/'e'/sign, underscores stripped)
+     * to detect int-vs-float and to feed strtod for the float case.  Track
+     * whether a '.' or exponent appeared (=> float). */
+    char buf[512];
+    size_t bi = 0;
+    bool is_float = false;
+    bool any_digit = false;
+    bool last_us = true;       /* disallow leading underscore */
+    size_t int_digits = 0;     /* count of leading decimal-int digits */
+
+    /* Integer/fraction digit run before any exponent. */
+    while (vp->pos < vp->len) {
+        char c = vp->s[vp->pos];
+        if (c == '_') {
+            if (last_us) return false;
+            last_us = true;
+            vp->pos++;
+            continue;
+        }
+        if (c >= '0' && c <= '9') {
+            if (bi + 1 >= sizeof(buf)) return false;
+            buf[bi++] = c;
+            any_digit = true;
+            if (!is_float) int_digits++;
+            last_us = false;
+            vp->pos++;
+            continue;
+        }
+        if (c == '.') {
+            if (is_float) return false;     /* second dot => malformed */
+            if (last_us && bi > 0) return false; /* underscore before dot */
+            is_float = true;
+            if (bi + 1 >= sizeof(buf)) return false;
+            buf[bi++] = c;
+            last_us = true;  /* a digit must follow '_' but '.' resets run */
+            last_us = false; /* '.' itself is a valid run break; allow .5 */
+            vp->pos++;
+            continue;
+        }
+        break;
+    }
+    if (last_us) return false;  /* trailing underscore in mantissa */
+
+    /* Optional exponent. */
+    if (vp->pos < vp->len && (vp->s[vp->pos] == 'e' || vp->s[vp->pos] == 'E')) {
+        /* Lookahead: an exponent requires (optional sign +) at least one
+         * digit; otherwise the 'e' is not part of this number. */
+        size_t save = vp->pos;
+        size_t k = vp->pos + 1;
+        if (k < vp->len && (vp->s[k] == '+' || vp->s[k] == '-')) k++;
+        bool exp_digit = (k < vp->len && vp->s[k] >= '0' && vp->s[k] <= '9');
+        if (!exp_digit) {
+            vp->pos = save;  /* not an exponent */
+        } else {
+            is_float = true;
+            if (bi + 1 >= sizeof(buf)) return false;
+            buf[bi++] = 'e';
+            vp->pos++;
+            if (vp->s[vp->pos] == '+' || vp->s[vp->pos] == '-') {
+                buf[bi++] = vp->s[vp->pos++];
+            }
+            bool elast_us = true;
+            bool edig = false;
+            while (vp->pos < vp->len) {
+                char c = vp->s[vp->pos];
+                if (c == '_') {
+                    if (elast_us) return false;
+                    elast_us = true;
+                    vp->pos++;
+                    continue;
+                }
+                if (c >= '0' && c <= '9') {
+                    if (bi + 1 >= sizeof(buf)) return false;
+                    buf[bi++] = c;
+                    edig = true;
+                    elast_us = false;
+                    vp->pos++;
+                    continue;
+                }
+                break;
+            }
+            if (!edig || elast_us) return false;
+        }
+    }
+
+    if (!any_digit) {
+        /* No mantissa digits at all (e.g. bare '.') => not a number. */
+        vp->pos = start;
+        return false;
+    }
+    buf[bi] = '\0';
+
+    if (!is_float) {
+        /* Decimal integer literal.  Python forbids leading zeros in a
+         * non-zero decimal int ("007" is a SyntaxError); only "0",
+         * "0_0", "00..0" (all zeros) are allowed.  Detect: more than one
+         * digit, first is '0', and some non-zero digit present. */
+        if (int_digits > 1 && buf[0] == '0') {
+            bool all_zero = true;
+            for (size_t j = 0; j < bi; j++)
+                if (buf[j] != '0') { all_zero = false; break; }
+            if (!all_zero) return false;  /* leading-zero decimal => error */
+        }
+        /* Re-scan buf (underscores already stripped) as a base-10 int with
+         * overflow detection. */
+        uint64_t acc = 0;
+        for (size_t j = 0; j < bi; j++) {
+            uint64_t dv = (uint64_t)(buf[j] - '0');
+            if (acc > (UINT64_MAX - dv) / 10ULL) return false;
+            acc = acc * 10ULL + dv;
+        }
+        if (acc > (uint64_t)INT64_MAX) return false;  /* int64 boundary */
+        out->is_int = true;
+        out->i = (int64_t)acc;
+        return true;
+    }
+
+    /* Float literal. */
+    char *end = NULL;
+    double d = strtod(buf, &end);
+    if (end != buf + bi) return false;
+    out->is_int = false;
+    out->d = d;
+    return true;
+}
+
+static bool val_parse_atom(ValParser *vp, PyNum *out) {
+    val_skip_ws(vp);
+    if (vp->pos >= vp->len) return false;
+    char c = vp->s[vp->pos];
+    if (c == '(') {
+        vp->pos++;
+        if (!val_parse_expr(vp, out)) return false;
+        val_skip_ws(vp);
+        if (vp->pos >= vp->len || vp->s[vp->pos] != ')') return false;
+        vp->pos++;
+        return true;
+    }
+    if ((c >= '0' && c <= '9') || c == '.') {
+        return val_parse_number(vp, out);
+    }
+    return false;  /* names/brackets/etc. — outside the numeric domain */
+}
+
+static bool val_parse_unary(ValParser *vp, PyNum *out);
+
+/* power := atom ('**' unary)?   — '**' is right-associative; its right
+ * operand is a unary (so 2**-1 works), its left is an atom (so -2**2 =
+ * -(2**2): unary minus binds looser than '**'). */
+static bool val_parse_power(ValParser *vp, PyNum *out) {
+    PyNum base;
+    if (!val_parse_atom(vp, &base)) return false;
+    val_skip_ws(vp);
+    if (vp->pos + 1 < vp->len && vp->s[vp->pos] == '*' &&
+        vp->s[vp->pos + 1] == '*') {
+        vp->pos += 2;
+        PyNum exp;
+        if (!val_parse_unary(vp, &exp)) return false;
+        /* Python ** semantics: int**non-negative-int -> int; otherwise
+         * float (incl. int**negative-int -> float, e.g. 2**-1 == 0.5). */
+        if (base.is_int && exp.is_int && exp.i >= 0) {
+            int64_t acc = 1, b = base.i, e = exp.i;
+            bool overflow = false;
+            for (int64_t k = 0; k < e; k++) {
+                if (b != 0 &&
+                    (acc > INT64_MAX / (b < 0 ? -b : b) ||
+                     acc < INT64_MIN / (b < 0 ? -b : b))) {
+                    overflow = true;
+                    break;
+                }
+                acc *= b;
+            }
+            if (overflow) { vp->error = true; return false; }  /* big-int */
+            out->is_int = true;
+            out->i = acc;
+        } else {
+            out->is_int = false;
+            out->d = pow(pynum_to_double(base), pynum_to_double(exp));
+        }
+        return true;
+    }
+    *out = base;
+    return true;
+}
+
+/* unary := ('+'|'-') unary | power */
+static bool val_parse_unary(ValParser *vp, PyNum *out) {
+    val_skip_ws(vp);
+    if (vp->pos < vp->len && (vp->s[vp->pos] == '+' || vp->s[vp->pos] == '-')) {
+        char op = vp->s[vp->pos];
+        vp->pos++;
+        PyNum v;
+        if (!val_parse_unary(vp, &v)) return false;
+        if (op == '-') {
+            if (v.is_int) {
+                if (v.i == INT64_MIN) { vp->error = true; return false; }
+                v.i = -v.i;
+            } else {
+                v.d = -v.d;
+            }
+        }
+        *out = v;
+        return true;
+    }
+    return val_parse_power(vp, out);
+}
+
+/* Python floor division for ints: floor toward negative infinity. */
+static bool py_int_floordiv(int64_t a, int64_t b, int64_t *out) {
+    if (b == 0) return false;  /* ZeroDivisionError -> except->0 */
+    int64_t q = a / b;
+    int64_t r = a % b;
+    if (r != 0 && ((r < 0) != (b < 0))) q -= 1;  /* adjust toward -inf */
+    *out = q;
+    return true;
+}
+
+/* Python modulo for ints: result has the SAME sign as the divisor. */
+static bool py_int_mod(int64_t a, int64_t b, int64_t *out) {
+    if (b == 0) return false;
+    int64_t r = a % b;
+    if (r != 0 && ((r < 0) != (b < 0))) r += b;
+    *out = r;
+    return true;
+}
+
+/* mul := unary (('*'|'/'|'//'|'%') unary)*  (left-associative) */
+static bool val_parse_mul(ValParser *vp, PyNum *out) {
+    PyNum lhs;
+    if (!val_parse_unary(vp, &lhs)) return false;
+    for (;;) {
+        val_skip_ws(vp);
+        if (vp->pos >= vp->len) break;
+        char c = vp->s[vp->pos];
+        int op = 0;  /* 1=* 2=/ 3=// 4=% */
+        if (c == '*') {
+            if (vp->pos + 1 < vp->len && vp->s[vp->pos + 1] == '*') break;
+            op = 1; vp->pos++;
+        } else if (c == '/') {
+            if (vp->pos + 1 < vp->len && vp->s[vp->pos + 1] == '/') {
+                op = 3; vp->pos += 2;
+            } else {
+                op = 2; vp->pos++;
+            }
+        } else if (c == '%') {
+            op = 4; vp->pos++;
+        } else {
+            break;
+        }
+        PyNum rhs;
+        if (!val_parse_unary(vp, &rhs)) return false;
+        bool both_int = lhs.is_int && rhs.is_int;
+        switch (op) {
+            case 1:  /* * */
+                if (both_int) {
+                    int64_t a = lhs.i, b = rhs.i, r;
+                    if (a != 0 &&
+                        (b > INT64_MAX / (a < 0 ? -a : a) ||
+                         b < INT64_MIN / (a < 0 ? -a : a))) {
+                        vp->error = true; return false;  /* big-int */
+                    }
+                    r = a * b;
+                    lhs.is_int = true; lhs.i = r;
+                } else {
+                    lhs.d = pynum_to_double(lhs) * pynum_to_double(rhs);
+                    lhs.is_int = false;
+                }
+                break;
+            case 2:  /* / true division -> ALWAYS float */
+                if ((rhs.is_int && rhs.i == 0) ||
+                    (!rhs.is_int && rhs.d == 0.0))
+                    return false;  /* ZeroDivisionError -> except->0 */
+                lhs.d = pynum_to_double(lhs) / pynum_to_double(rhs);
+                lhs.is_int = false;
+                break;
+            case 3:  /* // floor division */
+                if (both_int) {
+                    int64_t r;
+                    if (!py_int_floordiv(lhs.i, rhs.i, &r)) return false;
+                    lhs.is_int = true; lhs.i = r;
+                } else {
+                    double bd = pynum_to_double(rhs);
+                    if (bd == 0.0) return false;
+                    lhs.d = floor(pynum_to_double(lhs) / bd);
+                    lhs.is_int = false;
+                }
+                break;
+            case 4:  /* % Python modulo */
+                if (both_int) {
+                    int64_t r;
+                    if (!py_int_mod(lhs.i, rhs.i, &r)) return false;
+                    lhs.is_int = true; lhs.i = r;
+                } else {
+                    double bd = pynum_to_double(rhs);
+                    if (bd == 0.0) return false;
+                    double ad = pynum_to_double(lhs);
+                    double r = fmod(ad, bd);
+                    /* fmod sign follows dividend; Python % follows divisor. */
+                    if (r != 0.0 && ((r < 0) != (bd < 0))) r += bd;
+                    lhs.d = r;
+                    lhs.is_int = false;
+                }
+                break;
+        }
+    }
+    *out = lhs;
+    return true;
+}
+
+/* expr := mul (('+'|'-') mul)*  (left-associative) */
+static bool val_parse_expr(ValParser *vp, PyNum *out) {
+    PyNum lhs;
+    if (!val_parse_mul(vp, &lhs)) return false;
+    for (;;) {
+        val_skip_ws(vp);
+        if (vp->pos >= vp->len) break;
+        char c = vp->s[vp->pos];
+        if (c != '+' && c != '-') break;
+        vp->pos++;
+        PyNum rhs;
+        if (!val_parse_mul(vp, &rhs)) return false;
+        bool both_int = lhs.is_int && rhs.is_int;
+        if (both_int) {
+            int64_t a = lhs.i, b = (c == '+') ? rhs.i : -rhs.i;
+            /* overflow check for a + b */
+            if ((b > 0 && a > INT64_MAX - b) || (b < 0 && a < INT64_MIN - b)) {
+                vp->error = true; return false;  /* big-int boundary */
+            }
+            lhs.i = a + b;
+            lhs.is_int = true;
+        } else {
+            double r = (c == '+') ? pynum_to_double(lhs) + pynum_to_double(rhs)
+                                  : pynum_to_double(lhs) - pynum_to_double(rhs);
+            lhs.d = r;
+            lhs.is_int = false;
+        }
+    }
+    *out = lhs;
+    return true;
+}
+
+/* Top-level: parse the WHOLE string as one numeric expression and, on
+ * success, return its float()-coerced value (matching `float(eval(s))`).
+ * Returns false on ANY failure (unparsable, trailing tokens, division by
+ * zero, int64 overflow, non-finite float()), so the caller takes the
+ * except->0+warning path exactly as Python's `except: x = 0`. */
+static bool val_fold(const char *s, size_t len, double *out) {
+    ValParser vp = { s, len, 0, false };
+    PyNum v;
+    if (!val_parse_expr(&vp, &v) || vp.error) return false;
+    val_skip_ws(&vp);
+    if (vp.pos != vp.len) return false;  /* trailing junk -> SyntaxError */
+    double d = pynum_to_double(v);
+    /* float() of an int that exceeds double range would raise
+     * OverflowError; int64 always fits double, so only a non-finite float
+     * literal (e.g. 1e400 -> inf) trips this — Python's float("1e400")
+     * is actually inf (no error), but eval("1e400") IS inf too, and the
+     * FP encoder can't encode inf, so treat non-finite as the except path
+     * for binary safety (a realistic VAL never reaches this). */
+    if (!isfinite(d)) return false;
+    *out = d;
+    return true;
+}
+
 static AstNode *make_sentence_node(Parser *p, const char *kind, int lineno) {
     AstNode *n = ast_new(p->cs, AST_SENTENCE, lineno);
     n->u.sentence.kind = arena_strdup(&p->cs->arena, kind);
@@ -972,6 +1467,45 @@ static AstNode *parse_builtin_func(Parser *p, const char *fname, BTokenType kw) 
                               ? basictype_to_string(aft->basic_type) : "unknown";
         err_expected_string(p->cs, lineno, atn);
         return NULL;
+    }
+
+    /* p_val constant-fold (zxbparser.py:3447-3462 -> builtin.py:74-77):
+     * VAL of a COMPILE-TIME-CONSTANT string is evaluated at parse time as
+     * float(eval(s, {}, {})) and folded to a FLOAT NUMBER constant — the
+     * runtime `.core.VAL` (+ heap/__FTOU32REG) is never emitted.  is_string
+     * single-arg (const_string_value_node) gates this: a bare STRING literal
+     * or a CLASS_const id of string type folds; a runtime string VARIABLE
+     * stays the BUILTIN node (Python's BUILTIN.make_node only folds a
+     * constant operand), so a non-constant VAL(s$) is NOT over-folded.
+     *
+     * val_fold reproduces eval()'s numeric domain (see its definition).  On
+     * success it yields the float()-coerced value; on ANY failure (invalid
+     * numeric expression, division by zero, big-int overflow, or a string
+     * Python's eval() could evaluate but our numeric evaluator can't) we
+     * take Python's `except: x = 0` path: warn with the EXACT message
+     * "Invalid string numeric constant '<s>' evaluated as 0" and fold to a
+     * FLOAT 0.0 NUMBER — byte- and stderr-identical to Python for the
+     * genuinely-invalid inputs, and a documented flagged divergence only for
+     * the rare non-numeric-but-eval()-able strings realistic VAL never uses. */
+    if (kw == BTOK_VAL) {
+        const AstNode *sv = const_string_value_node(arg);
+        if (sv && sv->tag == AST_STRING) {
+            double v;
+            const char *str = sv->u.string.value ? sv->u.string.value : "";
+            size_t slen = (size_t)(sv->u.string.length >= 0
+                                       ? sv->u.string.length : 0);
+            if (val_fold(str, slen, &v)) {
+                return make_number(p, v, lineno,
+                                   p->cs->symbol_table->basic_types[TYPE_float]);
+            }
+            /* except -> 0 + the faithful warning (uncoded, like Python's
+             * bare warning() in p_val.val). */
+            zxbc_warning(p->cs, lineno,
+                         "Invalid string numeric constant '%s' evaluated as 0",
+                         str);
+            return make_number(p, 0.0, lineno,
+                               p->cs->symbol_table->basic_types[TYPE_float]);
+        }
     }
 
     /* p_sgn (zxbparser.py:3489): a string argument is rejected with the
