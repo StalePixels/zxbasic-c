@@ -253,6 +253,23 @@ static AstNode *make_string(Parser *p, const char *value, int lineno) {
     return n;
 }
 
+/* Render a numeric constant exactly as Python's SymbolNUMBER.__str__
+ * (symbols/number.py:31-36/63-64): the constructor normalises an
+ * integer-valued operand to a Python int (`if int(value)==value: value =
+ * int(value)`), so str() prints the plain integer decimal (no ".0", no
+ * scientific notation) for ANY integer-valued magnitude; a genuine
+ * non-integer float keeps str(float) — the shortest round-trip decimal
+ * (z80h_pyfloat_repr).  %.0f reproduces str(int(double)) for every
+ * integer-valued double, including magnitudes beyond int64 (verified vs
+ * Python).  This is used by p_str's constant-fold (STR(<const>) -> the
+ * STRING literal str(value)). */
+static void py_number_str(double value, char *buf, size_t sz) {
+    if (value == trunc(value) && !isinf(value) && !isnan(value))
+        snprintf(buf, sz, "%.0f", value);
+    else
+        z80h_pyfloat_repr(value, buf, (int)sz);
+}
+
 static AstNode *make_sentence_node(Parser *p, const char *kind, int lineno) {
     AstNode *n = ast_new(p->cs, AST_SENTENCE, lineno);
     n->u.sentence.kind = arena_strdup(&p->cs->arena, kind);
@@ -818,6 +835,28 @@ static AstNode *parse_builtin_func(Parser *p, const char *fname, BTokenType kw) 
              * so the folded NUMBER re-infers its type from the value. */
             double val = arg->u.number.value;
             return make_number(p, val >= 0 ? val : -val, lineno, NULL);
+        }
+    }
+
+    /* p_str constant-fold (zxbparser.py:3409-3412):
+     *     string : STR expr %prec UMINUS
+     *     if is_number(p[2]):  # NUMBER or numeric CONST (check.py:312-316)
+     *         p[0] = sym.STRING(str(p[2].value), p.lineno(1))
+     * A compile-time numeric argument folds directly to a STRING literal —
+     * the constant's value rendered via SymbolNUMBER.__str__ (the same
+     * normalised int-or-float str() py_number_str reproduces).  This must
+     * run BEFORE the float typecast / BUILTIN-node construction below: the
+     * folded STRING takes the static __STORE_STR path (a .LABEL data block)
+     * instead of the runtime __STR_FAST + __STORE_STR2 the BUILTIN node
+     * lowers to.  is_number is exactly check_is_number (NUMBER node or a
+     * numeric CLASS_const id), so a non-constant variable STAYS runtime
+     * (not over-folded), matching Python's else branch. */
+    if (kw == BTOK_STR && check_is_number(arg)) {
+        double v;
+        if (zxbc_eval_to_num(arg, &v)) {
+            char buf[64];
+            py_number_str(v, buf, sizeof(buf));
+            return make_string(p, buf, lineno);
         }
     }
 
@@ -2155,6 +2194,30 @@ static AstNode *parse_postfix(Parser *p, AstNode *left, bool expr_context) {
             } while (match(p, BTOK_COMMA));
         }
         consume(p, BTOK_RP, "Expected ')' after postfix index");
+
+        /* Empty postfix group on a STRING LITERAL base => the string
+         * identity (Python p_string_lprp, zxbparser.py:2557-2559):
+         *     string : string LP RP   ->   p[0] = p[1]   (returned UNCHANGED)
+         * This production reduces only for a bare `string` non-terminal,
+         * which a STRC literal IS (p_string_str, :2552-2554 -> `string`).
+         * `"STRING"()` therefore yields the static STRING constant itself,
+         * taking the __STORE_STR path — not the runtime ARRAYACCESS copy
+         * (__STORE_STR2) the else branch below would build.  Chained empty
+         * groups (`"STRING"()()`) iterate harmlessly: each `()` reduces the
+         * still-`string` literal to itself, matching Python (rc=0).
+         *
+         * Scoped to AST_STRING ONLY so the accept/reject of every OTHER
+         * empty-group base is unchanged: a string VAR (AST_ID, Python's
+         * VarRef AttributeError), a func_call (AST_FUNCCALL, no
+         * `string : func_call LP RP` production), or an array element
+         * (AST_ARRAYACCESS) all fall through to the unmodified else branch
+         * exactly as before.  CONST strings never reach here — `c$()` is
+         * resolved by parse_call_or_array's CLASS_const branch
+         * (parser.c:1832-1837, len(args)==0 -> return entry). */
+        if (expr_context && arglist->child_count == 0 &&
+            left && left->tag == AST_STRING) {
+            continue;  /* p[0] = p[1] — base string unchanged */
+        }
 
         /* String-typed base in a READ context => the postfix group is a
          * substring slice, exactly Python's `string : func_call substr`
