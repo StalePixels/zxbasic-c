@@ -8451,6 +8451,53 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
     case 66: /* statement : ASM (make_asm_sentence(p[1], lineno)) */
         r = make_asm_node(p, PD_SVAL(1) ? PD_SVAL(1) : "", PD_LINENO(1));
         break;
+    case 216: /* statement : PAUSE expr */
+        r = make_sentence_node(p, "PAUSE", PD_LINENO(1));
+        ast_add_child(p->cs, r,
+            make_typecast(p->cs, st->basic_types[TYPE_uinteger], PD_NODE(2), PD_LINENO(1)));
+        break;
+
+    /* ---- GOTO / GOSUB ----
+     * goto : GO TO | GO SUB | GOTO | GOSUB (p_go): result is the kind string;
+     * GOSUB inside a SUB/FUNCTION is an error (checked here, p_go timing).
+     * We carry the kind as a PdId{name=kind}. */
+    case 86: case 87: case 88: case 89: {
+        const char *kind;
+        int ln = PD_LINENO(1);
+        if (prodno == 86) kind = "GOTO";       /* GO TO */
+        else if (prodno == 87) kind = "GOSUB"; /* GO SUB */
+        else if (prodno == 88) kind = "GOTO";  /* GOTO */
+        else kind = "GOSUB";                   /* GOSUB */
+        if (strcmp(kind, "GOSUB") == 0 && p->cs->function_level.len > 0)
+            zxbc_error(p->cs, ln, "GOSUB not allowed within SUB or FUNCTION");
+        PdId *k = pd_new_id(p, kind, ln);
+        *out = k;
+        *out_lineno = ln;
+        return true;
+    }
+    case 84: case 85: { /* statement : goto NUMBER | goto ID
+                         * p_goto: entry = check_and_make_label(p[2], ln);
+                         * make_sentence(p[1].upper(), entry). To match the
+                         * production parser's tree (C-vs-C compare) build the
+                         * SENTENCE(kind) with a single AST_ID label child
+                         * (name, class_=label), as parser.c:3705-3711. */
+        PdId *k = (PdId *)rhs[0].value;
+        int ln = k->lineno;
+        const char *label;
+        char buf[32];
+        if (prodno == 84) { /* goto NUMBER — label is the integer rendered */
+            snprintf(buf, sizeof(buf), "%d", (int)PD_NUM(2));
+            label = buf;
+        } else {            /* goto ID */
+            label = PD_SVAL(2) ? PD_SVAL(2) : "";
+        }
+        r = make_sentence_node(p, k->name, ln);
+        AstNode *lbl = ast_new(p->cs, AST_ID, ln);
+        lbl->u.id.name = arena_strdup(&p->cs->arena, label);
+        lbl->u.id.class_ = CLASS_label;
+        ast_add_child(p->cs, r, lbl);
+        break;
+    }
     case 217: /* statement : POKE expr COMMA expr */
         r = make_sentence_node(p, "POKE", PD_LINENO(1));
         ast_add_child(p->cs, r,
