@@ -8295,8 +8295,48 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
     case 297: /* expr : bexpr */
         r = PD_NODE(1);
         break;
+    case 278: /* bexpr : LP expr RP -> p[2] */
+        r = PD_NODE(2);
+        break;
 
-    /* ---- simplest statements ---- */
+    /* ---- binary operators (expr OP expr). make_binary_node does the type
+     * coercion + constant folding + CONSTEXPR/string-concat exactly as the
+     * production parser's parse_infix; the operator strings match
+     * operator_name() so the C-vs-C AST compare is self-consistent. p.lineno
+     * is the OPERATOR's line (p.lineno(2)). ---- */
+    case 255: r = make_binary_node(p->cs, "PLUS", PD_NODE(1), PD_NODE(3), PD_LINENO(2), NULL); break;
+    case 256: r = make_binary_node(p->cs, "MINUS", PD_NODE(1), PD_NODE(3), PD_LINENO(2), NULL); break;
+    case 257: r = make_binary_node(p->cs, "MULT", PD_NODE(1), PD_NODE(3), PD_LINENO(2), NULL); break;
+    case 258: r = make_binary_node(p->cs, "DIV", PD_NODE(1), PD_NODE(3), PD_LINENO(2), NULL); break;
+    case 259: r = make_binary_node(p->cs, "MOD", PD_NODE(1), PD_NODE(3), PD_LINENO(2), NULL); break;
+    case 260: r = make_binary_node(p->cs, "POW", PD_NODE(1), PD_NODE(3), PD_LINENO(2), NULL); break;
+    case 261: r = make_binary_node(p->cs, "SHL", PD_NODE(1), PD_NODE(3), PD_LINENO(2), NULL); break;
+    case 262: r = make_binary_node(p->cs, "SHR", PD_NODE(1), PD_NODE(3), PD_LINENO(2), NULL); break;
+    case 264: r = make_binary_node(p->cs, "EQ", PD_NODE(1), PD_NODE(3), PD_LINENO(2), NULL); break;
+    case 265: r = make_binary_node(p->cs, "LT", PD_NODE(1), PD_NODE(3), PD_LINENO(2), NULL); break;
+    case 266: r = make_binary_node(p->cs, "LE", PD_NODE(1), PD_NODE(3), PD_LINENO(2), NULL); break;
+    case 267: r = make_binary_node(p->cs, "GT", PD_NODE(1), PD_NODE(3), PD_LINENO(2), NULL); break;
+    case 268: r = make_binary_node(p->cs, "GE", PD_NODE(1), PD_NODE(3), PD_LINENO(2), NULL); break;
+    case 269: r = make_binary_node(p->cs, "NE", PD_NODE(1), PD_NODE(3), PD_LINENO(2), NULL); break;
+    case 270: r = make_binary_node(p->cs, "OR", PD_NODE(1), PD_NODE(3), PD_LINENO(2), NULL); break;
+    case 271: r = make_binary_node(p->cs, "BOR", PD_NODE(1), PD_NODE(3), PD_LINENO(2), NULL); break;
+    case 272: r = make_binary_node(p->cs, "XOR", PD_NODE(1), PD_NODE(3), PD_LINENO(2), NULL); break;
+    case 273: r = make_binary_node(p->cs, "BXOR", PD_NODE(1), PD_NODE(3), PD_LINENO(2), NULL); break;
+    case 274: r = make_binary_node(p->cs, "AND", PD_NODE(1), PD_NODE(3), PD_LINENO(2), NULL); break;
+    case 275: r = make_binary_node(p->cs, "BAND", PD_NODE(1), PD_NODE(3), PD_LINENO(2), NULL); break;
+
+    /* ---- unary operators ---- */
+    case 263: /* expr : MINUS expr %prec UMINUS */
+        r = make_unary_node(p->cs, "MINUS", PD_NODE(2), PD_LINENO(1));
+        break;
+    case 276: /* expr : NOT expr */
+        r = make_unary_node(p->cs, "NOT", PD_NODE(2), PD_LINENO(1));
+        break;
+    case 277: /* expr : BNOT expr */
+        r = make_unary_node(p->cs, "BNOT", PD_NODE(2), PD_LINENO(1));
+        break;
+
+    /* ---- simple statements ---- */
     case 56: /* statement : BORDER expr */
         r = make_sentence_node(p, "BORDER", PD_LINENO(1));
         ast_add_child(p->cs, r,
@@ -8305,6 +8345,47 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
     case 65: /* statement : CLS */
         r = make_sentence_node(p, "CLS", PD_LINENO(1));
         break;
+    case 67: /* statement : RANDOMIZE */
+        r = make_sentence_node(p, "RANDOMIZE", PD_LINENO(1));
+        ast_add_child(p->cs, r,
+            make_number(p, 0, PD_LINENO(1), st->basic_types[TYPE_ulong]));
+        break;
+    case 68: /* statement : RANDOMIZE expr */
+        r = make_sentence_node(p, "RANDOMIZE", PD_LINENO(1));
+        ast_add_child(p->cs, r,
+            make_typecast(p->cs, st->basic_types[TYPE_ulong], PD_NODE(2), PD_LINENO(1)));
+        break;
+    case 69: /* statement : BEEP expr COMMA expr */
+        r = make_sentence_node(p, "BEEP", PD_LINENO(1));
+        ast_add_child(p->cs, r,
+            make_typecast(p->cs, st->basic_types[TYPE_float], PD_NODE(2), PD_LINENO(1)));
+        ast_add_child(p->cs, r,
+            make_typecast(p->cs, st->basic_types[TYPE_float], PD_NODE(4), PD_LINENO(3)));
+        break;
+    case 223: /* statement : OUT expr COMMA expr */
+        r = make_sentence_node(p, "OUT", PD_LINENO(1));
+        ast_add_child(p->cs, r,
+            make_typecast(p->cs, st->basic_types[TYPE_uinteger], PD_NODE(2), PD_LINENO(3)));
+        ast_add_child(p->cs, r,
+            make_typecast(p->cs, st->basic_types[TYPE_ubyte], PD_NODE(4), PD_LINENO(4)));
+        break;
+    /* p_simple_instruction (one prodno per keyword): make_sentence(KIND,
+     * typecast(ubyte, p[2])). Kind == the keyword text. */
+    case 224: case 225: case 226: case 227:
+    case 228: case 229: case 230: case 231: {
+        const char *kind =
+            (prodno == 224) ? "ITALIC" :
+            (prodno == 225) ? "BOLD" :
+            (prodno == 226) ? "INK" :
+            (prodno == 227) ? "PAPER" :
+            (prodno == 228) ? "BRIGHT" :
+            (prodno == 229) ? "FLASH" :
+            (prodno == 230) ? "OVER" : "INVERSE";
+        r = make_sentence_node(p, kind, PD_LINENO(1));
+        ast_add_child(p->cs, r,
+            make_typecast(p->cs, st->basic_types[TYPE_ubyte], PD_NODE(2), PD_LINENO(1)));
+        break;
+    }
 
     default:
         /* Production not yet ported — flag for the harness. */
