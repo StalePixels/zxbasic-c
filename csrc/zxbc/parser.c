@@ -808,6 +808,68 @@ static AstNode *parse_builtin_func(Parser *p, const char *fname, BTokenType kw) 
         }
     }
 
+    /* p_len (zxbparser.py:3381-3394) — full faithful port of the LEN
+     * production, in Python's exact branch order:
+     *
+     *     bexpr : LEN bexpr %prec UMINUS
+     *     arg = p[2]
+     *     if arg is None:                              -> p[0] = None
+     *     elif arg.token == "VAR" and arg.class_ == CLASS.array:
+     *         p[0] = make_number(len(arg.bounds), p.lineno(1))   # dims fold
+     *     elif arg.type_ != TYPE.string:
+     *         syntax_error_expected_string(...); p[0] = None     # non-string
+     *     elif is_string(arg):                                   # const str
+     *         p[0] = make_number(len(arg.value), p.lineno(1))    # length fold
+     *     else:
+     *         p[0] = make_builtin(p.lineno(1), "LEN", arg, type_=uinteger)
+     *
+     * Both folds call make_number WITHOUT a type_, so the NUMBER re-infers
+     * its implicit type from the value (make_number above, NULL arg) — e.g.
+     * LEN("ZXBASIC") -> 7 infers ubyte, so the enclosing LET stores a 1-byte
+     * scalar and the implicit-type W100 says 'ubyte', exactly like Python
+     * (the runtime BUILTIN-node path is uinteger -> 2-byte / 'uinteger').
+     *
+     * The array branch folds to the DIMENSION COUNT (len(bounds)), like
+     * LBOUND(arr)/UBOUND(arr) above; arr_boundlist->child_count == len(arg.
+     * bounds).  is_string is exactly check.is_string single-arg form: a bare
+     * STRING literal, or a CLASS_const id of string type (constref value is
+     * the folded STRING) — so a runtime string VARIABLE (AST_ID, CLASS_var)
+     * is NOT folded and takes the else branch (runtime __STRLEN), matching
+     * Python. */
+    if (kw == BTOK_LEN) {
+        AstNode *larg = n->child_count > 0 ? n->children[0] : NULL;
+        if (larg) {
+            /* Branch 1: LEN(<array variable>) -> #dimensions, folded. */
+            if (larg->tag == AST_ID && larg->u.id.class_ == CLASS_array) {
+                AstNode *bl = larg->u.id.arr_boundlist;
+                int nbounds = bl ? bl->child_count : 0;
+                return make_number(p, nbounds, lineno, NULL);
+            }
+            /* Branch 2: non-string, non-array -> expected-string error. */
+            if (!type_is_string(larg->type_)) {
+                const TypeInfo *aft =
+                    (larg->type_ && larg->type_->final_type)
+                        ? larg->type_->final_type : larg->type_;
+                const char *atn = (aft && aft->tag == AST_BASICTYPE)
+                                      ? basictype_to_string(aft->basic_type)
+                                      : "unknown";
+                err_expected_string(p->cs, lineno, atn);
+                return NULL;
+            }
+            /* Branch 3: LEN(<constant string>) -> length, folded.
+             * is_string single-arg: a STRING literal or a CLASS_const id of
+             * string type.  const_string_value_node resolves either to the
+             * underlying AST_STRING whose .length is len(arg.value). */
+            const AstNode *sv = const_string_value_node(larg);
+            if (sv && sv->tag == AST_STRING) {
+                return make_number(p, sv->u.string.length, lineno, NULL);
+            }
+            /* Branch 4 (else): runtime LEN — fall through to the
+             * result-type switch below, which sets type_=uinteger and keeps
+             * the BUILTIN node (__STRLEN). */
+        }
+    }
+
     /* p_expr_int (zxbparser.py:3540-3542): INT is NOT a builtin — it is
      * exactly make_typecast(TYPE.long_, p[2], lineno). Build the
      * TYPECAST so codegen runs the faithful long conversion (the
