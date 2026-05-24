@@ -2140,6 +2140,33 @@ static AstNode *parse_builtin_func(Parser *p, const char *fname, BTokenType kw) 
     return n;
 }
 
+/* Address-of a bare identifier (`bexpr : ADDRESSOF singleid`, p_addr_of_id
+ * zxbparser.py:2667). access_id(ignore_explicit) + has_address + mark accessed
+ * + UNARY ADDRESS (PTR_TYPE), CONSTEXPR-wrapped when the entry is not dynamic.
+ * Extracted from parse_primary's @ branch so the Phase-D reduce reuses it
+ * (C-vs-C identity). Behaviour-preserving. */
+static AstNode *addr_of_id(Parser *p, const char *name, int lineno) {
+    AstNode *entry = symboltable_access_id_noexplicit(
+                         p->cs->symbol_table, p->cs, name, lineno,
+                         NULL, CLASS_unknown);
+    if (entry == NULL)
+        return NULL;
+    entry->u.id.has_address = true;
+    if (!(p->cs->function_level.len > 0 &&
+          entry->u.id.class_ == CLASS_function))
+        mark_label_accessed(entry);
+    AstNode *n = make_unary_node(p->cs, "ADDRESS", entry, lineno);
+    if (n)
+        n->type_ = p->cs->symbol_table->basic_types[TYPE_uinteger];
+    if (n && !check_is_dynamic(entry)) {
+        AstNode *ce = ast_new(p->cs, AST_CONSTEXPR, lineno);
+        ast_add_child(p->cs, ce, n);
+        ce->type_ = n->type_;
+        return ce;
+    }
+    return n;
+}
+
 /* Parse primary expression (atoms, unary ops, parenthesized exprs) */
 AstNode *parse_primary(Parser *p) {
     /* Number literal */
@@ -2254,39 +2281,7 @@ AstNode *parse_primary(Parser *p) {
          * this same CLASS_unknown entry to a label (to_label,
          * _id.py:143) — the UNARY operand IS that shared entry, so its
          * mangled/.t resolve like the LabelRef at translate time. */
-        AstNode *entry = symboltable_access_id_noexplicit(
-                             p->cs->symbol_table, p->cs, name, lineno,
-                             NULL, CLASS_unknown);
-        if (entry == NULL)
-            return NULL;
-
-        entry->u.id.has_address = true;          /* :2682 */
-        /* mark_entry_as_accessed (zxbparser.py:167-174): in global scope
-         * (or non-FUNCTION token) -> entry.accessed = True. For a label
-         * the LabelRef.accessed setter cascades to scope_owner; model
-         * that via mark_label_accessed. (A label may not yet be class_
-         * == CLASS_label here — the later `<name>:` def's
-         * label_capture_scope_owner re-fires the cascade.) */
-        if (!(p->cs->function_level.len > 0 &&
-              entry->u.id.class_ == CLASS_function))
-            mark_label_accessed(entry);          /* :171 (+ cascade) */
-
-        AstNode *n = make_unary_node(p->cs, "ADDRESS", entry, lineno);
-        if (n)
-            n->type_ = p->cs->symbol_table->basic_types[TYPE_uinteger];
-
-        /* p[0] = result if is_dynamic(entry) else make_constexpr(result).
-         * A global scalar of a basic non-string type (a LABEL's ref
-         * type_ is PTR_TYPE==uinteger, scope global) is NOT dynamic ->
-         * CONSTEXPR-wrap so it folds to the static label at translate
-         * time (no runtime ld/push). */
-        if (n && !check_is_dynamic(entry)) {
-            AstNode *ce = ast_new(p->cs, AST_CONSTEXPR, lineno);
-            ast_add_child(p->cs, ce, n);
-            ce->type_ = n->type_;
-            return ce;
-        }
-        return n;
+        return addr_of_id(p, name, lineno);
     }
 
     /* Builtin functions */
@@ -8539,6 +8534,11 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
     case 278: /* bexpr : LP expr RP -> p[2] */
         r = PD_NODE(2);
         break;
+    case 296: { /* bexpr : ADDRESSOF singleid (p_addr_of_id) */
+        PdId *id = (PdId *)rhs[1].value;
+        r = addr_of_id(p, id->name, id->lineno);
+        break;
+    }
     case 295: { /* bexpr : ID  (p_id_expr, zxbparser.py:2647). access_id with
                  * default_class=var, mark accessed, auto-type -> DEFAULT_TYPE
                  * + warning. Faithful to parser.c:2292-2314 scalar-read core.
