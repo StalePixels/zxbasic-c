@@ -343,17 +343,358 @@ static void py_number_str(double value, char *buf, size_t sz) {
  * invalid input, and a documented (flagged) divergence ONLY for the rare
  * non-numeric-but-eval()-able strings that realistic VAL code never uses.
  *
- * Python int arithmetic is arbitrary precision; we use int64.  An int
- * subexpression that overflows int64 is the flagged big-int boundary: we
- * report failure (-> except->0) rather than fold a wrong value, which
- * diverges from Python (it would succeed) but never emits a wrong number.
+ * Python int arithmetic is ARBITRARY PRECISION; the integer domain
+ * (+ - * // % ** on ints) is therefore evaluated with a sign-magnitude
+ * BigInt (base 2^32 limbs, see below), then float()-coerced with correct
+ * IEEE-754 round-to-nearest-even — so the folded constant is byte-identical
+ * to Python's `float(eval(s))` for every representable value (e.g.
+ * VAL("2**100") -> 1.2676506002282294e30, not 0).  A value whose float()
+ * overflows the double range (>~1.8e308, e.g. 74**800) raises in Python
+ * (OverflowError) and is caught -> except->0+warning; the BigInt path
+ * reproduces that exactly (BIG_to_double returns +inf -> val_fold fails).
+ * Floats and true-division (/) stay double, as in Python.
  * ---------------------------------------------------------------- */
 
-/* A Python value in the numeric domain: an exact int (Python int) or a
- * float.  `i` is meaningful iff is_int; otherwise `d` holds the float. */
+/* Sign-magnitude arbitrary-precision integer in base 2^32 (little-endian
+ * limbs).  BIG_LIMBS caps the magnitude well above the double-range ceiling:
+ * a finite double needs < 1024 significant bits (32 limbs); any integer that
+ * needs more than BIG_LIMBS limbs (8192 bits) float()-overflows anyway, so
+ * the cap is a faithful overflow signal (Python would compute the int but its
+ * float() would raise -> except->0) rather than a silent wrong answer. */
+#define BIG_LIMBS 256
+typedef struct {
+    int sign;                 /* -1, 0, or +1 (0 magnitude => sign 0) */
+    int n;                    /* number of significant limbs (0 => zero) */
+    uint32_t d[BIG_LIMBS];    /* little-endian base-2^32 limbs */
+    bool overflow;            /* exceeded BIG_LIMBS — treat as float-overflow */
+} BigInt;
+
+static void big_zero(BigInt *a) {
+    a->sign = 0;
+    a->n = 0;
+    a->overflow = false;
+    memset(a->d, 0, sizeof(a->d));  /* ops read dest limbs (mul/add/shl) */
+}
+
+static void big_norm(BigInt *a) {
+    while (a->n > 0 && a->d[a->n - 1] == 0) a->n--;
+    if (a->n == 0) a->sign = 0;
+}
+
+static void big_from_u64(BigInt *a, uint64_t v) {
+    big_zero(a);
+    if (v == 0) return;
+    a->sign = 1;
+    a->d[0] = (uint32_t)(v & 0xFFFFFFFFu);
+    a->d[1] = (uint32_t)(v >> 32);
+    a->n = a->d[1] ? 2 : 1;
+}
+
+/* Compare magnitudes only: -1 if |a|<|b|, 0 if equal, 1 if |a|>|b|. */
+static int big_cmp_mag(const BigInt *a, const BigInt *b) {
+    if (a->n != b->n) return a->n < b->n ? -1 : 1;
+    for (int i = a->n - 1; i >= 0; i--)
+        if (a->d[i] != b->d[i]) return a->d[i] < b->d[i] ? -1 : 1;
+    return 0;
+}
+
+/* r = |a| + |b| (magnitudes); sets r->overflow if it exceeds BIG_LIMBS. */
+static void big_add_mag(const BigInt *a, const BigInt *b, BigInt *r) {
+    const BigInt *x = a->n >= b->n ? a : b;
+    const BigInt *y = a->n >= b->n ? b : a;
+    uint64_t carry = 0;
+    int i;
+    BigInt tmp;
+    big_zero(&tmp);
+    for (i = 0; i < y->n; i++) {
+        uint64_t s = (uint64_t)x->d[i] + y->d[i] + carry;
+        tmp.d[i] = (uint32_t)s;
+        carry = s >> 32;
+    }
+    for (; i < x->n; i++) {
+        uint64_t s = (uint64_t)x->d[i] + carry;
+        tmp.d[i] = (uint32_t)s;
+        carry = s >> 32;
+    }
+    if (carry) {
+        if (i >= BIG_LIMBS) { r->overflow = true; r->sign = 0; r->n = 0; return; }
+        tmp.d[i++] = (uint32_t)carry;
+    }
+    tmp.n = i;
+    tmp.sign = i ? 1 : 0;
+    *r = tmp;
+}
+
+/* r = |a| - |b|, requires |a| >= |b| (magnitudes). */
+static void big_sub_mag(const BigInt *a, const BigInt *b, BigInt *r) {
+    int64_t borrow = 0;
+    int i;
+    BigInt tmp;
+    big_zero(&tmp);
+    for (i = 0; i < a->n; i++) {
+        int64_t s = (int64_t)a->d[i] - (i < b->n ? b->d[i] : 0) - borrow;
+        if (s < 0) { s += ((int64_t)1 << 32); borrow = 1; } else borrow = 0;
+        tmp.d[i] = (uint32_t)s;
+    }
+    tmp.n = a->n;
+    tmp.sign = 1;
+    big_norm(&tmp);
+    *r = tmp;
+}
+
+/* Signed add: r = a + b. */
+static void big_add(const BigInt *a, const BigInt *b, BigInt *r) {
+    if (a->overflow || b->overflow) { big_zero(r); r->overflow = true; return; }
+    if (a->sign == 0) { *r = *b; return; }
+    if (b->sign == 0) { *r = *a; return; }
+    if (a->sign == b->sign) {
+        int s = a->sign;
+        big_add_mag(a, b, r);
+        if (!r->overflow && r->n) r->sign = s;
+    } else {
+        int c = big_cmp_mag(a, b);
+        if (c == 0) { big_zero(r); return; }
+        if (c > 0) { big_sub_mag(a, b, r); r->sign = a->sign; }
+        else       { big_sub_mag(b, a, r); r->sign = b->sign; }
+    }
+}
+
+static void big_neg(BigInt *a) { if (a->n) a->sign = -a->sign; }
+
+/* Signed subtract: r = a - b. */
+static void big_sub(const BigInt *a, const BigInt *b, BigInt *r) {
+    BigInt nb = *b;
+    big_neg(&nb);
+    big_add(a, &nb, r);
+}
+
+/* r = a * b (signed). */
+static void big_mul(const BigInt *a, const BigInt *b, BigInt *r) {
+    if (a->overflow || b->overflow) { big_zero(r); r->overflow = true; return; }
+    if (a->sign == 0 || b->sign == 0) { big_zero(r); return; }
+    int rn = a->n + b->n;
+    if (rn > BIG_LIMBS) { big_zero(r); r->overflow = true; return; }
+    BigInt tmp;
+    big_zero(&tmp);
+    for (int i = 0; i < a->n; i++) {
+        uint64_t carry = 0;
+        for (int j = 0; j < b->n; j++) {
+            uint64_t s = (uint64_t)a->d[i] * b->d[j] + tmp.d[i + j] + carry;
+            tmp.d[i + j] = (uint32_t)s;
+            carry = s >> 32;
+        }
+        tmp.d[i + b->n] += (uint32_t)carry;  /* fits: rn<=BIG_LIMBS */
+    }
+    tmp.n = rn;
+    tmp.sign = a->sign * b->sign;
+    big_norm(&tmp);
+    *r = tmp;
+}
+
+/* Multiply magnitude by a small (<2^32) value and add a small addend — used
+ * by the decimal/hex/oct/bin literal scanner (a = a*base + dv). */
+static void big_muladd_small(BigInt *a, uint32_t base, uint32_t add) {
+    if (a->overflow) return;
+    uint64_t carry = add;
+    int i;
+    for (i = 0; i < a->n; i++) {
+        uint64_t s = (uint64_t)a->d[i] * base + carry;
+        a->d[i] = (uint32_t)s;
+        carry = s >> 32;
+    }
+    while (carry) {
+        if (i >= BIG_LIMBS) { a->overflow = true; a->sign = 0; a->n = 0; return; }
+        a->d[i++] = (uint32_t)carry;
+        carry >>= 32;
+    }
+    a->n = i;
+    a->sign = i ? 1 : 0;
+}
+
+/* Bit length of the magnitude (0 for zero). */
+static int big_bitlen(const BigInt *a) {
+    if (a->n == 0) return 0;
+    uint32_t top = a->d[a->n - 1];
+    int bits = (a->n - 1) * 32;
+    while (top) { bits++; top >>= 1; }
+    return bits;
+}
+
+static bool big_test_bit(const BigInt *a, int bit) {
+    int limb = bit >> 5, off = bit & 31;
+    if (limb >= a->n) return false;
+    return (a->d[limb] >> off) & 1u;
+}
+
+/* Shift magnitude left by k bits (k arbitrary). */
+static void big_shl(const BigInt *a, int k, BigInt *r) {
+    BigInt tmp;
+    big_zero(&tmp);
+    if (a->n == 0 || k < 0) { *r = tmp; return; }
+    int limbshift = k >> 5, bitshift = k & 31;
+    int nn = a->n + limbshift + 1;
+    if (nn > BIG_LIMBS) { big_zero(r); r->overflow = true; return; }
+    uint64_t carry = 0;
+    for (int i = 0; i < a->n; i++) {
+        uint64_t v = ((uint64_t)a->d[i] << bitshift) | carry;
+        tmp.d[i + limbshift] = (uint32_t)v;
+        carry = v >> 32;
+    }
+    tmp.d[a->n + limbshift] = (uint32_t)carry;
+    tmp.n = nn;
+    tmp.sign = 1;
+    big_norm(&tmp);
+    *r = tmp;
+}
+
+/* Full magnitude divmod via shift-subtract (binary long division):
+ * |a| = q*|b| + rem, 0 <= rem < |b|.  Both outputs are magnitudes (sign 0/1).
+ * Requires b != 0. */
+static void big_divmod_mag(const BigInt *a, const BigInt *b,
+                           BigInt *q, BigInt *rem) {
+    BigInt qq, rr;
+    big_zero(&qq);
+    big_zero(&rr);
+    int bits = big_bitlen(a);
+    for (int i = bits - 1; i >= 0; i--) {
+        /* rr = (rr << 1) | bit_i(a) */
+        BigInt shifted;
+        big_shl(&rr, 1, &shifted);
+        rr = shifted;
+        if (big_test_bit(a, i)) {
+            if (rr.n == 0) { rr.n = 1; rr.sign = 1; }
+            rr.d[0] |= 1u;
+            if (rr.sign == 0) rr.sign = 1;
+        }
+        if (big_cmp_mag(&rr, b) >= 0) {
+            BigInt t;
+            big_sub_mag(&rr, b, &t);
+            rr = t;
+            int limb = i >> 5, off = i & 31;
+            if (limb >= qq.n) qq.n = limb + 1;
+            qq.d[limb] |= (1u << off);
+            qq.sign = 1;
+        }
+    }
+    big_norm(&qq);
+    big_norm(&rr);
+    *q = qq;
+    *rem = rr;
+}
+
+/* Python floor division a // b (signed, floor toward -inf).  Returns false
+ * on b == 0 (ZeroDivisionError -> except->0). */
+static bool big_floordiv(const BigInt *a, const BigInt *b, BigInt *out) {
+    if (b->sign == 0) return false;
+    if (a->sign == 0) { big_zero(out); return true; }
+    BigInt q, r;
+    big_divmod_mag(a, b, &q, &r);
+    int s = a->sign * b->sign;
+    if (s < 0 && r.n != 0) {
+        /* truncated-toward-zero quotient q; floor needs q+1 in magnitude. */
+        BigInt one, q2;
+        big_from_u64(&one, 1);
+        big_add_mag(&q, &one, &q2);
+        q = q2;
+    }
+    if (q.n) q.sign = s;
+    big_norm(&q);
+    *out = q;
+    return true;
+}
+
+/* Python modulo a % b (signed; result sign follows divisor).  Returns false
+ * on b == 0. */
+static bool big_mod(const BigInt *a, const BigInt *b, BigInt *out) {
+    if (b->sign == 0) return false;
+    if (a->sign == 0) { big_zero(out); return true; }
+    BigInt q, r;
+    big_divmod_mag(a, b, &q, &r);
+    if (r.n == 0) { big_zero(out); return true; }
+    /* r is the magnitude of the truncated remainder (sign of dividend). */
+    r.sign = a->sign;
+    if (a->sign != b->sign) {
+        /* Python's % follows the divisor: add b to bring sign in line. */
+        BigInt t;
+        big_add(&r, b, &t);
+        r = t;
+    }
+    *out = r;
+    return true;
+}
+
+/* r = base ** exp (exp >= 0), by square-and-multiply.  exp is an unsigned
+ * 64-bit count; overflow past BIG_LIMBS sets r->overflow. */
+static void big_pow(const BigInt *base, uint64_t exp, BigInt *r) {
+    BigInt result, b;
+    big_from_u64(&result, 1);
+    b = *base;
+    while (exp > 0) {
+        if (exp & 1) {
+            BigInt t;
+            big_mul(&result, &b, &t);
+            result = t;
+            if (result.overflow) { *r = result; return; }
+        }
+        exp >>= 1;
+        if (exp) {
+            BigInt t;
+            big_mul(&b, &b, &t);
+            b = t;
+            if (b.overflow) { big_zero(r); r->overflow = true; return; }
+        }
+    }
+    *r = result;
+}
+
+/* Convert a BigInt to double with IEEE-754 round-to-nearest-even, exactly
+ * matching Python's int.__float__.  Returns +/-inf on float() overflow
+ * (magnitude needs >= 1024 bits of exponent), which the caller treats as
+ * Python's OverflowError -> except->0. */
+static double big_to_double(const BigInt *a) {
+    if (a->overflow) return a->sign < 0 ? -INFINITY : INFINITY;
+    if (a->n == 0) return 0.0;
+    int bits = big_bitlen(a);
+    /* Collect the top min(53, bits) bits into `mant` (MSB first); `scale` is
+     * the count of low-order bit positions NOT folded into mant, so the exact
+     * value is mant * 2^scale.  Round to nearest-even using the next bit and a
+     * sticky OR of everything below it. */
+    uint64_t mant = 0;
+    int taken = 0;
+    int i;
+    for (i = bits - 1; i >= 0 && taken < 53; i--, taken++)
+        mant = (mant << 1) | (big_test_bit(a, i) ? 1u : 0u);
+    int scale = i + 1;                 /* low bits at positions [0 .. i] remain */
+    /* i now points just below the consumed window: the round bit is bit i. */
+    if (i >= 0) {
+        bool round_bit = big_test_bit(a, i);
+        bool sticky = false;
+        for (int j = i - 1; j >= 0 && !sticky; j--)
+            if (big_test_bit(a, j)) sticky = true;
+        bool roundup = false;
+        if (round_bit) {
+            if (sticky) roundup = true;
+            else roundup = (mant & 1u) != 0;  /* tie -> round to even */
+        }
+        if (roundup) {
+            mant++;
+            if (mant == ((uint64_t)1 << 53)) { mant >>= 1; scale++; }  /* carry */
+        }
+    }
+    /* value = mant * 2^scale.  ldexp yields +inf on overflow (magnitude past
+     * the double range); the caller treats a non-finite result as Python's
+     * float() OverflowError -> except->0. */
+    double val = ldexp((double)mant, scale);
+    if (!isfinite(val)) return a->sign < 0 ? -INFINITY : INFINITY;
+    return a->sign < 0 ? -val : val;
+}
+
+/* A Python value in the numeric domain: an exact int (a BigInt, Python's
+ * arbitrary-precision int) or a float.  `big` is meaningful iff is_int;
+ * otherwise `d` holds the float. */
 typedef struct {
     bool is_int;
-    int64_t i;
+    BigInt big;
     double d;
 } PyNum;
 
@@ -362,10 +703,12 @@ typedef struct {
     const char *s;
     size_t len;
     size_t pos;
-    bool error;  /* set on any parse/eval failure (incl. int64 overflow) */
+    bool error;  /* set on any parse/eval failure (incl. bignum overflow) */
 } ValParser;
 
-static double pynum_to_double(PyNum v) { return v.is_int ? (double)v.i : v.d; }
+static double pynum_to_double(PyNum v) {
+    return v.is_int ? big_to_double(&v.big) : v.d;
+}
 
 static void val_skip_ws(ValParser *vp) {
     /* Python's tokenizer treats spaces/tabs/form-feed as insignificant
@@ -383,9 +726,11 @@ static bool val_parse_expr(ValParser *vp, PyNum *out);
 
 /* Scan an integer literal body in the given base, honouring PEP-515
  * underscores (a single '_' allowed between digits, never leading/trailing
- * or doubled).  Returns false on overflow or malformed underscore. */
-static bool val_scan_int_base(ValParser *vp, int base, int64_t *out) {
-    uint64_t acc = 0;
+ * or doubled).  Accumulates into an arbitrary-precision BigInt; returns false
+ * only on malformed underscore / no digits / bignum-cap overflow. */
+static bool val_scan_int_base(ValParser *vp, int base, BigInt *out) {
+    BigInt acc;
+    big_zero(&acc);
     bool any = false;
     bool last_us = true;  /* disallow leading underscore */
     while (vp->pos < vp->len) {
@@ -402,16 +747,14 @@ static bool val_scan_int_base(ValParser *vp, int base, int64_t *out) {
         else if (c >= 'A' && c <= 'F') dv = c - 'A' + 10;
         else break;
         if (dv >= base) break;
-        /* overflow check: acc*base + dv must fit uint64 then int64 */
-        if (acc > (UINT64_MAX - (uint64_t)dv) / (uint64_t)base) return false;
-        acc = acc * (uint64_t)base + (uint64_t)dv;
+        big_muladd_small(&acc, (uint32_t)base, (uint32_t)dv);
+        if (acc.overflow) return false;  /* >8192-bit literal -> except->0 */
         any = true;
         last_us = false;
         vp->pos++;
     }
     if (!any || last_us) return false;       /* no digits / trailing '_' */
-    if (acc > (uint64_t)INT64_MAX) return false;  /* int64 boundary */
-    *out = (int64_t)acc;
+    *out = acc;
     return true;
 }
 
@@ -432,10 +775,10 @@ static bool val_parse_number(ValParser *vp, PyNum *out) {
         else if (p2 == 'b' || p2 == 'B') base = 2;
         if (base) {
             vp->pos += 2;
-            int64_t iv;
+            BigInt iv;
             if (!val_scan_int_base(vp, base, &iv)) return false;
             out->is_int = true;
-            out->i = iv;
+            out->big = iv;
             return true;
         }
     }
@@ -543,17 +886,17 @@ static bool val_parse_number(ValParser *vp, PyNum *out) {
                 if (buf[j] != '0') { all_zero = false; break; }
             if (!all_zero) return false;  /* leading-zero decimal => error */
         }
-        /* Re-scan buf (underscores already stripped) as a base-10 int with
-         * overflow detection. */
-        uint64_t acc = 0;
+        /* Re-scan buf (underscores already stripped) as a base-10 BigInt
+         * (Python's unbounded int).  Only a >8192-bit literal trips the cap
+         * (it would float()-overflow anyway -> except->0). */
+        BigInt acc;
+        big_zero(&acc);
         for (size_t j = 0; j < bi; j++) {
-            uint64_t dv = (uint64_t)(buf[j] - '0');
-            if (acc > (UINT64_MAX - dv) / 10ULL) return false;
-            acc = acc * 10ULL + dv;
+            big_muladd_small(&acc, 10u, (uint32_t)(buf[j] - '0'));
+            if (acc.overflow) return false;
         }
-        if (acc > (uint64_t)INT64_MAX) return false;  /* int64 boundary */
         out->is_int = true;
-        out->i = (int64_t)acc;
+        out->big = acc;
         return true;
     }
 
@@ -598,23 +941,37 @@ static bool val_parse_power(ValParser *vp, PyNum *out) {
         vp->pos += 2;
         PyNum exp;
         if (!val_parse_unary(vp, &exp)) return false;
-        /* Python ** semantics: int**non-negative-int -> int; otherwise
-         * float (incl. int**negative-int -> float, e.g. 2**-1 == 0.5). */
-        if (base.is_int && exp.is_int && exp.i >= 0) {
-            int64_t acc = 1, b = base.i, e = exp.i;
-            bool overflow = false;
-            for (int64_t k = 0; k < e; k++) {
-                if (b != 0 &&
-                    (acc > INT64_MAX / (b < 0 ? -b : b) ||
-                     acc < INT64_MIN / (b < 0 ? -b : b))) {
-                    overflow = true;
-                    break;
+        /* Python ** semantics: int**non-negative-int -> int (arbitrary
+         * precision); otherwise float (incl. int**negative-int -> float,
+         * e.g. 2**-1 == 0.5).  A non-negative integer exponent that exceeds
+         * what we can represent as a count, or a result past the BigInt cap,
+         * float()-overflows in Python too (the magnitude needs >1024 bits)
+         * -> except->0, so we signal failure rather than fold a wrong value. */
+        if (base.is_int && exp.is_int && exp.big.sign >= 0) {
+            /* Exponent as an unsigned count. A huge exponent (more than fits
+             * in 64 bits) makes base**exp astronomically large -> float
+             * overflow -> except->0 (unless base is 0/1, handled by value). */
+            if (exp.big.n > 2) {
+                /* exp > 2^64: only 0**big / 1**big stay finite. */
+                if (base.big.n == 0) {            /* 0 ** big = 0 */
+                    out->is_int = true; big_zero(&out->big); return true;
                 }
-                acc *= b;
+                if (base.big.n == 1 && base.big.d[0] == 1) {  /* (+/-1)**big */
+                    out->is_int = true;
+                    big_from_u64(&out->big, 1);
+                    if (base.big.sign < 0 && big_test_bit(&exp.big, 0))
+                        out->big.sign = -1;
+                    return true;
+                }
+                vp->error = true; return false;   /* overflow -> except->0 */
             }
-            if (overflow) { vp->error = true; return false; }  /* big-int */
+            uint64_t e = (uint64_t)exp.big.d[0] |
+                         (exp.big.n > 1 ? ((uint64_t)exp.big.d[1] << 32) : 0);
+            BigInt res;
+            big_pow(&base.big, e, &res);
+            if (res.overflow) { vp->error = true; return false; }
             out->is_int = true;
-            out->i = acc;
+            out->big = res;
         } else {
             out->is_int = false;
             out->d = pow(pynum_to_double(base), pynum_to_double(exp));
@@ -635,8 +992,7 @@ static bool val_parse_unary(ValParser *vp, PyNum *out) {
         if (!val_parse_unary(vp, &v)) return false;
         if (op == '-') {
             if (v.is_int) {
-                if (v.i == INT64_MIN) { vp->error = true; return false; }
-                v.i = -v.i;
+                big_neg(&v.big);  /* sign-magnitude: no overflow */
             } else {
                 v.d = -v.d;
             }
@@ -645,25 +1001,6 @@ static bool val_parse_unary(ValParser *vp, PyNum *out) {
         return true;
     }
     return val_parse_power(vp, out);
-}
-
-/* Python floor division for ints: floor toward negative infinity. */
-static bool py_int_floordiv(int64_t a, int64_t b, int64_t *out) {
-    if (b == 0) return false;  /* ZeroDivisionError -> except->0 */
-    int64_t q = a / b;
-    int64_t r = a % b;
-    if (r != 0 && ((r < 0) != (b < 0))) q -= 1;  /* adjust toward -inf */
-    *out = q;
-    return true;
-}
-
-/* Python modulo for ints: result has the SAME sign as the divisor. */
-static bool py_int_mod(int64_t a, int64_t b, int64_t *out) {
-    if (b == 0) return false;
-    int64_t r = a % b;
-    if (r != 0 && ((r < 0) != (b < 0))) r += b;
-    *out = r;
-    return true;
 }
 
 /* mul := unary (('*'|'/'|'//'|'%') unary)*  (left-associative) */
@@ -695,21 +1032,17 @@ static bool val_parse_mul(ValParser *vp, PyNum *out) {
         switch (op) {
             case 1:  /* * */
                 if (both_int) {
-                    int64_t a = lhs.i, b = rhs.i, r;
-                    if (a != 0 &&
-                        (b > INT64_MAX / (a < 0 ? -a : a) ||
-                         b < INT64_MIN / (a < 0 ? -a : a))) {
-                        vp->error = true; return false;  /* big-int */
-                    }
-                    r = a * b;
-                    lhs.is_int = true; lhs.i = r;
+                    BigInt r;
+                    big_mul(&lhs.big, &rhs.big, &r);
+                    if (r.overflow) { vp->error = true; return false; }
+                    lhs.is_int = true; lhs.big = r;
                 } else {
                     lhs.d = pynum_to_double(lhs) * pynum_to_double(rhs);
                     lhs.is_int = false;
                 }
                 break;
             case 2:  /* / true division -> ALWAYS float */
-                if ((rhs.is_int && rhs.i == 0) ||
+                if ((rhs.is_int && rhs.big.sign == 0) ||
                     (!rhs.is_int && rhs.d == 0.0))
                     return false;  /* ZeroDivisionError -> except->0 */
                 lhs.d = pynum_to_double(lhs) / pynum_to_double(rhs);
@@ -717,9 +1050,9 @@ static bool val_parse_mul(ValParser *vp, PyNum *out) {
                 break;
             case 3:  /* // floor division */
                 if (both_int) {
-                    int64_t r;
-                    if (!py_int_floordiv(lhs.i, rhs.i, &r)) return false;
-                    lhs.is_int = true; lhs.i = r;
+                    BigInt r;
+                    if (!big_floordiv(&lhs.big, &rhs.big, &r)) return false;
+                    lhs.is_int = true; lhs.big = r;
                 } else {
                     double bd = pynum_to_double(rhs);
                     if (bd == 0.0) return false;
@@ -729,9 +1062,9 @@ static bool val_parse_mul(ValParser *vp, PyNum *out) {
                 break;
             case 4:  /* % Python modulo */
                 if (both_int) {
-                    int64_t r;
-                    if (!py_int_mod(lhs.i, rhs.i, &r)) return false;
-                    lhs.is_int = true; lhs.i = r;
+                    BigInt r;
+                    if (!big_mod(&lhs.big, &rhs.big, &r)) return false;
+                    lhs.is_int = true; lhs.big = r;
                 } else {
                     double bd = pynum_to_double(rhs);
                     if (bd == 0.0) return false;
@@ -763,12 +1096,11 @@ static bool val_parse_expr(ValParser *vp, PyNum *out) {
         if (!val_parse_mul(vp, &rhs)) return false;
         bool both_int = lhs.is_int && rhs.is_int;
         if (both_int) {
-            int64_t a = lhs.i, b = (c == '+') ? rhs.i : -rhs.i;
-            /* overflow check for a + b */
-            if ((b > 0 && a > INT64_MAX - b) || (b < 0 && a < INT64_MIN - b)) {
-                vp->error = true; return false;  /* big-int boundary */
-            }
-            lhs.i = a + b;
+            BigInt r;
+            if (c == '+') big_add(&lhs.big, &rhs.big, &r);
+            else          big_sub(&lhs.big, &rhs.big, &r);
+            if (r.overflow) { vp->error = true; return false; }
+            lhs.big = r;
             lhs.is_int = true;
         } else {
             double r = (c == '+') ? pynum_to_double(lhs) + pynum_to_double(rhs)
@@ -793,12 +1125,14 @@ static bool val_fold(const char *s, size_t len, double *out) {
     val_skip_ws(&vp);
     if (vp.pos != vp.len) return false;  /* trailing junk -> SyntaxError */
     double d = pynum_to_double(v);
-    /* float() of an int that exceeds double range would raise
-     * OverflowError; int64 always fits double, so only a non-finite float
-     * literal (e.g. 1e400 -> inf) trips this — Python's float("1e400")
-     * is actually inf (no error), but eval("1e400") IS inf too, and the
-     * FP encoder can't encode inf, so treat non-finite as the except path
-     * for binary safety (a realistic VAL never reaches this). */
+    /* float() of an int whose magnitude exceeds the double range raises
+     * OverflowError in Python (caught -> except->0); big_to_double returns
+     * +/-inf there, so the non-finite guard reproduces it.  A literal float
+     * like 1e400 also yields inf (Python's float("1e400") is inf, but the
+     * Z80 FP encoder can't encode inf), so non-finite uniformly takes the
+     * except->0 path.  A finite double — including out-of-Z80-range values
+     * like float(2**100)=1.27e30 — is folded; matching Python's bytes there
+     * is then the Z80 encoder's job (the shared 40-bit encoder). */
     if (!isfinite(d)) return false;
     *out = d;
     return true;
