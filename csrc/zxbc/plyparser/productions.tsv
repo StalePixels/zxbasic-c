@@ -1,0 +1,410 @@
+# production index -> name -> callable -> rule str
+0	S'	None	S' -> start
+1	start	p_start	start -> program
+2	program	p_program_program_line	program -> program_line
+3	program	p_program	program -> program program_line
+4	program_line	p_program_line	program_line -> preproc_line NEWLINE
+5	program_line	p_program_line	program_line -> label_line NEWLINE
+6	program_line	p_program_line	program_line -> statements NEWLINE
+7	program_line	p_program_line	program_line -> statements_co NEWLINE
+8	program_line	p_program_line	program_line -> co_statements NEWLINE
+9	program_line	p_program_line	program_line -> co_statements_co NEWLINE
+10	program_line	p_program_line	program_line -> NEWLINE
+11	co_statements_co	p_co_statements_co	co_statements_co -> co_statements CO
+12	co_statements_co	p_co_statements_co	co_statements_co -> co_statements_co CO
+13	co_statements_co	p_co_statements_co	co_statements_co -> CO
+14	co_statements	p_co_statements	co_statements -> co_statements_co statement
+15	statements_co	p_statements_co	statements_co -> statements CO
+16	statements_co	p_statements_co	statements_co -> statements_co CO
+17	statements	p_statements_statement	statements -> statement
+18	statements	p_statements_statement	statements -> statements_co statement
+19	statement	p_var_decls	statement -> var_decl
+20	label	p_label	label -> LABEL
+21	label_line	p_program_line_label	label_line -> label statements
+22	label_line	p_program_line_label	label_line -> label co_statements
+23	label_line	p_label_line_label_line_co	label_line -> label_line_co
+24	label_line_co	p_label_line_co	label_line_co -> label statements_co
+25	label_line_co	p_label_line_co	label_line_co -> label co_statements_co
+26	label_line_co	p_label_line_co	label_line_co -> label
+27	program_co	p_program_line_co	program_co -> program
+28	program_co	p_program_line_co	program_co -> program label_line_co
+29	program_co	p_program_line_co	program_co -> program co_statements_co
+30	program_co	p_program_line_co	program_co -> program statements_co
+31	var_decl	p_var_decl	var_decl -> DIM idlist typedef
+32	var_decl	p_var_decl_at	var_decl -> DIM idlist typedef AT expr
+33	var_decl	p_var_decl_ini	var_decl -> DIM idlist typedef EQ expr
+34	var_decl	p_var_decl_ini	var_decl -> CONST idlist typedef EQ expr
+35	singleid	p_singleid	singleid -> ID
+36	singleid	p_singleid	singleid -> ARRAY_ID
+37	idlist	p_idlist_id	idlist -> singleid
+38	idlist	p_idlist_idlist_id	idlist -> idlist COMMA singleid
+39	var_decl	p_arr_decl	var_decl -> var_arr_decl
+40	var_decl	p_arr_decl	var_decl -> var_arr_decl_addr
+41	var_arr_decl_addr	p_arr_decl_attr	var_arr_decl_addr -> var_arr_decl AT expr
+42	var_arr_decl	p_decl_arr	var_arr_decl -> DIM idlist LP bound_list RP typedef
+43	var_decl	p_arr_decl_initialized	var_decl -> DIM idlist LP bound_list RP typedef RIGHTARROW const_vector
+44	var_decl	p_arr_decl_initialized	var_decl -> DIM idlist LP bound_list RP typedef EQ const_vector
+45	bound_list	p_bound_list	bound_list -> bound
+46	bound_list	p_bound_list_bound	bound_list -> bound_list COMMA bound
+47	bound	p_bound	bound -> expr
+48	bound	p_bound_to_bound	bound -> expr TO expr
+49	const_vector	p_const_vector	const_vector -> LBRACE const_vector_list RBRACE
+50	const_vector	p_const_vector	const_vector -> LBRACE const_number_list RBRACE
+51	const_number_list	p_const_vector_elem_list	const_number_list -> expr
+52	const_number_list	p_const_vector_elem_list_list	const_number_list -> const_number_list COMMA expr
+53	const_vector_list	p_const_vector_list	const_vector_list -> const_vector
+54	const_vector_list	p_const_vector_vector_list	const_vector_list -> const_vector_list COMMA const_vector
+55	statement	p_staement_func_decl	statement -> function_declaration
+56	statement	p_statement_border	statement -> BORDER expr
+57	statement	p_statement_plot	statement -> PLOT expr COMMA expr
+58	statement	p_statement_plot_attr	statement -> PLOT attr_list expr COMMA expr
+59	statement	p_statement_draw3	statement -> DRAW expr COMMA expr COMMA expr
+60	statement	p_statement_draw3_attr	statement -> DRAW attr_list expr COMMA expr COMMA expr
+61	statement	p_statement_draw	statement -> DRAW expr COMMA expr
+62	statement	p_statement_draw_attr	statement -> DRAW attr_list expr COMMA expr
+63	statement	p_statement_circle	statement -> CIRCLE expr COMMA expr COMMA expr
+64	statement	p_statement_circle_attr	statement -> CIRCLE attr_list expr COMMA expr COMMA expr
+65	statement	p_statement_cls	statement -> CLS
+66	statement	p_statement_asm	statement -> ASM
+67	statement	p_statement_randomize	statement -> RANDOMIZE
+68	statement	p_statement_randomize_expr	statement -> RANDOMIZE expr
+69	statement	p_statement_beep	statement -> BEEP expr COMMA expr
+70	statement	p_statement_call	statement -> ID arg_list
+71	statement	p_statement_call	statement -> ID arguments
+72	statement	p_statement_call	statement -> ID
+73	statement	p_assignment	statement -> lexpr expr
+74	lexpr	p_lexpr	lexpr -> ID EQ
+75	lexpr	p_lexpr	lexpr -> LET ID EQ
+76	statement	p_array_copy	statement -> ARRAY_ID EQ ARRAY_ID
+77	statement	p_array_copy	statement -> LET ARRAY_ID EQ ARRAY_ID
+78	statement	p_arr_assignment	statement -> ARRAY_ID arg_list EQ expr
+79	statement	p_arr_assignment	statement -> LET ARRAY_ID arg_list EQ expr
+80	statement	p_substr_assignment_no_let	statement -> ID LP expr RP EQ expr
+81	statement	p_substr_assignment	statement -> LET ID arg_list EQ expr
+82	statement	p_str_assign	statement -> ID substr EQ expr
+83	statement	p_str_assign	statement -> LET ID substr EQ expr
+84	statement	p_goto	statement -> goto NUMBER
+85	statement	p_goto	statement -> goto ID
+86	goto	p_go	goto -> GO TO
+87	goto	p_go	goto -> GO SUB
+88	goto	p_go	goto -> GOTO
+89	goto	p_go	goto -> GOSUB
+90	statement	p_if_sentence	statement -> if_then_part NEWLINE program_co endif
+91	statement	p_if_sentence	statement -> if_then_part NEWLINE endif
+92	statement	p_if_sentence	statement -> if_then_part NEWLINE statements_co endif
+93	statement	p_if_sentence	statement -> if_then_part NEWLINE co_statements_co endif
+94	statement	p_if_sentence	statement -> if_then_part NEWLINE label statements_co endif
+95	endif	p_endif	endif -> END IF
+96	endif	p_endif	endif -> label END IF
+97	endif	p_endif	endif -> ENDIF
+98	endif	p_endif	endif -> label ENDIF
+99	statement	p_statement_if	statement -> if_inline
+100	statement	p_statement_if_then_endif	statement -> if_then_part statements_co endif
+101	statement	p_statement_if_then_endif	statement -> if_then_part co_statements_co endif
+102	if_inline	p_single_line_if	if_inline -> if_then_part statements
+103	if_inline	p_single_line_if	if_inline -> if_then_part co_statements_co
+104	if_inline	p_single_line_if	if_inline -> if_then_part statements_co
+105	if_inline	p_single_line_if	if_inline -> if_then_part co_statements
+106	statement	p_if_elseif	statement -> if_then_part NEWLINE program_co elseiflist
+107	statement	p_if_elseif	statement -> if_then_part NEWLINE elseiflist
+108	elseif_expr	p_elseif_part	elseif_expr -> ELSEIF expr then
+109	elseif_expr	p_elseif_part	elseif_expr -> label ELSEIF expr then
+110	elseiflist	p_elseif_list	elseiflist -> elseif_expr program_co endif
+111	elseiflist	p_elseif_list	elseiflist -> elseif_expr program_co else_part
+112	elseiflist	p_elseif_elseiflist	elseiflist -> elseif_expr program_co elseiflist
+113	else_part_inline	p_else_part_endif	else_part_inline -> ELSE NEWLINE program_co endif
+114	else_part_inline	p_else_part_endif	else_part_inline -> ELSE NEWLINE statements_co endif
+115	else_part_inline	p_else_part_endif	else_part_inline -> ELSE NEWLINE co_statements_co endif
+116	else_part_inline	p_else_part_endif	else_part_inline -> ELSE NEWLINE endif
+117	else_part_inline	p_else_part_endif	else_part_inline -> ELSE NEWLINE label statements_co endif
+118	else_part_inline	p_else_part_endif	else_part_inline -> ELSE NEWLINE label co_statements_co endif
+119	else_part_inline	p_else_part_endif	else_part_inline -> ELSE statements_co endif
+120	else_part_inline	p_else_part_endif	else_part_inline -> ELSE co_statements_co endif
+121	else_part_inline	p_else_part	else_part_inline -> ELSE statements_co
+122	else_part_inline	p_else_part	else_part_inline -> ELSE co_statements_co
+123	else_part_inline	p_else_part	else_part_inline -> ELSE co_statements
+124	else_part_inline	p_else_part	else_part_inline -> ELSE statements
+125	else_part	p_else_part_is_inline	else_part -> else_part_inline
+126	else_part	p_else_part_label	else_part -> label ELSE program_co endif
+127	else_part	p_else_part_label	else_part -> label ELSE statements_co endif
+128	else_part	p_else_part_label	else_part -> label ELSE co_statements_co endif
+129	if_then_part	p_if_then_part	if_then_part -> IF expr then
+130	statement	p_if_inline	statement -> if_inline else_part_inline
+131	statement	p_if_else	statement -> if_then_part NEWLINE program_co else_part
+132	then	p_then	then -> <empty>
+133	then	p_then	then -> THEN
+134	statement	p_for_sentence	statement -> for_start program_co label_next
+135	statement	p_for_sentence	statement -> for_start co_statements_co label_next
+136	statement	p_for_sentence	statement -> for_start program label_next
+137	label_next	p_next	label_next -> label NEXT
+138	label_next	p_next	label_next -> NEXT
+139	label_next	p_next1	label_next -> label NEXT ID
+140	label_next	p_next1	label_next -> NEXT ID
+141	for_start	p_for_sentence_start	for_start -> FOR ID EQ expr TO expr step
+142	step	p_step	step -> <empty>
+143	step	p_step_expr	step -> STEP expr
+144	statement	p_end	statement -> END expr
+145	statement	p_end	statement -> END
+146	statement	p_error_raise	statement -> ERROR expr
+147	statement	p_stop_raise	statement -> STOP expr
+148	statement	p_stop_raise	statement -> STOP
+149	label_loop	p_loop	label_loop -> label LOOP
+150	label_loop	p_loop	label_loop -> LOOP
+151	statement	p_do_loop	statement -> do_start program_co label_loop
+152	statement	p_do_loop	statement -> do_start label_loop
+153	statement	p_do_loop	statement -> DO label_loop
+154	statement	p_do_loop_until	statement -> do_start program_co label_loop UNTIL expr
+155	statement	p_do_loop_until	statement -> do_start label_loop UNTIL expr
+156	statement	p_do_loop_until	statement -> DO label_loop UNTIL expr
+157	statement	p_data	statement -> DATA arguments
+158	statement	p_restore	statement -> RESTORE
+159	statement	p_restore	statement -> RESTORE ID
+160	statement	p_restore	statement -> RESTORE NUMBER
+161	statement	p_read	statement -> READ arguments
+162	statement	p_do_loop_while	statement -> do_start program_co label_loop WHILE expr
+163	statement	p_do_loop_while	statement -> do_start label_loop WHILE expr
+164	statement	p_do_loop_while	statement -> DO label_loop WHILE expr
+165	statement	p_do_while_loop	statement -> do_while_start program_co LOOP
+166	statement	p_do_while_loop	statement -> do_while_start co_statements_co LOOP
+167	statement	p_do_while_loop	statement -> do_while_start LOOP
+168	statement	p_do_until_loop	statement -> do_until_start program_co LOOP
+169	statement	p_do_until_loop	statement -> do_until_start co_statements_co LOOP
+170	statement	p_do_until_loop	statement -> do_until_start LOOP
+171	do_while_start	p_do_while_start	do_while_start -> DO WHILE expr
+172	do_until_start	p_do_until_start	do_until_start -> DO UNTIL expr
+173	do_start	p_do_start	do_start -> DO CO
+174	do_start	p_do_start	do_start -> DO NEWLINE
+175	label_end_while	p_label_end_while	label_end_while -> label WEND
+176	label_end_while	p_label_end_while	label_end_while -> label END WHILE
+177	label_end_while	p_label_end_while	label_end_while -> WEND
+178	label_end_while	p_label_end_while	label_end_while -> END WHILE
+179	statement	p_while_sentence	statement -> while_start co_statements_co label_end_while
+180	statement	p_while_sentence	statement -> while_start program_co label_end_while
+181	while_start	p_while_start	while_start -> WHILE expr
+182	statement	p_exit	statement -> EXIT WHILE
+183	statement	p_exit	statement -> EXIT DO
+184	statement	p_exit	statement -> EXIT FOR
+185	statement	p_continue	statement -> CONTINUE WHILE
+186	statement	p_continue	statement -> CONTINUE DO
+187	statement	p_continue	statement -> CONTINUE FOR
+188	statement	p_print_sentence	statement -> PRINT print_list
+189	print_elem	p_print_elem_expr	print_elem -> expr
+190	print_elem	p_print_list_expr	print_elem -> print_at
+191	print_elem	p_print_list_expr	print_elem -> print_tab
+192	print_elem	p_print_list_expr	print_elem -> attr
+193	print_elem	p_print_list_expr	print_elem -> BOLD expr
+194	print_elem	p_print_list_expr	print_elem -> ITALIC expr
+195	attr_list	p_attr_list	attr_list -> attr SC
+196	attr_list	p_attr_list_list	attr_list -> attr_list attr SC
+197	attr	p_attr	attr -> OVER expr
+198	attr	p_attr	attr -> INVERSE expr
+199	attr	p_attr	attr -> INK expr
+200	attr	p_attr	attr -> PAPER expr
+201	attr	p_attr	attr -> BRIGHT expr
+202	attr	p_attr	attr -> FLASH expr
+203	print_elem	p_print_list_epsilon	print_elem -> <empty>
+204	print_list	p_print_list_elem	print_list -> print_elem
+205	print_list	p_print_list	print_list -> print_list SC print_elem
+206	print_list	p_print_list_comma	print_list -> print_list COMMA print_elem
+207	print_at	p_print_list_at	print_at -> AT expr COMMA expr
+208	print_tab	p_print_list_tab	print_tab -> TAB expr
+209	statement	p_on_goto	statement -> ON expr goto label_list
+210	label_list	p_label_list	label_list -> ID
+211	label_list	p_label_list	label_list -> NUMBER
+212	label_list	p_label_list_list	label_list -> label_list COMMA ID
+213	label_list	p_label_list_list	label_list -> label_list COMMA NUMBER
+214	statement	p_return	statement -> RETURN
+215	statement	p_return_expr	statement -> RETURN expr
+216	statement	p_pause	statement -> PAUSE expr
+217	statement	p_poke	statement -> POKE expr COMMA expr
+218	statement	p_poke	statement -> POKE LP expr COMMA expr RP
+219	statement	p_poke2	statement -> POKE numbertype expr COMMA expr
+220	statement	p_poke2	statement -> POKE LP numbertype expr COMMA expr RP
+221	statement	p_poke3	statement -> POKE numbertype COMMA expr COMMA expr
+222	statement	p_poke3	statement -> POKE LP numbertype COMMA expr COMMA expr RP
+223	statement	p_out	statement -> OUT expr COMMA expr
+224	statement	p_simple_instruction	statement -> ITALIC expr
+225	statement	p_simple_instruction	statement -> BOLD expr
+226	statement	p_simple_instruction	statement -> INK expr
+227	statement	p_simple_instruction	statement -> PAPER expr
+228	statement	p_simple_instruction	statement -> BRIGHT expr
+229	statement	p_simple_instruction	statement -> FLASH expr
+230	statement	p_simple_instruction	statement -> OVER expr
+231	statement	p_simple_instruction	statement -> INVERSE expr
+232	statement	p_save_code	statement -> SAVE expr CODE expr COMMA expr
+233	statement	p_save_code	statement -> SAVE expr ID
+234	statement	p_save_code	statement -> SAVE expr ARRAY_ID
+235	statement	p_save_data	statement -> SAVE expr DATA
+236	statement	p_save_data	statement -> SAVE expr DATA ID
+237	statement	p_save_data	statement -> SAVE expr DATA ID LP RP
+238	load_or_verify	p_load_or_verify	load_or_verify -> LOAD
+239	load_or_verify	p_load_or_verify	load_or_verify -> VERIFY
+240	statement	p_load_code	statement -> load_or_verify expr ID
+241	statement	p_load_code	statement -> load_or_verify expr CODE
+242	statement	p_load_code	statement -> load_or_verify expr CODE expr
+243	statement	p_load_code	statement -> load_or_verify expr CODE expr COMMA expr
+244	statement	p_load_data	statement -> load_or_verify expr DATA
+245	statement	p_load_data	statement -> load_or_verify expr DATA ID
+246	statement	p_load_data	statement -> load_or_verify expr DATA ID LP RP
+247	numbertype	p_numbertype	numbertype -> BYTE
+248	numbertype	p_numbertype	numbertype -> UBYTE
+249	numbertype	p_numbertype	numbertype -> INTEGER
+250	numbertype	p_numbertype	numbertype -> UINTEGER
+251	numbertype	p_numbertype	numbertype -> LONG
+252	numbertype	p_numbertype	numbertype -> ULONG
+253	numbertype	p_numbertype	numbertype -> FIXED
+254	numbertype	p_numbertype	numbertype -> FLOAT
+255	expr	p_expr_plus_expr	expr -> expr PLUS expr
+256	expr	p_expr_minus_expr	expr -> expr MINUS expr
+257	expr	p_expr_mul_expr	expr -> expr MUL expr
+258	expr	p_expr_div_expr	expr -> expr DIV expr
+259	expr	p_expr_mod_expr	expr -> expr MOD expr
+260	expr	p_expr_pow_expr	expr -> expr POW expr
+261	expr	p_expr_shl_expr	expr -> expr SHL expr
+262	expr	p_expr_shr_expr	expr -> expr SHR expr
+263	expr	p_minus_expr	expr -> MINUS expr
+264	expr	p_expr_EQ_expr	expr -> expr EQ expr
+265	expr	p_expr_LT_expr	expr -> expr LT expr
+266	expr	p_expr_LE_expr	expr -> expr LE expr
+267	expr	p_expr_GT_expr	expr -> expr GT expr
+268	expr	p_expr_GE_expr	expr -> expr GE expr
+269	expr	p_expr_NE_expr	expr -> expr NE expr
+270	expr	p_expr_OR_expr	expr -> expr OR expr
+271	expr	p_expr_BOR_expr	expr -> expr BOR expr
+272	expr	p_expr_XOR_expr	expr -> expr XOR expr
+273	expr	p_expr_BXOR_expr	expr -> expr BXOR expr
+274	expr	p_expr_AND_expr	expr -> expr AND expr
+275	expr	p_expr_BAND_expr	expr -> expr BAND expr
+276	expr	p_NOT_expr	expr -> NOT expr
+277	expr	p_BNOT_expr	expr -> BNOT expr
+278	bexpr	p_lp_expr_rp	bexpr -> LP expr RP
+279	expr	p_cast	expr -> CAST LP numbertype COMMA expr RP
+280	bexpr	p_number_expr	bexpr -> NUMBER
+281	bexpr	p_expr_PI	bexpr -> PI
+282	bexpr	p_expr_string	bexpr -> string
+283	string	p_string_func_call	string -> func_call substr
+284	string	p_string_func_call_single	string -> func_call LP expr RP
+285	string	p_string_str	string -> STRC
+286	string	p_string_lprp	string -> string LP RP
+287	string	p_string_lp_expr_rp	string -> string LP expr RP
+288	string	p_expr_id_substr	string -> ID substr
+289	string	p_string_substr	string -> string substr
+290	string	p_string_expr_lp	string -> LP expr RP substr
+291	substr	p_subind_str	substr -> LP expr TO expr RP
+292	substr	p_subind_strTO	substr -> LP TO expr RP
+293	substr	p_subind_TOstr	substr -> LP expr TO RP
+294	substr	p_subind_TO	substr -> LP TO RP
+295	bexpr	p_id_expr	bexpr -> ID
+296	bexpr	p_addr_of_id	bexpr -> ADDRESSOF singleid
+297	expr	p_expr_bexpr	expr -> bexpr
+298	bexpr	p_expr_funccall	bexpr -> func_call
+299	func_call	p_idcall_expr	func_call -> ID arg_list
+300	statement	p_array_eq_error	statement -> LET ARRAY_ID EQ expr
+301	func_call	p_arr_access_expr	func_call -> ARRAY_ID arg_list
+302	statement	p_let_arr_substr	statement -> LET ARRAY_ID arg_list substr EQ expr
+303	statement	p_let_arr_substr	statement -> ARRAY_ID arg_list substr EQ expr
+304	statement	p_let_arr_substr_single	statement -> LET ARRAY_ID arg_list LP expr RP EQ expr
+305	statement	p_let_arr_substr_single	statement -> ARRAY_ID arg_list LP expr RP EQ expr
+306	statement	p_let_arr_substr_in_args	statement -> LET ARRAY_ID LP arguments TO RP EQ expr
+307	statement	p_let_arr_substr_in_args	statement -> ARRAY_ID LP arguments TO RP EQ expr
+308	statement	p_let_arr_substr_in_args2	statement -> LET ARRAY_ID LP arguments COMMA TO expr RP EQ expr
+309	statement	p_let_arr_substr_in_args2	statement -> ARRAY_ID LP arguments COMMA TO expr RP EQ expr
+310	statement	p_let_arr_substr_in_args3	statement -> LET ARRAY_ID LP arguments COMMA TO RP EQ expr
+311	statement	p_let_arr_substr_in_args3	statement -> ARRAY_ID LP arguments COMMA TO RP EQ expr
+312	statement	p_let_arr_substr_in_args4	statement -> LET ARRAY_ID LP arguments TO expr RP EQ expr
+313	statement	p_let_arr_substr_in_args4	statement -> ARRAY_ID LP arguments TO expr RP EQ expr
+314	bexpr	p_addr_of_array_element	bexpr -> ADDRESSOF ARRAY_ID arg_list
+315	bexpr	p_err_undefined_arr_access	bexpr -> ADDRESSOF ID arg_list
+316	bexpr	p_bexpr_func	bexpr -> ID bexpr
+317	arg_list	p_arg_list	arg_list -> LP RP
+318	arg_list	p_arg_list_arg	arg_list -> LP arguments RP
+319	arguments	p_arguments	arguments -> argument
+320	arguments	p_arguments_argument	arguments -> arguments COMMA argument
+321	argument	p_argument	argument -> expr
+322	argument	p_named_argument	argument -> ID WEQ expr
+323	argument	p_argument_array	argument -> ARRAY_ID
+324	function_declaration	p_funcdecl	function_declaration -> function_header function_body
+325	function_declaration	p_funcdeclforward	function_declaration -> DECLARE function_header_pre
+326	function_header	p_function_header	function_header -> function_header_pre CO
+327	function_header	p_function_header	function_header -> function_header_pre NEWLINE
+328	function_header	p_function_header_error	function_header -> function_def error CO
+329	function_header	p_function_header_error	function_header -> function_def error NEWLINE
+330	function_header_pre	p_function_header_pre	function_header_pre -> function_def param_decl typedef
+331	function_declaration	p_function_error	function_declaration -> function_header program_co END error
+332	function_def	p_function_def	function_def -> FUNCTION convention ID
+333	function_def	p_function_def	function_def -> SUB convention ID
+334	convention	p_convention	convention -> <empty>
+335	convention	p_convention	convention -> STDCALL
+336	convention	p_convention2	convention -> FASTCALL
+337	param_decl	p_param_decl_none	param_decl -> <empty>
+338	param_decl	p_param_decl_none	param_decl -> LP RP
+339	param_decl	p_param_decl	param_decl -> LP param_decl_list RP
+340	param_decl	p_param_decl_errpr	param_decl -> LP error RP
+341	param_decl_list	p_param_decl_list	param_decl_list -> param_definition
+342	param_decl_list	p_param_decl_list2	param_decl_list -> param_decl_list COMMA param_definition
+343	param_definition	p_param_byref_definition	param_definition -> BYREF param_def
+344	param_definition	p_param_byval_definition	param_definition -> BYVAL param_def
+345	param_definition	p_param_definition	param_definition -> param_def
+346	param_def	p_param_def_array	param_def -> singleid LP RP typedef
+347	param_def	p_param_def_type	param_def -> singleid typedef default_arg_value
+348	default_arg_value	p_param_def_default_arg_value	default_arg_value -> <empty>
+349	default_arg_value	p_param_def_default_arg_value	default_arg_value -> EQ expr
+350	function_body	p_function_body	function_body -> program_co END FUNCTION
+351	function_body	p_function_body	function_body -> program_co END SUB
+352	function_body	p_function_body	function_body -> statements_co END FUNCTION
+353	function_body	p_function_body	function_body -> statements_co END SUB
+354	function_body	p_function_body	function_body -> co_statements_co END FUNCTION
+355	function_body	p_function_body	function_body -> co_statements_co END SUB
+356	function_body	p_function_body	function_body -> END FUNCTION
+357	function_body	p_function_body	function_body -> END SUB
+358	typedef	p_type_def_empty	typedef -> <empty>
+359	typedef	p_type_def	typedef -> AS type
+360	type	p_type	type -> BYTE
+361	type	p_type	type -> UBYTE
+362	type	p_type	type -> INTEGER
+363	type	p_type	type -> UINTEGER
+364	type	p_type	type -> LONG
+365	type	p_type	type -> ULONG
+366	type	p_type	type -> FIXED
+367	type	p_type	type -> FLOAT
+368	type	p_type	type -> STRING
+369	preproc_line	p_preproc_line_init	preproc_line -> _INIT ID
+370	preproc_line	p_preproc_line_require	preproc_line -> _REQUIRE STRING
+371	preproc_line	p_preproc_line_pragma_option	preproc_line -> _PRAGMA ID EQ ID
+372	preproc_line	p_preproc_line_pragma_option	preproc_line -> _PRAGMA ID EQ STRING
+373	preproc_line	p_preproc_line_pragma_option	preproc_line -> _PRAGMA ID EQ INTEGER
+374	preproc_line	p_preproc_pragma_push	preproc_line -> _PRAGMA _PUSH LP ID RP
+375	preproc_line	p_preproc_pragma_pop	preproc_line -> _PRAGMA _POP LP ID RP
+376	bexpr	p_expr_usr	bexpr -> USR bexpr
+377	bexpr	p_expr_rnd	bexpr -> RND
+378	bexpr	p_expr_rnd	bexpr -> RND LP RP
+379	bexpr	p_expr_peek	bexpr -> PEEK bexpr
+380	bexpr	p_expr_peektype_	bexpr -> PEEK LP numbertype COMMA expr RP
+381	bexpr	p_expr_in	bexpr -> IN bexpr
+382	bexpr	p_expr_lbound	bexpr -> LBOUND LP ARRAY_ID RP
+383	bexpr	p_expr_lbound	bexpr -> UBOUND LP ARRAY_ID RP
+384	bexpr	p_expr_lbound_expr	bexpr -> LBOUND LP ARRAY_ID COMMA expr RP
+385	bexpr	p_expr_lbound_expr	bexpr -> UBOUND LP ARRAY_ID COMMA expr RP
+386	bexpr	p_len	bexpr -> LEN bexpr
+387	bexpr	p_sizeof	bexpr -> SIZEOF LP type RP
+388	bexpr	p_sizeof	bexpr -> SIZEOF LP ID RP
+389	bexpr	p_sizeof	bexpr -> SIZEOF LP ARRAY_ID RP
+390	string	p_str	string -> STR expr
+391	string	p_inkey	string -> INKEY
+392	string	p_chr_one	string -> CHR bexpr
+393	string	p_chr	string -> CHR arg_list
+394	bexpr	p_val	bexpr -> VAL bexpr
+395	bexpr	p_code	bexpr -> CODE bexpr
+396	bexpr	p_sgn	bexpr -> SGN bexpr
+397	bexpr	p_expr_trig	bexpr -> math_fn bexpr
+398	math_fn	p_math_fn	math_fn -> SIN
+399	math_fn	p_math_fn	math_fn -> COS
+400	math_fn	p_math_fn	math_fn -> TAN
+401	math_fn	p_math_fn	math_fn -> ASN
+402	math_fn	p_math_fn	math_fn -> ACS
+403	math_fn	p_math_fn	math_fn -> ATN
+404	math_fn	p_math_fn	math_fn -> LN
+405	math_fn	p_math_fn	math_fn -> EXP
+406	math_fn	p_math_fn	math_fn -> SQR
+407	bexpr	p_expr_int	bexpr -> INT bexpr
+408	bexpr	p_abs	bexpr -> ABS bexpr
