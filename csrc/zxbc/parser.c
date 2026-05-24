@@ -7,9 +7,11 @@
 #include "parser.h"
 #include "errmsg.h"
 #include "utils.h"      /* parse_int — same int coercion as the 'org' config arm (args.c:103) */
+#include "plyparser/ply_tables.h" /* ply_term_id — Phase A token-parity dump only */
 
 #include <ctype.h>      /* tolower — Python bool-coercion uses value.lower() (options.py:131) */
 #include <math.h>
+#include <stdio.h>      /* ZXBC_TOKDUMP in-parse token-parity trace (inert unless env set) */
 #include <stdlib.h>
 #include <string.h>
 
@@ -26,10 +28,93 @@ void z80h_pyfloat_repr(double v, char *buf, int sz);
  * Token management
  * ---------------------------------------------------------------- */
 
+static const char *tok_ply_value(const BToken *t, char *buf, size_t sz);
+
+/* Phase A (lexer token parity) instrumentation. INERT in production: only
+ * active when the env var ZXBC_TOKDUMP is set (the value names a file to
+ * write, or "-" / "2" for stderr). Emits one line per RAW lexer token —
+ * the stream the lexer actually produces, INCLUDING the lexer-error
+ * pseudo-token (which PLY's parser sees as <ERROR>) that the parser
+ * otherwise skips below. Format matches csrc/scripts/ply_tokdump.py:
+ *   <ply-term-id>\t<TYPE>\t<lineno>\t<value-repr>
+ * so the C in-parse stream can be diffed byte-for-byte against Python's. */
+static FILE *g_tokdump = NULL;
+static int g_tokdump_inited = 0;
+
+static void tokdump_init(void) {
+    if (g_tokdump_inited) return;
+    g_tokdump_inited = 1;
+    const char *path = getenv("ZXBC_TOKDUMP");
+    if (!path || !*path) return;
+    if (strcmp(path, "-") == 0 || strcmp(path, "2") == 0) {
+        g_tokdump = stderr;
+    } else {
+        g_tokdump = fopen(path, "w");
+    }
+}
+
+/* Render a token's PLY value-repr exactly as Python's repr() would print it
+ * in ply_tokdump.py: NUMBER prints the bare float repr (3.0); everything
+ * else prints the str repr in single quotes ('PRINT', '(', '\n', 'a'). */
+static void tokdump_emit(const BToken *t) {
+    if (!g_tokdump) return;
+    const char *type;
+    int id;
+    if (t->type == BTOK_EOF) {
+        type = "$end";
+        id = PLY_END_ID;
+    } else {
+        type = btok_name(t->type);
+        /* The lexer-error pseudo-token maps to PLY terminal <ERROR>. */
+        id = ply_term_id(type);
+    }
+    /* NEWLINE faithfulness translation (Phase A finding, Phase E adapter):
+     * PLY captures tok.lineno = self.lineno BEFORE the NEWLINE rule runs
+     * (lex.py:224), then the rule does self.lineno += 1 — so PLY's NEWLINE
+     * TOKEN carries the line it TERMINATES (source_line). The C lexer instead
+     * increments lex->lineno first, then make_tok reads the new value
+     * (lexer.c:765-767), so a C NEWLINE token carries source_line+1. They
+     * differ by exactly 1. (The lexer's running counter lex->lineno still
+     * matches PLY's self.lineno; only the NEWLINE token's captured .lineno
+     * differs — and the existing recursive-descent parser deliberately reads
+     * that post-increment value as a stand-in for p.lexer.lineno, so the
+     * shared lexer is NOT changed. The PLY engine's lex adapter applies this
+     * -1 translation instead.) Also PLY's NEWLINE value is "\n". */
+    int out_lineno = t->lineno;
+    if (t->type == BTOK_NEWLINE)
+        out_lineno = t->lineno - 1;
+
+    char buf[64];
+    if (t->type == BTOK_NUMBER) {
+        z80h_pyfloat_repr(t->numval, buf, (int)sizeof(buf));
+        fprintf(g_tokdump, "%d\t%s\t%d\t%s\n", id, type, out_lineno, buf);
+        return;
+    }
+    if (t->type == BTOK_EOF) {
+        fprintf(g_tokdump, "%d\t%s\t%d\t\n", id, type, out_lineno);
+        return;
+    }
+    /* value repr: Python prints repr(str). For our value set the only
+     * special char is the newline ('\n'); single quotes/backslashes do not
+     * occur in token values here. */
+    const char *val;
+    if (t->type == BTOK_NEWLINE)
+        val = "\n"; /* PLY sets NEWLINE.value = "\n" */
+    else
+        val = tok_ply_value(t, buf, sizeof(buf));
+    fprintf(g_tokdump, "%d\t%s\t%d\t'", id, type, out_lineno);
+    for (const char *s = val; *s; s++) {
+        if (*s == '\n') fputs("\\n", g_tokdump);
+        else fputc(*s, g_tokdump);
+    }
+    fputs("'\n", g_tokdump);
+}
+
 static void advance(Parser *p) {
     p->previous = p->current;
     for (;;) {
         p->current = blexer_next(&p->lexer);
+        tokdump_emit(&p->current);
         if (p->current.type != BTOK_ERROR) break;
         /* Error tokens are reported by the lexer; skip them */
     }
@@ -161,6 +246,13 @@ static const char *tok_ply_value(const BToken *t, char *buf, size_t sz) {
         case BTOK_SC:    return ";";
         case BTOK_COMMA: return ",";
         case BTOK_RIGHTARROW: return "=>";
+        case BTOK_ADDRESSOF: return "@";
+        case BTOK_SHL:   return "<<";
+        case BTOK_SHR:   return ">>";
+        case BTOK_BAND:  return "&";
+        case BTOK_BOR:   return "|";
+        case BTOK_BXOR:  return "~";
+        case BTOK_BNOT:  return "!";
         default:
             break;
     }
@@ -7835,6 +7927,7 @@ void parser_init(Parser *p, CompilerState *cs, const char *input) {
     blexer_init(&p->lexer, cs, input);
     p->had_error = false;
     p->panic_mode = false;
+    tokdump_init(); /* Phase A token-parity dump (inert unless ZXBC_TOKDUMP set) */
     advance(p); /* prime the first token */
 }
 

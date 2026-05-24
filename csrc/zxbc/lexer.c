@@ -334,19 +334,39 @@ int blexer_find_column(BLexer *lex, int pos) {
     return pos - i + 1;
 }
 
-/* Check if current position is a label (at beginning of line) */
+/* Check if current position is a label (at beginning of line).
+ *
+ * FAITHFUL port of zxblex.py is_label() (src/zxbc/zxblex.py:687-726),
+ * INCLUDING its column-computation edge case at the very start of the file.
+ * PLY:
+ *     c = i = token.lexpos
+ *     c -= 1
+ *     while c > 0 and input[c] in (" ", "\t"): c -= 1
+ *     while i > 0:
+ *         if input[i] == "\n": break
+ *         i -= 1
+ *     column = c - i
+ *     if column != 0: return False
+ * At lexpos == 0 (a label candidate as the FIRST token of the file) PLY
+ * computes c = -1, i = 0, column = -1 -> NOT a label. The previous C
+ * implementation walked i to -1 (column 0 -> label), wrongly marking a
+ * first-line `100 ...` / `0 REM` as a LABEL where PLY emits NUMBER. Reproduce
+ * PLY's loops EXACTLY (note: c uses `> 0`, and the i loop tests input[i],
+ * stopping at i==0 or a '\n'). */
 static bool is_label(BLexer *lex, int tok_pos, BTokenType tok_type, const char *tok_value) {
     if (!lex->labels_allowed)
         return false;
 
-    /* Check if there's only whitespace before this token on the line */
-    int c = tok_pos - 1;
-    while (c >= 0 && lex->input[c] != '\n' && (lex->input[c] == ' ' || lex->input[c] == '\t'))
-        c--;
-
+    int c = tok_pos;
     int i = tok_pos;
-    while (i >= 0 && lex->input[i] != '\n')
+    c -= 1;
+    while (c > 0 && (lex->input[c] == ' ' || lex->input[c] == '\t'))
+        c--;
+    while (i > 0) {
+        if (lex->input[i] == '\n')
+            break;
         i--;
+    }
 
     int column = c - i;
     if (column != 0)
@@ -356,13 +376,17 @@ static bool is_label(BLexer *lex, int tok_pos, BTokenType tok_type, const char *
     if (tok_type == BTOK_NUMBER)
         return true;
 
-    /* IDs are labels if followed by ':' (after optional whitespace) */
+    /* IDs are labels if followed by ':' (after optional whitespace). PLY:
+     * i = lexpos + len(value); scan forward — ':' -> label, non-space -> not. */
     int end = tok_pos;
     if (tok_value) end += (int)strlen(tok_value);
-    while (end < lex->len && (lex->input[end] == ' ' || lex->input[end] == '\t'))
+    while (end < lex->len) {
+        if (lex->input[end] == ':')
+            return true;
+        if (lex->input[end] != ' ' && lex->input[end] != '\t')
+            break;
         end++;
-    if (end < lex->len && lex->input[end] == ':')
-        return true;
+    }
 
     return false;
 }
@@ -1194,10 +1218,19 @@ static BToken lex_initial(BLexer *lex) {
             return make_str_tok(lex, BTOK_ID, id);
         }
 
-        /* Unknown character */
+        /* Unknown character. PLY's t_...ERROR rule (zxblex.py:655) emits a
+         * token of type ERROR whose value is the offending char, then the
+         * LALR parser sees it as the <ERROR> terminal (p_error renders
+         * "Unexpected token '%c' <ERROR>", e.g. lexerr.bas '%'). Carry the
+         * char on the token so the PLY engine + p_error can reproduce that
+         * message. (The production recursive-descent parser skips BTOK_ERROR
+         * in advance(), so this added sval is inert for it.) */
         advance(lex);
         zxbc_error(lex->cs, lex->lineno, "ignoring illegal character '%c'", c);
-        return make_tok(lex, BTOK_ERROR);
+        {
+            char chbuf[2] = { c, 0 };
+            return make_str_tok(lex, BTOK_ERROR, chbuf);
+        }
     }
 
     return make_tok(lex, BTOK_EOF);

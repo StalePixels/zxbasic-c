@@ -34,4 +34,8 @@ extern const PlyProd ply_prod[PLY_N_PROD];
 extern const int ply_defaulted[PLY_N_STATES]; /* reduce id (-prod) or 0 if none */
 extern const char *const ply_sym_name[PLY_N_SYM];
 
+/* Map a PLY terminal NAME (e.g. "NUMBER", "$end", "error") to its
+ * symbol id. Returns -1 if not a known terminal. */
+int ply_term_id(const char *name);
+
 #endif /* ZXBC_PLY_TABLES_H */

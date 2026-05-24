@@ -15,6 +15,7 @@
 add_library(zxbc_parser_lib STATIC
     parser.c
     lexer.c
+    plyparser/ply_tables.c
     ast.c
     errmsg.c
     compiler.c
@@ -72,3 +73,12 @@ add_executable(zxbc
 )
 
 target_link_libraries(zxbc PRIVATE zxbc_parser_lib)
+
+# Phase A lexer-parity validation harness (not part of the production binary).
+# Drives the production lexer single-pass for byte-for-byte token-stream
+# comparison against csrc/scripts/ply_tokdump.py. Additive — does not affect
+# the zxbc binary or its output.
+add_executable(zxbc-ply-lexdump
+    plyparser/ply_lexdump_harness.c
+)
+target_link_libraries(zxbc-ply-lexdump PRIVATE zxbc_parser_lib)
