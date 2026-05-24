@@ -8116,6 +8116,21 @@ typedef struct PdCtx {
     bool in_preproc;       /* lex-adapter preproc-state tracker */
 } PdCtx;
 
+/* A non-AST value carried on the parse stack for productions whose Python
+ * action returns a plain tuple/string rather than a Symbol — e.g. `lexpr`
+ * returns the Id(name, lineno) NamedTuple (zxbparser.py:109,1119-1134). */
+typedef struct PdId {
+    const char *name;
+    int lineno;
+} PdId;
+
+static PdId *pd_new_id(Parser *p, const char *name, int lineno) {
+    PdId *id = arena_alloc(&p->cs->arena, sizeof(PdId));
+    id->name = name;
+    id->lineno = lineno;
+    return id;
+}
+
 /* is_null (api/check.py:is_null): None, NOP, or a BLOCK that is recursively
  * all-null. */
 static bool pd_is_null(const AstNode *n) {
@@ -8279,6 +8294,57 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         r = PD_NODE(1);
         break;
 
+    /* ---- assignment family ----
+     * lexpr : ID EQ | LET ID EQ  (p_lexpr, zxbparser.py:1119): returns the
+     * Id(name,lineno) and pre-accesses the lvalue (access_id, NO default
+     * type) BEFORE the RHS — the LALR reduce order gives exactly Python's
+     * timing. */
+    case 74: { /* lexpr : ID EQ */
+        const char *name = PD_SVAL(1);
+        int ln = PD_LINENO(1);
+        symboltable_access_id(p->cs->symbol_table, p->cs, name, ln, NULL, CLASS_unknown);
+        *out = pd_new_id(p, name, ln);
+        *out_lineno = ln;
+        return true;
+    }
+    case 75: { /* lexpr : LET ID EQ */
+        const char *name = PD_SVAL(2);
+        int ln = PD_LINENO(2);
+        symboltable_access_id(p->cs->symbol_table, p->cs, name, ln, NULL, CLASS_unknown);
+        *out = pd_new_id(p, name, ln);
+        *out_lineno = ln;
+        return true;
+    }
+    case 73: { /* statement : lexpr expr (p_assignment, zxbparser.py:1084).
+                * Faithful to parser.c:5121-5160: re-access the lvalue with
+                * default_type = RHS.type_ and default_class var, class fixups,
+                * typecast RHS to lvalue type, make_sentence("LET", var, expr). */
+        PdId *lx = (PdId *)rhs[0].value;
+        AstNode *expr = PD_NODE(2);
+        int ln = lx->lineno;
+        TypeInfo *rhs_type = expr ? expr->type_ : NULL;
+        AstNode *var = symboltable_access_id(p->cs->symbol_table, p->cs,
+                                             lx->name, ln, rhs_type, CLASS_var);
+        if (var) {
+            if (var->u.id.class_ == CLASS_const ||
+                var->u.id.class_ == CLASS_sub ||
+                var->u.id.class_ == CLASS_function) {
+                err_cannot_assign(p->cs, ln, lx->name);
+            }
+            if (var->u.id.class_ == CLASS_unknown)
+                var->u.id.class_ = CLASS_var;
+        } else {
+            var = ast_new(p->cs, AST_ID, ln);
+            var->u.id.name = arena_strdup(&p->cs->arena, lx->name);
+            var->u.id.class_ = CLASS_unknown;
+        }
+        expr = make_typecast(p->cs, var->type_, expr, ln);
+        r = make_sentence_node(p, "LET", ln);
+        ast_add_child(p->cs, r, var);
+        if (expr) ast_add_child(p->cs, r, expr);
+        break;
+    }
+
     /* ---- leaf expressions ---- */
     case 280: /* bexpr : NUMBER */
         r = make_number(p, PD_NUM(1), PD_LINENO(1), NULL);
@@ -8298,6 +8364,43 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
     case 278: /* bexpr : LP expr RP -> p[2] */
         r = PD_NODE(2);
         break;
+    case 295: { /* bexpr : ID  (p_id_expr, zxbparser.py:2647). access_id with
+                 * default_class=var, mark accessed, auto-type -> DEFAULT_TYPE
+                 * + warning. Faithful to parser.c:2292-2314 scalar-read core.
+                 * The FUNCTION (0-arg/parenless) and array branches are NOT
+                 * this production in the LALR grammar (they are bexpr:ID bexpr
+                 * / func_call / array productions); if the resolved entry is a
+                 * function/sub/array, leave to those (flag unwired so we never
+                 * emit a wrong tree). */
+        const char *name = PD_SVAL(1);
+        int ln = PD_LINENO(1);
+        AstNode *entry = symboltable_access_id(p->cs->symbol_table, p->cs,
+                                               name, ln, NULL, CLASS_var);
+        if (!entry) {
+            /* access_id error (explicit mode) — Python returns None. */
+            r = NULL;
+            break;
+        }
+        if (entry->u.id.class_ == CLASS_function ||
+            entry->u.id.class_ == CLASS_sub ||
+            entry->u.id.class_ == CLASS_array) {
+            c->unwired = true;
+            if (c->unwired_prod == 0) c->unwired_prod = prodno;
+            r = make_nop(p);
+            break;
+        }
+        entry->u.id.accessed = true;
+        if (entry->u.id.class_ == CLASS_unknown)
+            entry->u.id.class_ = CLASS_var;
+        if (entry->type_ && entry->type_->final_type &&
+            entry->type_->final_type->basic_type == TYPE_unknown) {
+            TypeInfo *promoted = type_new_ref(p->cs, p->cs->default_type, ln, true);
+            entry->type_ = promoted;
+            warn_implicit_type(p->cs, ln, name, p->cs->default_type->name);
+        }
+        r = entry;
+        break;
+    }
 
     /* ---- binary operators (expr OP expr). make_binary_node does the type
      * coercion + constant folding + CONSTEXPR/string-concat exactly as the
@@ -8344,6 +8447,23 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         break;
     case 65: /* statement : CLS */
         r = make_sentence_node(p, "CLS", PD_LINENO(1));
+        break;
+    case 66: /* statement : ASM (make_asm_sentence(p[1], lineno)) */
+        r = make_asm_node(p, PD_SVAL(1) ? PD_SVAL(1) : "", PD_LINENO(1));
+        break;
+    case 217: /* statement : POKE expr COMMA expr */
+        r = make_sentence_node(p, "POKE", PD_LINENO(1));
+        ast_add_child(p->cs, r,
+            make_typecast(p->cs, st->basic_types[TYPE_uinteger], PD_NODE(2), PD_LINENO(3)));
+        ast_add_child(p->cs, r,
+            make_typecast(p->cs, st->basic_types[TYPE_ubyte], PD_NODE(4), PD_LINENO(3)));
+        break;
+    case 218: /* statement : POKE LP expr COMMA expr RP */
+        r = make_sentence_node(p, "POKE", PD_LINENO(1));
+        ast_add_child(p->cs, r,
+            make_typecast(p->cs, st->basic_types[TYPE_uinteger], PD_NODE(3), PD_LINENO(4)));
+        ast_add_child(p->cs, r,
+            make_typecast(p->cs, st->basic_types[TYPE_ubyte], PD_NODE(5), PD_LINENO(4)));
         break;
     case 67: /* statement : RANDOMIZE */
         r = make_sentence_node(p, "RANDOMIZE", PD_LINENO(1));
