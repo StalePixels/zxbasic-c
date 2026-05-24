@@ -8491,6 +8491,56 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         r = PD_NODE(1);
         break;
 
+    /* RETURN (214 p_return) | RETURN expr (215 p_return_expr). Faithful to
+     * parser.c:3763-3848 (which itself ports the Python actions). */
+    case 214: { /* statement : RETURN */
+        AstNode *func = (p->cs->function_level.len > 0)
+                ? p->cs->function_level.data[p->cs->function_level.len - 1] : NULL;
+        int ln = PD_LINENO(1);
+        if (!func) { r = make_sentence_node(p, "RETURN", ln); break; }
+        if (func->u.id.class_ != CLASS_sub) {
+            zxbc_error(p->cs, ln, "Syntax Error: Function must RETURN a value.");
+            r = NULL; break;
+        }
+        r = make_sentence_node(p, "RETURN", ln);
+        ast_add_child(p->cs, r, func);
+        break;
+    }
+    case 215: { /* statement : RETURN expr */
+        AstNode *func = (p->cs->function_level.len > 0)
+                ? p->cs->function_level.data[p->cs->function_level.len - 1] : NULL;
+        int ln = PD_LINENO(1);
+        AstNode *expr = PD_NODE(2);
+        if (!func) {
+            zxbc_error(p->cs, ln, "Syntax Error: Returning value out of FUNCTION");
+            r = NULL; break;
+        }
+        if (func->u.id.class_ == CLASS_unknown) { r = NULL; break; }
+        if (func->u.id.class_ != CLASS_function) {
+            zxbc_error(p->cs, ln, "Syntax Error: SUBs cannot return a value");
+            r = NULL; break;
+        }
+        if (func->type_ == NULL) { r = NULL; break; }
+        if (expr) {
+            bool es = type_is_string(expr->type_), fs = type_is_string(func->type_);
+            if (!es && fs) {
+                zxbc_error(p->cs, expr->lineno,
+                           "Type Error: Function must return a string, not a numeric value");
+                r = NULL; break;
+            }
+            if (es && !fs) {
+                zxbc_error(p->cs, expr->lineno,
+                           "Type Error: Function must return a numeric value, not a string");
+                r = NULL; break;
+            }
+        }
+        AstNode *cast = make_typecast(p->cs, func->type_, expr, ln);
+        r = make_sentence_node(p, "RETURN", ln);
+        ast_add_child(p->cs, r, func);
+        if (cast) ast_add_child(p->cs, r, cast);
+        break;
+    }
+
     /* param_decl : <empty> | LP RP (337/338, p_param_decl_none) -> empty
      * PARAMLIST. (LP param_decl_list RP and the param productions — the
      * with-params case — are the next increment.) */
