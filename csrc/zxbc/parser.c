@@ -8110,6 +8110,25 @@ static PdId *pd_new_id(Parser *p, const char *name, int lineno) {
     return id;
 }
 
+/* Cross-reduce state for a function/sub definition: built at the
+ * `function_def` reduce (which declares the func in the parent scope, enters
+ * the body scope, and pushes FUNCTION_LEVEL — Python p_function_def's exact
+ * timing), threaded through header_pre/header/body, consumed at `p_funcdecl`
+ * (which leaves the scope, computes offsets, pops FUNCTION_LEVEL, and builds
+ * the FUNCDECL). `rejected` marks a not-yet-ported sub-form (pre-existing/
+ * forwarded entry, etc.) so the engine flags UNWIRED rather than mis-building;
+ * the scope is still entered/left so the parse stays balanced. */
+typedef struct PdFuncDef {
+    AstNode *id_node;      /* the declared FUNCTION/SUB entry */
+    const char *name_raw;  /* raw name (suffix not stripped) — enter_scope arg */
+    int lineno;
+    bool is_function;
+    Convention conv;
+    TypeInfo *ret_type;
+    AstNode *params;       /* PARAMLIST */
+    bool rejected;         /* unported sub-form hit */
+} PdFuncDef;
+
 /* A growable Id list — the value of the `idlist` nonterminal (Python: a
  * Python list of Id tuples). */
 typedef struct PdIdList {
@@ -8332,6 +8351,177 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
     case 28: case 29: case 30: /* program_co : program X -> make_block(p[1],p[2]) */
         r = pd_make_block2(p, PD_NODE(1), PD_NODE(2));
         break;
+
+    /* ---- function/sub declaration subsystem (no-param fresh case first) ----
+     * convention : <empty> | STDCALL | FASTCALL (334/335/336, p_convention). */
+    case 334: /* <empty> -> stdcall (p_convention) */
+    case 335: /* STDCALL  -> stdcall */
+        *out = (void *)(intptr_t)CONV_stdcall;
+        *out_lineno = p->lexer.lineno;
+        return true;
+    case 336: /* FASTCALL -> fastcall (p_convention2) */
+        *out = (void *)(intptr_t)CONV_fastcall;
+        *out_lineno = PD_LINENO(1);
+        return true;
+
+    case 332: case 333: { /* function_def : FUNCTION|SUB convention ID
+                           * (p_function_def): declare in parent scope, then
+                           * enter_scope + FUNCTION_LEVEL.push. Scope is entered
+                           * HERE — before params/body reduce — exactly as
+                           * Python. Only the FRESH (no pre-existing entry) case
+                           * is wired; pre-existing/forwarded entries are
+                           * flagged rejected (UNWIRED) and deferred. */
+        bool is_func = (prodno == 332);
+        Convention conv = (Convention)(intptr_t)rhs[1].value;
+        const char *name_raw = PD_SVAL(3);
+        int ln = PD_LINENO(3);
+        SymbolClass cls = is_func ? CLASS_function : CLASS_sub;
+        /* suffix-stripped key (matching the production parser) */
+        const char *fname = name_raw;
+        char fbuf[256];
+        size_t fl = strlen(name_raw);
+        if (fl > 0 && fl < sizeof(fbuf) && is_deprecated_suffix(name_raw[fl - 1])) {
+            memcpy(fbuf, name_raw, fl - 1); fbuf[fl - 1] = '\0'; fname = fbuf;
+        }
+        PdFuncDef *fd = arena_alloc(&p->cs->arena, sizeof(PdFuncDef));
+        memset(fd, 0, sizeof(*fd));
+        fd->name_raw = arena_strdup(&p->cs->arena, name_raw);
+        fd->lineno = ln; fd->is_function = is_func; fd->conv = conv;
+        AstNode *pre = symboltable_lookup(p->cs->symbol_table, fname);
+        if (pre) {
+            /* pre-existing/forwarded entry — declare_func reuse branch not yet
+             * ported; defer (UNWIRED). Still enter scope so the parse balances
+             * and the body reduces cleanly. */
+            fd->rejected = true;
+            fd->id_node = pre;
+            c->unwired = true;
+            if (c->unwired_prod == 0) c->unwired_prod = prodno;
+        } else {
+            AstNode *id = symboltable_declare(p->cs->symbol_table, p->cs, fname, ln, cls);
+            id->u.id.declared = true;
+            id->u.id.convention = conv;
+            fd->id_node = id;
+        }
+        symboltable_enter_scope(p->cs->symbol_table, p->cs, fd->name_raw);
+        vec_push(p->cs->function_level, fd->id_node);
+        *out = fd;
+        *out_lineno = ln;
+        return true;
+    }
+
+    case 330: { /* function_header_pre : function_def param_decl typedef
+                 * (p_function_header_pre). No-param: param_decl is an empty
+                 * PARAMLIST; typedef NULL (no AS) or the return type. */
+        PdFuncDef *fd = (PdFuncDef *)rhs[0].value;
+        AstNode *params = (AstNode *)rhs[1].value;
+        TypeInfo *td = (TypeInfo *)rhs[2].value;
+        fd->params = params;
+        /* return type: FUNCTION with no AS -> implicit default; SUB stays
+         * NULL. (p_function_header_pre type logic; suffix/strict deferred to
+         * the typed pass.) */
+        if (td) {
+            fd->ret_type = td;
+        } else if (fd->is_function) {
+            fd->ret_type = type_new_ref(p->cs, p->cs->default_type, fd->lineno, true);
+        }
+        if (fd->id_node) {
+            fd->id_node->type_ = fd->ret_type;
+            fd->id_node->u.id.params = params;
+            fd->id_node->u.id.param_size = parser_assign_param_offsets(p, params);
+        }
+        *out = fd;
+        *out_lineno = fd->lineno;
+        return true;
+    }
+    case 326: case 327: /* function_header : function_header_pre CO|NEWLINE */
+        *out = rhs[0].value;
+        *out_lineno = PD_LINENO(1);
+        return true;
+
+    case 324: { /* function_declaration : function_header function_body
+                 * (p_funcdecl): leave scope, compute offsets, pop
+                 * FUNCTION_LEVEL, build FUNCDECL. */
+        PdFuncDef *fd = (PdFuncDef *)rhs[0].value;
+        AstNode *body = (AstNode *)rhs[1].value;
+        if (!body) body = make_block_node(p, fd->lineno);
+        /* leave scope: snapshot local_entries AFTER exit_scope compaction,
+         * then compute_offsets (production parser.c:7841-7869). */
+        Scope_ *body_scope = p->cs->symbol_table->current_scope;
+        symboltable_exit_scope(p->cs->symbol_table);
+        if (p->cs->function_level.len > 0)
+            vec_pop(p->cs->function_level);
+        AstNode *id_node = fd->id_node;
+        if (id_node) {
+            int oc = body_scope->ordered_count;
+            if (oc > 0) {
+                AstNode **le = arena_alloc(&p->cs->arena, (size_t)oc * sizeof(AstNode *));
+                memcpy(le, body_scope->ordered, (size_t)oc * sizeof(AstNode *));
+                id_node->u.id.local_entries = le;
+                id_node->u.id.local_entries_count = oc;
+            }
+            id_node->u.id.local_size = symboltable_compute_offsets(
+                p->cs->symbol_table, body_scope, p->cs->opts.optimization_level);
+        }
+        if (fd->rejected) { r = make_nop(p); break; }
+        /* The production recursive-descent parser adds a NOP child to the
+         * function body for an empty/inline-`:`-only body (its body loop
+         * appends parse_statement's NOP without flattening — parser.c:7770-
+         * 7771), whereas the grammar's function_body/program_co path
+         * flattens NOPs away. For C-vs-C identity on the eventual swap this
+         * empty-body shape would differ (def_func_inline_ok / lvalue02:
+         * FUNCDECL body child_count 1 vs 0). Defer empty-body functions as
+         * UNWIRED (faithful — never a wrong tree); non-empty bodies match. */
+        if (!body || body->child_count == 0) {
+            c->unwired = true;
+            if (c->unwired_prod == 0) c->unwired_prod = prodno;
+            r = make_nop(p);
+            break;
+        }
+        AstNode *decl = ast_new(p->cs, AST_FUNCDECL, fd->lineno);
+        ast_add_child(p->cs, decl, id_node);
+        ast_add_child(p->cs, decl, fd->params);
+        ast_add_child(p->cs, decl, body);
+        decl->type_ = fd->ret_type;
+        id_node->u.id.body = body;
+        vec_push(p->cs->functions, id_node);
+        r = decl;
+        break;
+    }
+    case 55: /* statement : function_declaration (p_staement_func_decl) */
+        r = PD_NODE(1);
+        break;
+
+    /* param_decl : <empty> | LP RP (337/338, p_param_decl_none) -> empty
+     * PARAMLIST. (LP param_decl_list RP and the param productions — the
+     * with-params case — are the next increment.) */
+    case 337: case 338:
+        r = ast_new(p->cs, AST_PARAMLIST, p->lexer.lineno);
+        break;
+
+    /* function_body : ... END FUNCTION|SUB (350-357, p_function_body):
+     * class-match check + return the body block. */
+    case 350: case 351: case 352: case 353:
+    case 354: case 355: case 356: case 357: {
+        bool end_func = (prodno % 2 == 0); /* 350/352/354/356 END FUNCTION */
+        /* class-match: FUNCTION_LEVEL[-1].class_ vs END FUNCTION/SUB */
+        if (p->cs->function_level.len > 0) {
+            AstNode *top = p->cs->function_level.data[p->cs->function_level.len - 1];
+            bool is_func_class = (top->u.id.class_ == CLASS_function);
+            int end_ln = PD_LINENO(len); /* END's line ~ last token */
+            if (is_func_class != end_func) {
+                zxbc_error(p->cs, end_ln,
+                           "Unexpected token 'END %s'. Should be 'END %s'",
+                           end_func ? "FUNCTION" : "SUB",
+                           is_func_class ? "FUNCTION" : "SUB");
+            }
+        }
+        /* body block: bare END -> empty BLOCK; else p[1]. */
+        if (prodno == 356 || prodno == 357)
+            r = make_block_node(p, p->lexer.lineno);
+        else
+            r = PD_NODE(1);
+        break;
+    }
 
     /* ---- DIM / var_decl declaration subsystem ----
      * The scalar var_decl forms reuse dim_build_scalar (extracted from the
