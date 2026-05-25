@@ -8208,6 +8208,48 @@ static AstNode *pd_make_block2(Parser *p, AstNode *a, AstNode *b) {
     return blk;
 }
 
+/* make_sub_call (SymbolCALL.make_node, symbols/call.py:90-112) — the
+ * parenless/with-args statement-level sub call. access_func resolves/auto-
+ * declares the callee (child[0]); arglist is child[1]; FUNCCALL->CALL retag;
+ * register in function_calls for the pending-call check. Faithful to the
+ * production parser's bare-ID node-build (parser.c:5256-5367) but taking a
+ * pre-built arglist (the LALR `arguments`/`arg_list` reduce supplies it),
+ * which matches Python's reduce order (args reduce before statement:ID). */
+static AstNode *pd_sub_call(Parser *p, const char *name, int lineno,
+                           AstNode *arglist) {
+    AstNode *entry = symboltable_lookup(p->cs->symbol_table, name);
+    if (entry && entry->u.id.class_ == CLASS_var)
+        zxbc_error(p->cs, lineno, "'%s' is a VAR, not a FUNCTION", name);
+    else if (entry && entry->u.id.class_ == CLASS_const)
+        zxbc_error(p->cs, lineno, "'%s' is a CONST, not a FUNCTION", name);
+
+    AstNode *s = ast_new(p->cs, AST_FUNCCALL, lineno);
+    AstNode *id_node =
+        symboltable_access_func(p->cs->symbol_table, p->cs, name, lineno, NULL);
+    if (id_node) {
+        s->type_ = id_node->type_;
+    } else {
+        id_node = ast_new(p->cs, AST_ID, lineno);
+        id_node->u.id.name = arena_strdup(&p->cs->arena, name);
+        s->type_ = p->cs->default_type;
+    }
+    ast_add_child(p->cs, s, id_node);
+    if (!arglist) arglist = ast_new(p->cs, AST_ARGLIST, lineno);
+    ast_add_child(p->cs, s, arglist);
+
+    if (id_node->tag == AST_ID &&
+        id_node->u.id.class_ != CLASS_var && id_node->u.id.class_ != CLASS_const) {
+        if (p->cs->current_file)
+            s->u.call.filename = arena_strdup(&p->cs->arena, p->cs->current_file);
+        s->u.call.callee_inline =
+            (id_node->u.id.params != NULL && !id_node->u.id.forwarded);
+        vec_push(p->cs->function_calls, s);
+        inline_check_call_arguments(p, s);
+    }
+    if (s->tag == AST_FUNCCALL) s->tag = AST_CALL;
+    return s;
+}
+
 /* ---- lex adapter: BToken -> PlySym, applying the Phase-A-documented
  * translations (NEWLINE lineno -1; preproc NUMBER->INTEGER / STRC->STRING;
  * ERROR carries the offending char). ID/ARRAY_ID resolution is whatever the
@@ -8936,6 +8978,48 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         *out_lineno = ln;
         return true;
     }
+    /* ---- statement : ID [arg_list|arguments] (p_statement_call, 70/71/72) ----
+     * ID arg_list (70) / ID arguments (71) -> make_sub_call. Bare ID (72): if
+     * the entry is label/unknown -> a label reference (make_label); else a
+     * make_sub_call with an empty arglist. Faithful to parser.c:5167-5367. */
+    case 70: /* statement : ID arg_list */
+        r = pd_sub_call(p, PD_SVAL(1), PD_LINENO(1), (AstNode *)rhs[1].value);
+        break;
+    case 71: /* statement : ID arguments -> arglist wrap of `arguments` */
+        r = pd_sub_call(p, PD_SVAL(1), PD_LINENO(1), (AstNode *)rhs[1].value);
+        break;
+    case 72: { /* statement : ID (bare) */
+        const char *name = PD_SVAL(1);
+        int ln = PD_LINENO(1);
+        AstNode *e = symboltable_lookup(p->cs->symbol_table, name);
+        if (e && (e->u.id.class_ == CLASS_label || e->u.id.class_ == CLASS_unknown)) {
+            /* label reference (make_label). Promote CLASS_unknown via
+             * access_label; reject a re-declared label. (parser.c:5189-5252) */
+            if (e->u.id.class_ == CLASS_unknown) {
+                AstNode *ln_e = symboltable_access_label(p->cs->symbol_table, p->cs, name, ln);
+                if (ln_e && ln_e->u.id.class_ == CLASS_label) {
+                    ln_e->u.id.declared = true;
+                    ln_e->type_ = p->cs->symbol_table->basic_types[TYPE_uinteger];
+                    label_capture_scope_owner(p->cs, ln_e);
+                }
+            } else if (e->u.id.class_ == CLASS_label && e->u.id.declared) {
+                zxbc_error(p->cs, ln, "Label '%s' already used at %s:%d",
+                           name, p->cs->current_file, e->lineno);
+            }
+            AstNode *ls = make_sentence_node(p, "LABEL", ln);
+            AstNode *lid = ast_new(p->cs, AST_ID, ln);
+            lid->u.id.name = arena_strdup(&p->cs->arena, name);
+            lid->u.id.class_ = CLASS_label;
+            ast_add_child(p->cs, ls, lid);
+            hashmap_set(&p->cs->data_labels, name,
+                        p->cs->data_ptr_current ? p->cs->data_ptr_current : "");
+            r = ls;
+        } else {
+            r = pd_sub_call(p, name, ln, NULL);
+        }
+        break;
+    }
+
     case 73: { /* statement : lexpr expr (p_assignment, zxbparser.py:1084).
                 * Faithful to parser.c:5121-5160: re-access the lvalue with
                 * default_type = RHS.type_ and default_class var, class fixups,
