@@ -854,23 +854,44 @@ AstNode *make_typecast(CompilerState *cs, TypeInfo *new_type, AstNode *node, int
             if (node->tag == AST_NUMBER)
                 node->u.number.value = (double)node->u.number.value;
         } else if (nf->tag == AST_BASICTYPE) {
-            /* Integer: mask to target size */
+            /* Integer: mask to target size (typecast.py:93-103). Python
+             * computes new_val = int(node.value) & mask, then compares the
+             * ORIGINAL node.value against new_val to decide whether to
+             * narrow + warn. The comparison MUST use the original (possibly
+             * fractional) value, not the already-truncated int: a fixed/float
+             * constant like 0.2 truncates to int 0 == (0 & mask), so an
+             * `ival != new_val` test is false and the node keeps value 0.2
+             * with an integer type — emitted as a runtime conversion
+             * (`pop af`) instead of the folded `xor a`/0 Python produces
+             * (const_expr: g/5 == 0.2 → ubyte 0). Compare orig_val. */
             int sz = basictype_size(nf->basic_type);
             if (node->tag == AST_NUMBER && sz > 0) {
-                int64_t ival = (int64_t)node->u.number.value;
+                double orig_val = node->u.number.value;
+                int64_t ival = (int64_t)orig_val;
                 int64_t mask = ((int64_t)1 << (8 * sz)) - 1;
                 int64_t new_val = ival & mask;
 
-                if (ival >= 0 && ival != new_val) {
+                if (orig_val >= 0 && orig_val != (double)new_val) {
                     warn_conversion_lose_digits(cs, lineno);
                     node->u.number.value = (double)new_val;
-                } else if (ival < 0 && ((1LL << (sz * 8)) + ival) != new_val) {
+                } else if (orig_val < 0 &&
+                           (double)(1LL << (sz * 8)) + orig_val != (double)new_val) {
                     warn_conversion_lose_digits(cs, lineno);
                     node->u.number.value = (double)(new_val - (1LL << (sz * 8)));
                 }
             }
         }
     }
+
+    /* Python SymbolNUMBER.t is a @property == str(self.value) (number.py:
+     * 72-74), recomputed on every read — so a value/type mutation above is
+     * always reflected at emit time. The C caches .t (set at ast_number and
+     * tr_visit_number). Invalidate it here for a mutated NUMBER so
+     * tr_visit_number re-renders from the new value+type; otherwise a
+     * narrowed constant (0.2 -> ubyte 0) keeps its stale "0.2" string and
+     * emits a runtime conversion (const_expr g/5). */
+    if (node->tag == AST_NUMBER)
+        node->t = NULL;
 
     node->type_ = new_type;
     return node;
