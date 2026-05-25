@@ -372,8 +372,27 @@ OMemCell *omemcell_new(Arena *a, const char *instr, int addr) {
 }
 
 void omemcell_set_asm(OMemCell *c, const char *s) {
+    /* MemCell.asm setter (memcell.py:35-41) reassigns self.__instr ONLY.
+     * It does NOT invalidate the @cached_property fields inst / opers /
+     * branch_arg / requires / destroys (memcell.py:83,103,108,115,184) —
+     * once computed (on first access, which in the optimizer happens during
+     * block-building / _compute_calls / cpu-state, all BEFORE the
+     * jump-over-jump rewrites at main.py:228-246), they keep their stale
+     * value. Only the PLAIN properties recompute from the new __instr:
+     * code (asm_->asm_, read live), condition_flag (cond), is_label.
+     *
+     * This staleness is load-bearing: the jump-over-jump pass does
+     * `blk[-1].asm = blk[-1].code.replace(label, new_label)` and then a
+     * LATER label's `new_label = first.opers[0]` reads the STALE opers of a
+     * cell whose code was already rewritten — yielding the pre-rewrite
+     * target (the `while` fixture: a cell rewritten `jp _20`->`jp _10`
+     * still reports opers `[_20]`, so a chained trampoline resolves to
+     * `_20`, not `_10`). Recomputing opers here (the previous C behaviour)
+     * gave `_10` and diverged from the oracle. Keep inst/is_ender/opers/
+     * branch_arg/requires/destroys frozen; refresh only the plain fields. */
     c->asm_ = z80asm_new(c->a, s);
-    omemcell_derive(c);
+    c->is_label = c->asm_->is_label;        /* plain property */
+    c->cond     = c->asm_->cond;            /* condition_flag: plain property */
 }
 
 /* ---- used_labels (memcell.py:343-366) ----------------------------- */
