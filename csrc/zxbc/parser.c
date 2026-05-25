@@ -3599,7 +3599,7 @@ static AstNode *dim_build_scalar(Parser *p, const char **names, int name_count,
                                  const char *name, TypeInfo *type,
                                  bool had_as_clause, AstNode *at_expr,
                                  AstNode *init_expr, bool is_const, int lineno,
-                                 bool init_clause_present);
+                                 bool init_clause_present, bool at_clause_present);
 static AstNode *dim_build_array(Parser *p, const char *name, AstNode *bounds,
                                 TypeInfo *type, AstNode *arr_at_expr,
                                 AstNode *init, int lineno);
@@ -6673,7 +6673,9 @@ static AstNode *parse_dim_statement(Parser *p) {
 
     /* DIM x AS type AT expr (memory-mapped variable) */
     AstNode *at_expr = NULL;
+    bool at_clause_present = false;
     if (match(p, BTOK_AT)) {
+        at_clause_present = true;
         at_expr = parse_expression(p, PREC_NONE + 1);
     }
 
@@ -6700,7 +6702,7 @@ static AstNode *parse_dim_statement(Parser *p) {
      *     -> "Initialized variables must be declared one by one." */
     return dim_build_scalar(p, names, name_count, name, type, had_as_clause,
                             at_expr, init_expr, is_const, lineno,
-                            init_clause_present);
+                            init_clause_present, at_clause_present);
 }
 
 /* Scalar DIM/CONST declaration builder (extracted from parse_dim_statement so
@@ -6714,12 +6716,20 @@ static AstNode *dim_build_scalar(Parser *p, const char **names, int name_count,
                                  const char *name, TypeInfo *type,
                                  bool had_as_clause, AstNode *at_expr,
                                  AstNode *init_expr, bool is_const, int lineno,
-                                 bool init_clause_present) {
+                                 bool init_clause_present, bool at_clause_present) {
     /* init_clause_present && init_expr==NULL means the `= <expr>` initializer
      * failed to build (e.g. `DIM b = @a(0)` with `a` undeclared): Python's
      * production aborts before declare_variable, so the var is never declared
      * and emits NO [W100]. Track it to suppress the implicit-type warning. */
     bool init_clause_errored = init_clause_present && (init_expr == NULL);
+    /* The symmetric AT case (p_var_decl_at, zxbparser.py:659): `if p[5] is
+     * None: return` aborts before declare_variable when the AT-address expr
+     * failed to build — e.g. `DIM a AT @c(1,5)` with array `c` undeclared
+     * ("Undeclared array c", p[5]=None). So that DIM emits NO implicit-type
+     * [W100] either (dim_test0). A scalar forward-ref like `DIM a AT @b`
+     * (b a not-yet-declared VAR) does NOT error -> at_expr non-NULL -> the
+     * W100 fires, exactly as the oracle does for dim_at_label4-7. */
+    bool at_clause_errored = at_clause_present && (at_expr == NULL);
     if (name_count != 1) {
         if (at_expr) {
             zxbc_error(p->cs, lineno,
@@ -6863,7 +6873,8 @@ static AstNode *dim_build_scalar(Parser *p, const char **names, int name_count,
          * float; an explicit `AS <type>` or a sigil is not. Emitted at the
          * DIM line (not the entry's first-reference line), matching the
          * oracle's W100 vs circular-error lineno split. */
-        if (type && type->implicit && !dup_error && !init_clause_errored) {
+        if (type && type->implicit && !dup_error && !init_clause_errored &&
+            !at_clause_errored) {
             BasicType tbt = type->final_type ? type->final_type->basic_type
                                              : type->basic_type;
             if (tbt != TYPE_unknown) {
@@ -10125,7 +10136,7 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         int n = l->count > 64 ? 64 : l->count;
         for (int i = 0; i < n; i++) names[i] = l->ids[i]->name;
         r = dim_build_scalar(p, names, n, names[0], type, type != NULL,
-                             NULL, NULL, false, PD_LINENO(1), false);
+                             NULL, NULL, false, PD_LINENO(1), false, false);
         break;
     }
     case 32: { /* var_decl : DIM idlist typedef AT expr (p_var_decl_at) */
@@ -10134,8 +10145,12 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         const char *names[64];
         int n = l->count > 64 ? 64 : l->count;
         for (int i = 0; i < n; i++) names[i] = l->ids[i]->name;
+        /* AT clause always present in this production; PD_NODE(5)==NULL means
+         * the AT-address expr failed to build (semantic error already emitted)
+         * — pass at_clause_present=true so the [W100] is suppressed exactly as
+         * p_var_decl_at's `if p[5] is None: return` aborts (dim_test0). */
         r = dim_build_scalar(p, names, n, names[0], type, type != NULL,
-                             PD_NODE(5), NULL, false, PD_LINENO(1), false);
+                             PD_NODE(5), NULL, false, PD_LINENO(1), false, true);
         break;
     }
     case 33: case 34: { /* var_decl : DIM|CONST idlist typedef EQ expr */
@@ -10149,7 +10164,8 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
          * emitted) — pass init_clause_present=true so the [W100] is suppressed
          * exactly as Python's aborted production does (alxinho1). */
         r = dim_build_scalar(p, names, n, names[0], type, type != NULL,
-                             NULL, PD_NODE(5), prodno == 34, PD_LINENO(1), true);
+                             NULL, PD_NODE(5), prodno == 34, PD_LINENO(1), true,
+                             false);
         break;
     }
 
