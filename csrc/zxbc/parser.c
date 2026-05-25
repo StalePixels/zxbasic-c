@@ -4189,12 +4189,27 @@ static AstNode *parse_statement(Parser *p) {
         return s;
     }
 
-    /* ERROR expr */
+    /* ERROR expr  (zxbparser.py p_error_raise 1648-1658):
+     *   q = make_number(1, lineno=p.lineno(2))
+     *   r = make_binary(ln, "MINUS",
+     *                   make_typecast(TYPE.ubyte, p[2], ln), q, x-y)
+     *   p[0] = make_sentence(ln, "ERROR", r)
+     * The error code is 1-based in BASIC but 0-based in the runtime, so
+     * the AST is `(ubyte)expr - 1` (e.g. ERROR 0 -> 0-1 -> 255 as ubyte),
+     * NOT the bare expr. The C previously dropped this wrap and emitted
+     * the raw code (stoperr: ld a,0/xor a instead of ld a,255). */
     if (match(p, BTOK_ERROR_KW)) {
         int ln = p->previous.lineno;
         AstNode *s = make_sentence_node(p, "ERROR", ln);
-        AstNode *code = parse_expression(p, PREC_NONE + 1);
-        if (code) ast_add_child(p->cs, s, code);
+        AstNode *expr = parse_expression(p, PREC_NONE + 1);
+        if (expr) {
+            TypeInfo *ubyte_t = p->cs->symbol_table->basic_types[TYPE_ubyte];
+            AstNode *cast = make_typecast(p->cs, ubyte_t, expr, ln);
+            /* make_number uses p.lineno(2) (the expr's line) for the 1 */
+            AstNode *one = make_number(p, 1, expr->lineno, NULL);
+            AstNode *code = make_binary_node(p->cs, "MINUS", cast, one, ln, NULL);
+            ast_add_child(p->cs, s, code);
+        }
         return s;
     }
 
@@ -11914,12 +11929,22 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         ast_add_child(p->cs, r,
             make_number(p, 0, PD_LINENO(1), st->basic_types[TYPE_uinteger]));
         break;
-    case 146: /* statement : ERROR expr (p_error_raise) -> ERROR[expr] RAW.
-               * The C production (parser.c:4191-4196) adds the code expr raw
-               * (NOT Python's MINUS(typecast(ubyte,expr),1)) — match C-vs-C. */
-        r = make_sentence_node(p, "ERROR", PD_LINENO(1));
-        ast_add_child(p->cs, r, PD_NODE(2));
+    case 146: { /* statement : ERROR expr (p_error_raise, zxbparser.py
+                 * 1648-1658): ERROR[ MINUS(typecast(ubyte,expr), NUMBER(1)) ].
+                 * The error code is 1-based in BASIC, 0-based in the runtime,
+                 * so the AST subtracts 1 from the ubyte-cast code (ERROR 0 ->
+                 * 0-1 -> -1 -> 255 as ubyte: stoperr emits `ld a, 255`, not
+                 * `ld a, 0`/`xor a`). The NUMBER(1) takes p.lineno(2) (the
+                 * expr's line). */
+        int ln = PD_LINENO(1);
+        AstNode *expr = PD_NODE(2);
+        r = make_sentence_node(p, "ERROR", ln);
+        AstNode *cast = make_typecast(p->cs, st->basic_types[TYPE_ubyte], expr, ln);
+        AstNode *one = make_number(p, 1, expr ? expr->lineno : ln, NULL);
+        AstNode *code = make_binary_node(p->cs, "MINUS", cast, one, ln, NULL);
+        ast_add_child(p->cs, r, code);
         break;
+    }
     case 147: /* statement : STOP expr (p_stop_raise) -> STOP[expr] RAW
                * (production parser.c:4209 keeps the explicit expr raw). */
         r = make_sentence_node(p, "STOP", PD_LINENO(1));
