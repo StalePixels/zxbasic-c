@@ -73,12 +73,36 @@ static bool inst_is_ender(const char *i) {
     return in_set(i, S, 8);
 }
 
+/* helpers.ALL_REGS (helpers.py ALL_REGS frozenset). `code in ASMS` is
+ * true exactly for backend-emitted inline-asm cells, whose code is a
+ * `##ASMn` id (backend/common.py new_ASMID + generic.py:580 ASMS[id]=...);
+ * the peephole evaluator's IS_ASM uses the same `startswith("##ASM")`
+ * test (evaluator.py:64). For such cells both requires() (memcell.py:187)
+ * and destroys() (memcell.py:131) return set(ALL_REGS) — the inline asm
+ * may read/clobber anything. The optimizer MUST honour this so a register
+ * loaded for a FASTCALL whose body is `asm ... end asm` (e.g. `ld a, 1`
+ * before `call _sub` whose block is `##ASM0`) is NOT dropped as dead
+ * (fastcall_str, opt3_einar04). */
+static bool code_is_asm(const char *code) {
+    return code != NULL && strncmp(code, "##ASM", 5) == 0;
+}
+static void add_all_regs(Arena *a, Z80StrList *r,
+                         void (*addfn)(Arena *, Z80StrList *, const char *)) {
+    static const char *ALL[] = {"a","b","c","d","e","f","h","l",
+        "ixh","ixl","iyh","iyl","r","i","sp"};
+    for (size_t k = 0; k < sizeof(ALL)/sizeof(ALL[0]); k++)
+        addfn(a, r, ALL[k]);
+}
+
 /* ---- requires (memcell.py:184-321) — identical to peephole port ---- */
 static Z80StrList compute_requires(Arena *a, const char *i,
                                    const char *code, const char *cond,
                                    const Z80StrList *opers) {
     Z80StrList result; vec_init(result);
-    (void)code; /* code in ASMS -> false (documented invariant) */
+    if (code_is_asm(code)) {            /* code in ASMS -> ALL_REGS */
+        add_all_regs(a, &result, radd);
+        return result;
+    }
 
     Z80StrList o; vec_init(o);
     for (int k = 0; k < opers->len; k++) {
@@ -224,7 +248,10 @@ static Z80StrList compute_requires(Arena *a, const char *i,
 static Z80StrList compute_destroys(Arena *a, const char *code,
                                    const char *i, const Z80StrList *o) {
     Z80StrList res; vec_init(res);
-    (void)code; /* code in ASMS -> false */
+    if (code_is_asm(code)) {            /* code in ASMS -> ALL_REGS */
+        add_all_regs(a, &res, uadd);
+        return res;
+    }
 
     if (in_set(i,(const char*[]){"push","ret","call","rst","reti","retn"},6)) {
         uadd(a,&res,"sp"); return res;
