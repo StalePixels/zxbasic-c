@@ -8353,6 +8353,17 @@ static AstNode *pd_builtin1(Parser *p, const char *fname, BTokenType kw,
     return make_builtin_node(p, n, arg, kw, lineno);
 }
 
+/* No-arg builtin (RND/INKEY): build AST_BUILTIN(fname) with no child and the
+ * given result type — matching parse_builtin_func's RND/INKEY node-build
+ * (parser.c:1642-1655). */
+static AstNode *pd_builtin0(Parser *p, const char *fname, BasicType bt,
+                           int lineno) {
+    AstNode *n = ast_new(p->cs, AST_BUILTIN, lineno);
+    n->u.builtin.fname = arena_strdup(&p->cs->arena, fname);
+    n->type_ = p->cs->symbol_table->basic_types[bt];
+    return n;
+}
+
 /* make_sub_call (SymbolCALL.make_node, symbols/call.py:90-112) — the
  * parenless/with-args statement-level sub call. access_func resolves/auto-
  * declares the callee (child[0]); arglist is child[1]; FUNCCALL->CALL retag;
@@ -9909,6 +9920,38 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
      * unlike Python's p_arr_assignment; C-vs-C matches the production). The
      * string-array element-substr-assign special case (bounds+1 == len) is a
      * separate production path -> defer to UNWIRED. */
+    case 76: case 77: { /* statement : [LET] ARRAY_ID EQ ARRAY_ID
+                         * (p_array_copy). Match the production (parser.c:
+                         * 5089-5130): access both arrays, element-type check,
+                         * mark accessed, build ARRAYCOPY[larray, rarray]. The
+                         * memsize/count Python checks are warnings the C
+                         * production skips. */
+        int li = (prodno == 77) ? 1 : 0;   /* LHS ARRAY_ID 0-based index */
+        int ri = li + 2;                    /* RHS ARRAY_ID after EQ */
+        const char *lname = (const char *)rhs[li].sval;
+        const char *rname = (const char *)rhs[ri].sval;
+        int lln = rhs[li].lineno, rln = rhs[ri].lineno;
+        AstNode *larray = symboltable_access_id(p->cs->symbol_table, p->cs,
+                                                lname, lln, NULL, CLASS_array);
+        AstNode *rarray = symboltable_access_id(p->cs->symbol_table, p->cs,
+                                                rname, rln, NULL, CLASS_array);
+        /* The production returns make_nop on the None/type-error paths
+         * (parser.c:5116/5121) — match it (a dropped statement vs a NOP can
+         * shift the parent BLOCK shape on error files). */
+        if (!larray || !rarray) { r = make_nop(p); break; }
+        if (larray->type_ && rarray->type_ &&
+            !type_equal(larray->type_, rarray->type_)) {
+            zxbc_error(p->cs, lln, "Arrays must have the same element type");
+            r = make_nop(p); break;
+        }
+        larray->u.id.accessed = true;
+        rarray->u.id.accessed = true;
+        /* ARRAYCOPY lineno = the LHS ARRAY_ID line (the production's `ln`). */
+        r = make_sentence_node(p, "ARRAYCOPY", lln);
+        ast_add_child(p->cs, r, larray);
+        ast_add_child(p->cs, r, rarray);
+        break;
+    }
     case 78: case 79: {
         int i = (prodno == 79) ? 2 : 1;
         const char *aname = (const char *)rhs[i - 1].sval;
@@ -10006,6 +10049,13 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
     /* ---- leaf expressions ---- */
     /* ---- single-arg parenless builtins (KW bexpr) via make_builtin_node ---- */
     case 376: r = pd_builtin1(p, "USR",  BTOK_USR,  PD_NODE(2), PD_LINENO(1)); break;
+    case 377: case 378: /* bexpr : RND | RND LP RP (p_expr_rnd) -> float */
+        r = pd_builtin0(p, "RND", TYPE_float, PD_LINENO(1)); break;
+    case 390: /* string : STR expr (p_str) -> make_builtin STR (float-cast arg,
+               * constant-fold to STRING) handled by make_builtin_node. */
+        r = pd_builtin1(p, "STR", BTOK_STR, PD_NODE(2), PD_LINENO(1)); break;
+    case 391: /* string : INKEY (p_inkey) -> string */
+        r = pd_builtin0(p, "INKEY", TYPE_string, PD_LINENO(1)); break;
     case 379: r = pd_builtin1(p, "PEEK", BTOK_PEEK, PD_NODE(2), PD_LINENO(1)); break;
     case 381: r = pd_builtin1(p, "IN",   BTOK_IN,   PD_NODE(2), PD_LINENO(1)); break;
     case 386: r = pd_builtin1(p, "LEN",  BTOK_LEN,  PD_NODE(2), PD_LINENO(1)); break;
@@ -10421,23 +10471,44 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
             r = NULL;
             break;
         }
-        if (entry->u.id.class_ == CLASS_function ||
-            entry->u.id.class_ == CLASS_sub ||
-            entry->u.id.class_ == CLASS_array) {
-            c->unwired = true;
-            if (c->unwired_prod == 0) c->unwired_prod = prodno;
-            r = make_nop(p);
-            break;
-        }
+        /* mark accessed + auto-type promotion happen BEFORE the class
+         * dispatch (p_id_expr, zxbparser.py:2647-2672). */
         entry->u.id.accessed = true;
-        if (entry->u.id.class_ == CLASS_unknown)
-            entry->u.id.class_ = CLASS_var;
         if (entry->type_ && entry->type_->final_type &&
             entry->type_->final_type->basic_type == TYPE_unknown) {
             TypeInfo *promoted = type_new_ref(p->cs, p->cs->default_type, ln, true);
             entry->type_ = promoted;
             warn_implicit_type(p->cs, ln, name, p->cs->default_type->name);
         }
+        if (entry->u.id.class_ == CLASS_array) {
+            /* p_id_expr array branch: NOT in a LET assignment -> error +
+             * None; in a LET assignment -> keep the entry. */
+            if (!p->cs->let_assignment) {
+                zxbc_error(p->cs, ln,
+                           "Variable '%s' is an array and cannot be used in this context",
+                           name);
+                r = NULL;
+            } else {
+                r = entry;
+            }
+            break;
+        }
+        if (entry->u.id.class_ == CLASS_function) {
+            /* Function call with 0 args: make_call(name, lineno,
+             * make_arg_list(None)) — an empty ARGLIST -> FUNCCALL[id,
+             * ARGLIST()]. */
+            AstNode *empty_al = ast_new(p->cs, AST_ARGLIST, ln);
+            r = make_call_node(p, name, ln, empty_al, true, false, false);
+            break;
+        }
+        if (entry->u.id.class_ == CLASS_sub) {
+            /* Forbidden: a SUB used as a function value. */
+            zxbc_error(p->cs, ln, "'%s' is a SUB not a FUNCTION", name);
+            r = NULL;
+            break;
+        }
+        if (entry->u.id.class_ == CLASS_unknown)
+            entry->u.id.class_ = CLASS_var;
         r = entry;
         break;
     }
