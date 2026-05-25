@@ -8226,6 +8226,7 @@ typedef struct PdFuncDef {
     bool is_function;
     Convention conv;
     TypeInfo *ret_type;
+    TypeInfo *suffix_type; /* sigil-derived return type (test$ -> string), or NULL */
     AstNode *params;       /* PARAMLIST */
     bool rejected;         /* unported sub-form hit */
 } PdFuncDef;
@@ -8660,16 +8661,13 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         memset(fd, 0, sizeof(*fd));
         fd->name_raw = arena_strdup(&p->cs->arena, name_raw);
         fd->lineno = ln; fd->is_function = is_func; fd->conv = conv;
-        /* Sigil-typed function names (`test$`) set the return type from the
-         * suffix (production parser.c:7230-7239 fn_suffix_type) — not yet
-         * ported here, so defer (UNWIRED) to avoid a wrong FUNCCALL type
-         * (sigilfunc). Still declare + enter scope so the body reduces and
-         * the parse stays balanced. */
-        bool fn_has_sigil = (fl > 0 && is_deprecated_suffix(name_raw[fl - 1]));
-        if (fn_has_sigil) {
-            fd->rejected = true;
-            c->unwired = true;
-            if (c->unwired_prod == 0) c->unwired_prod = prodno;
+        /* Sigil-typed function names (`test$`) derive the return type from
+         * the suffix (production parser.c:7276-7279 fn_suffix_type), used at
+         * function_header_pre (330) when there is no explicit `AS` typedef.
+         * (sigilfunc, param0/2/3.) */
+        if (fl > 0 && is_deprecated_suffix(name_raw[fl - 1])) {
+            BasicType sbt = suffix_to_type(name_raw[fl - 1]);
+            fd->suffix_type = p->cs->symbol_table->basic_types[sbt];
         }
         AstNode *pre = symboltable_lookup(p->cs->symbol_table, fname);
         AstNode *id;
@@ -8723,16 +8721,37 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         AstNode *params = (AstNode *)rhs[1].value;
         TypeInfo *td = (TypeInfo *)rhs[2].value;
         fd->params = params;
-        /* return type: FUNCTION with no AS -> implicit default; SUB stays
-         * NULL. (p_function_header_pre type logic; suffix/strict deferred to
-         * the typed pass.) */
+        /* return type: explicit `AS <type>` (td) wins; else a FUNCTION with a
+         * sigil-suffixed name takes the sigil type (production parser.c:
+         * 7520-7528 fn_suffix_type); else a FUNCTION with no AS gets the
+         * implicit default; a SUB stays NULL. */
         if (td) {
             fd->ret_type = td;
+        } else if (fd->is_function && fd->suffix_type) {
+            fd->ret_type = fd->suffix_type;
         } else if (fd->is_function) {
             fd->ret_type = type_new_ref(p->cs, p->cs->default_type, fd->lineno, true);
         }
         if (fd->id_node) {
-            fd->id_node->type_ = fd->ret_type;
+            /* p_function_header_pre type reconciliation (zxbparser.py:2961):
+             *   if not typedef.implicit or entry.type_ is None or
+             *      entry.type_ == unknown:  entry.type_ = typedef
+             * An EXPLICIT `AS` type always wins; otherwise a FORWARDED entry's
+             * EXISTING type (e.g. a `declare function test$(...)` sigil-derived
+             * string) is preserved against an implicit default at the no-sigil
+             * definition (param2). NARROWED to forwarded entries only — a fresh
+             * function always takes its computed ret_type (the common case is
+             * untouched; broadening to all entries regressed CALL types). */
+            AstNode *e = fd->id_node;
+            bool ret_is_explicit = (td && !td->implicit) ||
+                                   (fd->is_function && fd->suffix_type && !td);
+            bool entry_type_set = e->type_ &&
+                !(e->type_->final_type &&
+                  e->type_->final_type->basic_type == TYPE_unknown);
+            if (e->u.id.forwarded && entry_type_set && !ret_is_explicit)
+                fd->ret_type = e->type_;       /* keep forwarded type */
+            else
+                e->type_ = fd->ret_type;
             fd->id_node->u.id.params = params;
             fd->id_node->u.id.param_size = parser_assign_param_offsets(p, params);
         }
