@@ -8198,10 +8198,15 @@ typedef struct PdElse {
 /* The substr value (the `substr` non-terminal) — Python carries a tuple
  * `(lower, upper)` of uinteger-pre-cast bounds (zxbparser.py:2600-2638). The
  * string-slice-consuming reduces (288/289/etc.) pass these to
- * make_strslice_node. */
+ * make_strslice_node. `raw_lower`/`raw_upper` are the bounds BEFORE the
+ * uinteger pre-cast — the array-substr WRITE path (302/303) needs them raw
+ * because the C production builds the array-substr inner STRSLICE bounds at
+ * their natural type (build_array_substr_lvalue, not the cast read path). */
 typedef struct PdSubstr {
     AstNode *lower;
     AstNode *upper;
+    AstNode *raw_lower;
+    AstNode *raw_upper;
 } PdSubstr;
 
 /* The elseif_expr value — Python carries a tuple `(label_, cond_)`
@@ -8352,6 +8357,17 @@ static AstNode *pd_builtin1(Parser *p, const char *fname, BTokenType kw,
     n->u.builtin.fname = arena_strdup(&p->cs->arena, fname);
     ast_add_child(p->cs, n, arg);
     return make_builtin_node(p, n, arg, kw, lineno);
+}
+
+/* Snapshot a substr bound's RAW (pre-uinteger-cast) value: a constant NUMBER
+ * is copied to a fresh auto-typed node (so a later make_typecast on the
+ * original does not mutate this snapshot); any other node is returned as-is
+ * (make_typecast wraps non-constants, never mutating them). Used to keep the
+ * array-substr WRITE bounds at their natural type while the read path casts. */
+static AstNode *pd_clone_bound(Parser *p, AstNode *n) {
+    if (n && n->tag == AST_NUMBER)
+        return make_number(p, n->u.number.value, n->lineno, n->type_);
+    return n;
 }
 
 /* No-arg builtin (RND/INKEY): build AST_BUILTIN(fname) with no child and the
@@ -10189,6 +10205,58 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         break;
     }
 
+    /* ---- array-substr writes (p_let_arr_substr*, 302-313) ----
+     * `[LET] ARRAY_ID arg_list substr EQ expr` and the `LP arguments TO ... RP`
+     * variants -> make_array_substr_assign(lineno, id, arg_list, substr, expr)
+     * -> the C build_array_substr_lvalue (Shape-A STRSLICE[ARRAYACCESS,
+     * STRSLICE[lo,hi]]) wrapped in LETARRAY[lv, RAW expr] (the production's LET
+     * path, parser.c:2727-2766 + 5055-5057). `i` is the 1-based ARRAY_ID
+     * position; LET forms (even prodno) shift +1. Faithful to zxbparser.py:
+     * 2733-2815. */
+    case 302: case 303: {
+        /* [LET] ARRAY_ID arg_list substr EQ expr (p_let_arr_substr): the TO
+         * substr form `a$(dims)(lo TO hi) = rhs`. The C PRODUCTION builds
+         * build_array_substr_lvalue (Shape-A STRSLICE[ARRAYACCESS, STRSLICE
+         * [lo,hi]]) with the substr bounds at their NATURAL type (NOT the
+         * uinteger pre-cast read path uses) — so use PdSubstr.raw_lower/upper.
+         * Wrapped in LETARRAY[lv, RAW expr] (parser.c:2727-2766 + 5055-5057). */
+        int is_let = (prodno == 302);
+        int i = is_let ? 2 : 1;
+        const char *aname = PD_SVAL(i);
+        int aln = PD_LINENO(i);
+        AstNode *arglist = (AstNode *)rhs[i].value;
+        PdSubstr *ss = (PdSubstr *)rhs[i + 1].value;
+        AstNode *rexpr = (AstNode *)rhs[i + 3].value;
+        if (!arglist || !ss || !rexpr) { r = NULL; break; }
+        /* A NON-string array `a(3)(1 TO 5) = ...` (let_array_substr4): Python's
+         * make_array_substr_assign errors + None, but the OLD production builds
+         * a chained STRSLICE-over-ARRAYACCESS via parse_postfix (a recursive-
+         * descent divergence) — the engine matches PYTHON, so defer that case
+         * to Phase-E-reconcile rather than emit the error + drop (which would
+         * DIFF vs the production's kept tree). */
+        {
+            AstNode *probe = symboltable_get_entry(p->cs->symbol_table, aname);
+            if (!probe || probe->tag != AST_ID || !type_is_string(probe->type_)) {
+                c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
+                r = make_nop(p); break;
+            }
+        }
+        AstNode *lv = build_array_substr_lvalue(p, aname, aln,
+                                                arglist->children,
+                                                arglist->child_count,
+                                                ss->raw_lower, ss->raw_upper);
+        if (!lv) { r = NULL; break; }  /* error already emitted -> p[0]=None */
+        r = make_sentence_node(p, "LETARRAY", PD_LINENO(1));
+        ast_add_child(p->cs, r, lv);
+        ast_add_child(p->cs, r, rexpr);  /* RAW expr */
+        break;
+    }
+    /* 304/305 (chained `a$(b)(idx)` → the production builds a chained
+     * ARRAYACCESS-over-ARRAYACCESS, NOT a substr STRSLICE) and 306-313 (the
+     * `LP arguments TO ... RP` forms — production-specific shapes) build deeply
+     * production-specific trees diverging from both Python and 302/303; defer
+     * to a future focused pass (they fall to the default UNWIRED path). */
+
     /* ---- RESTORE (p_restore, 158/159/160) ----
      * statement : RESTORE | RESTORE ID | RESTORE NUMBER. SENTENCE("RESTORE")
      * + optional AST_ID label child (name/class_=label), matching the
@@ -10403,6 +10471,14 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
     case 291: { /* substr : LP expr TO expr RP */
         PdSubstr *ss = arena_alloc(&p->cs->arena, sizeof(PdSubstr));
         TypeInfo *ui = st->basic_types[TYPE_uinteger];
+        /* Capture the RAW bounds BEFORE the uinteger cast — make_typecast
+         * mutates a constant NUMBER in place (retypes it to uinteger), so the
+         * raw snapshot must be a distinct node for the array-substr WRITE path
+         * (which keeps the bound at its natural type). pd_clone_bound copies a
+         * NUMBER; a non-constant bound make_typecast WRAPS (not mutates), so
+         * the original node stays raw and is shared safely. */
+        ss->raw_lower = pd_clone_bound(p, PD_NODE(2));
+        ss->raw_upper = pd_clone_bound(p, PD_NODE(4));
         ss->lower = make_typecast(p->cs, ui, PD_NODE(2), PD_LINENO(1));
         ss->upper = make_typecast(p->cs, ui, PD_NODE(4), PD_LINENO(3));
         /* A bound that can't convert to uinteger (e.g. a string-typed bound
@@ -10421,8 +10497,9 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
     case 292: { /* substr : LP TO expr RP -> lower=NUMBER(0), upper=expr */
         PdSubstr *ss = arena_alloc(&p->cs->arena, sizeof(PdSubstr));
         TypeInfo *ui = st->basic_types[TYPE_uinteger];
-        ss->lower = make_typecast(p->cs, ui,
-                        make_number(p, 0, PD_LINENO(2), NULL), PD_LINENO(1));
+        ss->raw_lower = make_number(p, 0, PD_LINENO(2), NULL);
+        ss->raw_upper = pd_clone_bound(p, PD_NODE(3));
+        ss->lower = make_typecast(p->cs, ui, make_number(p, 0, PD_LINENO(2), NULL), PD_LINENO(1));
         ss->upper = make_typecast(p->cs, ui, PD_NODE(3), PD_LINENO(2));
         if (!ss->lower || !ss->upper) { /* see case 291 — Phase-E-reconcile */
             c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
@@ -10433,9 +10510,10 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
     case 293: { /* substr : LP expr TO RP -> lower=expr, upper=NUMBER(65534) */
         PdSubstr *ss = arena_alloc(&p->cs->arena, sizeof(PdSubstr));
         TypeInfo *ui = st->basic_types[TYPE_uinteger];
+        ss->raw_lower = pd_clone_bound(p, PD_NODE(2));
+        ss->raw_upper = make_number(p, 65534, PD_LINENO(4), NULL);
         ss->lower = make_typecast(p->cs, ui, PD_NODE(2), PD_LINENO(1));
-        ss->upper = make_typecast(p->cs, ui,
-                        make_number(p, 65534, PD_LINENO(4), NULL), PD_LINENO(4));
+        ss->upper = make_typecast(p->cs, ui, make_number(p, 65534, PD_LINENO(4), NULL), PD_LINENO(4));
         if (!ss->lower || !ss->upper) { /* see case 291 — Phase-E-reconcile */
             c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
         }
@@ -10445,10 +10523,10 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
     case 294: { /* substr : LP TO RP -> lower=NUMBER(0), upper=NUMBER(65534) */
         PdSubstr *ss = arena_alloc(&p->cs->arena, sizeof(PdSubstr));
         TypeInfo *ui = st->basic_types[TYPE_uinteger];
-        ss->lower = make_typecast(p->cs, ui,
-                        make_number(p, 0, PD_LINENO(2), NULL), PD_LINENO(1));
-        ss->upper = make_typecast(p->cs, ui,
-                        make_number(p, 65534, PD_LINENO(3), NULL), PD_LINENO(2));
+        ss->raw_lower = make_number(p, 0, PD_LINENO(2), NULL);
+        ss->raw_upper = make_number(p, 65534, PD_LINENO(3), NULL);
+        ss->lower = make_typecast(p->cs, ui, make_number(p, 0, PD_LINENO(2), NULL), PD_LINENO(1));
+        ss->upper = make_typecast(p->cs, ui, make_number(p, 65534, PD_LINENO(3), NULL), PD_LINENO(2));
         *out = ss; *out_lineno = PD_LINENO(1);
         return true;
     }
