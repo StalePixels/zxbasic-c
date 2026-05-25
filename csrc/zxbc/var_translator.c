@@ -123,6 +123,39 @@ static const char *vt_number_str(Translator *tr, AstNode *node) {
     return node->t ? node->t : "";
 }
 
+/* str(node) for the TYPECAST else-branch reject (translator_visitor.py:232 —
+ * syntax_error_cant_convert_to_type(node.lineno, str(node.operand), ...)).
+ * Mirrors translator.c's static tr_symbol_str: UNARY -> "OP(operand)",
+ * BINARY -> "L OP R", ID -> name, NUMBER -> str(value), else -> token. */
+static const char *vt_symbol_str(Translator *tr, AstNode *node) {
+    if (!node) return "";
+    if (node->tag == AST_ID)
+        return node->u.id.name ? node->u.id.name : "";
+    if (node->tag == AST_NUMBER)
+        return vt_number_str(tr, node);
+    if (node->tag == AST_UNARY) {
+        const char *op = node->u.unary.operator ? node->u.unary.operator : "";
+        AstNode *operand = node->child_count > 0 ? node->children[0] : NULL;
+        const char *os = vt_symbol_str(tr, operand);
+        size_t need = strlen(op) + strlen(os) + 4;
+        char *out = arena_alloc(&tr->cs->arena, need);
+        snprintf(out, need, "%s(%s)", op, os);
+        return out;
+    }
+    if (node->tag == AST_BINARY) {
+        const char *op = node->u.binary.operator ? node->u.binary.operator : "";
+        AstNode *l = node->child_count > 0 ? node->children[0] : NULL;
+        AstNode *r = node->child_count > 1 ? node->children[1] : NULL;
+        const char *ls = vt_symbol_str(tr, l);
+        const char *rs = vt_symbol_str(tr, r);
+        size_t need = strlen(ls) + strlen(op) + strlen(rs) + 4;
+        char *out = arena_alloc(&tr->cs->arena, need);
+        snprintf(out, need, "%s %s %s", ls, op, rs);
+        return out;
+    }
+    return ast_tag_name(node->tag); /* Symbol.__str__ -> token */
+}
+
 /* operator map (translator_visitor.py:201-211): token -> infix glyph. */
 static const char *vt_binary_glyph(const char *op) {
     if (!op) return NULL;
@@ -222,8 +255,28 @@ static const char *vt_traverse_const_expr(Translator *tr, AstNode *node) {
             memcpy(out + 2, r, rl + 1);
             return out;
         }
-        if (mid && strcmp(mid, "ADDRESS") == 0)
+        /* ADDRESS (translator_visitor.py:191-196): recurse iff operand is
+         * global or a LABEL/FUNCTION (FuncRef.token=="FUNCTION" backs both
+         * function and sub); else "Initializer expression is not constant."
+         * (errmsg.py:217-218). Mirrors translator.c's tr_traverse_const. */
+        if (mid && strcmp(mid, "ADDRESS") == 0) {
+            bool ok = false;
+            if (operand && operand->tag == AST_ID) {
+                if (operand->u.id.scope == SCOPE_global ||
+                    operand->u.id.class_ == CLASS_label ||
+                    operand->u.id.class_ == CLASS_function ||
+                    operand->u.id.class_ == CLASS_sub)
+                    ok = true;
+            } else if (operand) {
+                ok = true; /* ARRAYACCESS etc.: scope via entry, handled below */
+            }
+            if (!ok) {
+                err_not_constant(tr->cs,
+                                 operand ? operand->lineno : node->lineno);
+                return "";
+            }
             return vt_traverse_const_expr(tr, operand);
+        }
         fprintf(stderr, "zxbc: traverse_const invalid unary op '%s'\n",
                 mid ? mid : "");
         return "";
@@ -243,6 +296,47 @@ static const char *vt_traverse_const_expr(Translator *tr, AstNode *node) {
         size_t need = strlen(ls) + strlen(rs) + strlen(mid) + 8;
         char *out = arena_alloc(&tr->cs->arena, need);
         snprintf(out, need, "(%s) %s (%s)", ls, mid, rs);
+        return out;
+    }
+
+    /* translator_visitor.py:222-233 — TYPECAST: wrap the operand const-string
+     * in the target-width mask. `DIM a as Ubyte = @Map` lands here as
+     * TYPECAST(ubyte, ADDRESS(LABEL Map)); without this arm the node hit the
+     * unhandled-tag fallthrough (tag=6) and emitted an empty operand, then
+     * malformed asm. Identical to translator.c's tr_traverse_const TYPECAST
+     * arm (which the runtime const-fold path already ports). */
+    if (node->tag == AST_TYPECAST) {
+        AstNode *operand = node->child_count > 0 ? node->children[0] : NULL;
+        const char *inner = vt_traverse_const_expr(tr, operand);
+        const TypeInfo *ft = node->type_ && node->type_->final_type
+                                 ? node->type_->final_type : node->type_;
+        BasicType bt = ft ? ft->basic_type : TYPE_unknown;
+        size_t il = strlen(inner);
+        char *out;
+        if (bt == TYPE_byte || bt == TYPE_ubyte) {
+            out = arena_alloc(&tr->cs->arena, il + 12);
+            snprintf(out, il + 12, "(%s) & 0xFF", inner);
+        } else if (bt == TYPE_integer || bt == TYPE_uinteger) {
+            out = arena_alloc(&tr->cs->arena, il + 14);
+            snprintf(out, il + 14, "(%s) & 0xFFFF", inner);
+        } else if (bt == TYPE_long || bt == TYPE_ulong) {
+            out = arena_alloc(&tr->cs->arena, il + 18);
+            snprintf(out, il + 18, "(%s) & 0xFFFFFFFF", inner);
+        } else if (bt == TYPE_fixed) {
+            out = arena_alloc(&tr->cs->arena, il + 26);
+            snprintf(out, il + 26, "((%s) & 0xFFFF) << 16", inner);
+        } else {
+            /* translator_visitor.py:232-233 — non byte/int/long/fixed target
+             * (e.g. float/string) cannot be a static const cast:
+             *   syntax_error_cant_convert_to_type(node.lineno,
+             *       str(node.operand), node.type_); return None */
+            const char *expr_str = vt_symbol_str(tr, operand);
+            const char *tn = (node->type_ && node->type_->name)
+                                 ? node->type_->name
+                                 : (ft && ft->name ? ft->name : "");
+            err_cant_convert(tr->cs, node->lineno, expr_str, tn);
+            return inner;
+        }
         return out;
     }
 

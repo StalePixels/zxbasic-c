@@ -2048,11 +2048,30 @@ static AstNode *tr_visit_unary(Visitor *v, AstNode *node) {
              * scalar-global `#operand.t` collapses to a bare "#" and emits
              * `ld hl, ` with no operand (atlabel2 -> assembler syntax
              * error -> leaked exit 5). */
+            /* Resolve operand.t exactly as the Python ref classes do
+             * (id_ ref classes): for a global the .t collapses to parent.mangled
+             *   - LabelRef.t   == ".LABEL._<name>"        (labelref.py:34-35)
+             *   - VarRef.t      (global)  == parent.mangled (varref.py:35-37)
+             *   - FuncRef.t              == parent.mangled (funcref.py:46-47),
+             *     and FuncRef backs BOTH sub and function (CLASS_sub/function).
+             * The C parser only stamps .t for the dotted-label path, so for a
+             * global VAR (`@b`, b a Let-implicit uinteger) or a SUB/FUNCTION
+             * (`@bulletcuchillo`, a sub fastcall) operand->t is unset and the
+             * bare `#` collapsed to `ld hl,` -> assembler syntax error (rc 5).
+             * Fall back to the operand's mangled name in those cases. */
             const char *opt;
             if (operand && operand->tag == AST_ID &&
                 operand->u.id.class_ == CLASS_label)
                 opt = (operand->t && operand->t[0]) ? operand->t
                                                     : tr_label_mangled(tr, operand);
+            else if (operand && operand->t && operand->t[0])
+                opt = operand->t;
+            else if (operand && operand->tag == AST_ID &&
+                     (operand->u.id.class_ == CLASS_var ||
+                      operand->u.id.class_ == CLASS_function ||
+                      operand->u.id.class_ == CLASS_sub) &&
+                     operand->u.id.mangled && operand->u.id.mangled[0])
+                opt = operand->u.id.mangled;
             else
                 opt = (operand && operand->t) ? operand->t : "";
             size_t ol = strlen(opt);
@@ -4423,12 +4442,43 @@ static const char *tr_traverse_const(Translator *tr, AstNode *node) {
             memcpy(out + 2, r, rl + 1);
             return out;
         }
-        /* ADDRESS -> traverse_const(operand) iff operand is global or a
-         * LABEL/FUNCTION (:188-193). The C @-operand is the shared
-         * symbol-table entry (CLASS_label once `<name>:` ran to_label,
-         * or a global scalar). */
-        if (mid && strcmp(mid, "ADDRESS") == 0)
+        /* ADDRESS (translator_visitor.py:191-196):
+         *   if operand.scope == global_ or operand.token in ("LABEL","FUNCTION"):
+         *       result = traverse_const(operand)
+         *   else:
+         *       syntax_error_not_constant(operand.lineno); return None
+         * operand.token is FuncRef/LabelRef-backed: "LABEL" for a label,
+         * "FUNCTION" for BOTH a function AND a sub (funcref.py:35-36). A
+         * local/param operand is neither global nor LABEL/FUNCTION -> the
+         * "Initializer expression is not constant." reject (errmsg.py:217-218),
+         * exactly matching `@<local>` used in a const context (the negative
+         * battery case). The C @-operand is the shared symbol-table entry
+         * (CLASS_label once `<name>:` ran to_label, or a global scalar). */
+        if (mid && strcmp(mid, "ADDRESS") == 0) {
+            bool ok = false;
+            if (operand && operand->tag == AST_ID) {
+                if (operand->u.id.scope == SCOPE_global ||
+                    operand->u.id.class_ == CLASS_label ||
+                    operand->u.id.class_ == CLASS_function ||
+                    operand->u.id.class_ == CLASS_sub)
+                    ok = true;
+            } else if (operand) {
+                /* non-ID operand (e.g. ARRAYACCESS) carries scope via its
+                 * entry; the existing ARRAYACCESS arm handles the global
+                 * case. Be permissive here and recurse (Python reads
+                 * operand.scope which delegates to the entry). */
+                ok = true;
+            }
+            if (!ok) {
+                /* Python returns None here; in C an empty string is the
+                 * crash-safe analogue (the error already set rc 1, and the
+                 * BINARY/TYPECAST recursion sites strlen() the result). */
+                err_not_constant(tr->cs,
+                                 operand ? operand->lineno : node->lineno);
+                return "";
+            }
             return tr_traverse_const(tr, operand);
+        }
         fprintf(stderr, "zxbc: traverse_const invalid unary op '%s'\n",
                 mid ? mid : "");
         return "";
@@ -4727,7 +4777,13 @@ static void tr_visit_function(Translator *tr, AstNode *fdecl) {
                 !(dv->tag == AST_NUMBER && dv->u.number.value == 0.0)) {
                 if (dv->tag == AST_CONSTEXPR) {
                     char *one[1];
-                    one[0] = (char *)tr_traverse_const(tr, dv);
+                    /* traverse_const returns NULL after emitting the
+                     * "not constant" reject for a non-const @-operand
+                     * (e.g. `@<local>`); Python passes that None to
+                     * ic_lvarx (the compile already failed rc 1). Keep the
+                     * quad shape but avoid a NULL deref. */
+                    const char *tv = tr_traverse_const(tr, dv);
+                    one[0] = (char *)(tv ? tv : "");
                     tr_ic_lvarx(tr, lv->type_, lv->u.id.offset, one, 1);
                 } else {
                     char *data[8];

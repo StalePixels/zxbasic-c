@@ -598,20 +598,34 @@ bool check_is_static(const AstNode *node) {
     return check_is_CONST(node) || check_is_number(node) || check_is_const(node);
 }
 
-/* check.is_dynamic (api/check.py:370-378), single-entry form:
- *   not (i.scope == SCOPE.global_ and i.is_basic and i.type_ != string)
- * i.scope/i.is_basic/i.type_ are the symbol-table ENTRY's attributes
- * (id_/ref VarRef/LabelRef etc.).  A global scalar of a basic non-string
- * type (incl. a LABEL, whose ref type_ is PTR_TYPE==uinteger and scope
- * is global) is NOT dynamic -> p_addr_of_id CONSTEXPR-wraps it.  A
- * dynamic entry (string, array, local/param) stays a bare UNARY. */
+/* check.is_dynamic (api/check.py:370-379), single-entry form as called from
+ * p_addr_of_id (zxbparser.py:2682):
+ *     try:
+ *         return not any(i.scope == SCOPE.global_ and i.is_basic
+ *                        and i.type_ != string for i in p)
+ *     except Exception:
+ *         pass
+ *     return False
+ * CRITICAL: `i.is_basic` is delegated (Id.__getattr__ -> ref) and NO ref
+ * (VarRef/LabelRef/FuncRef/...) actually defines `is_basic`, so reading it
+ * ALWAYS raises AttributeError. The generator's `and` short-circuits on
+ * `i.scope == global_` first:
+ *   - scope != global  -> condition is False, is_basic never read, no raise
+ *                         -> any()==False -> is_dynamic == True  (bare UNARY)
+ *   - scope == global  -> is_basic is read -> raises -> except -> return False
+ *                         -> is_dynamic == False (CONSTEXPR-wrapped)
+ * The is_basic / type_!=string sub-conditions are therefore DEAD: a GLOBAL
+ * entry of ANY class (var incl. string, label, function, sub) is is_dynamic
+ * == False and gets CONSTEXPR-wrapped; only a local/param entry stays a bare
+ * UNARY. Probed against the Python oracle (opt2 `@<sub>` -> False; `@<local>`
+ * -> True; `@<global string>` -> False). The prior `type_is_basic` form
+ * wrongly returned True for `@<sub>`/`@<function>` (non-basic type), leaving a
+ * runtime UNARY that emitted an extra push/pop vs Python's folded
+ * `storeu16 #_<name>`. */
 bool check_is_dynamic(const AstNode *entry) {
     if (!entry || entry->tag != AST_ID)
         return true;
-    bool nondyn = (entry->u.id.scope == SCOPE_global) &&
-                  type_is_basic(entry->type_) &&
-                  !type_is_string(entry->type_);
-    return !nondyn;
+    return entry->u.id.scope != SCOPE_global;
 }
 
 /* LabelRef.accessed setter cascade (labelref.py:48-55) + the
