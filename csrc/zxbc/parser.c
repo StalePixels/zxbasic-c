@@ -8353,6 +8353,28 @@ static AstNode *pd_make_block_n(Parser *p, AstNode **args, int n) {
     return blk;
 }
 
+/* IF/loop body builder for the SWAP. Python's p_if_sentence/p_*_sentence use
+ * make_block(stat, endif) — a RECURSIVE flatten that splices a label_line
+ * compound (BLOCK[LABEL, stmt]) into siblings. The OLD production kept it
+ * one-level-nested; pd_if_body matched the OLD production. For the swap the
+ * engine must match PYTHON, so build via the recursive make_block. For a
+ * non-label body the two are identical, so the EQUAL files are unchanged. */
+static AstNode *pd_if_body_block(Parser *p, AstNode *stat, AstNode *endif) {
+    return pd_make_block2(p, stat, endif);
+}
+
+/* In astcmp mode (vs the OLD production), a label-in-body / leading-`:`-NOP
+ * body diverges from the old production's one-level nesting — classify the file
+ * UNWIRED there (DIFF stays 0). In swap mode (emit_errors) the engine keeps the
+ * real Python tree (the swap is validated vs PYTHON, which it matches). */
+static void pd_label_gate(PdCtx *c, AstNode *body, int prodno) {
+    if (c->emit_errors) return;  /* swap: keep the real tree */
+    if (pd_block_has_label(body) || pd_block_has_nop(body)) {
+        c->unwired = true;
+        if (c->unwired_prod == 0) c->unwired_prod = prodno;
+    }
+}
+
 /* Binary op with parse_infix's exact error recovery: make_binary_node, and on
  * NULL (a type error already reported) fall back to the LEFT operand — matching
  * the production parser's parse_infix `if (!result) return left;` (parser.c:
@@ -8984,11 +9006,8 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
                        * Only a LABEL in the body still diverges (program_co/
                        * label_line flatten vs production's nested compound,
                        * byte-clean — ifthen); defer that -> UNWIRED. */
-        AstNode *body = pd_if_body(p, PD_NODE(3), PD_NODE(4));
-        if (pd_block_has_label(body)) {
-            c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
-            r = make_nop(p); break;
-        }
+        AstNode *body = pd_if_body_block(p, PD_NODE(3), PD_NODE(4));
+        pd_label_gate(c, body, prodno);
         r = make_sentence_node(p, "IF", PD_LINENO(2));
         ast_add_child(p->cs, r, PD_NODE(1));
         ast_add_child(p->cs, r, body);
@@ -8999,18 +9018,21 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         ast_add_child(p->cs, r, PD_NODE(1));
         ast_add_child(p->cs, r, pd_if_body(p, NULL, PD_NODE(3)));
         break;
-    case 94: /* statement : if_then_part NEWLINE label statements_co endif
-              * (len==6, label body) — label always present, defer. */
-        c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
-        r = make_nop(p);
+    case 94: { /* statement : if_then_part NEWLINE label statements_co endif
+                * (p_if_sentence, len==6): stat_ = make_block(lbl, p[4]); body =
+                * make_block(stat_, endif). Build Python's tree. */
+        AstNode *stat_ = pd_make_block2(p, PD_NODE(3), PD_NODE(4));
+        AstNode *body = pd_if_body_block(p, stat_, PD_NODE(5));
+        pd_label_gate(c, body, prodno);
+        r = make_sentence_node(p, "IF", PD_LINENO(2));
+        ast_add_child(p->cs, r, PD_NODE(1));
+        ast_add_child(p->cs, r, body);
         break;
+    }
     case 100: case 101: { /* statement : if_then_part statements_co|
                           * co_statements_co endif (same-line). */
-        AstNode *body = pd_if_body(p, PD_NODE(2), PD_NODE(3));
-        if (pd_block_has_label(body)) {
-            c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
-            r = make_nop(p); break;
-        }
+        AstNode *body = pd_if_body_block(p, PD_NODE(2), PD_NODE(3));
+        pd_label_gate(c, body, prodno);
         r = make_sentence_node(p, "IF", PD_LINENO(1));
         ast_add_child(p->cs, r, PD_NODE(1));
         ast_add_child(p->cs, r, body);
@@ -9018,13 +9040,9 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
     }
     case 102: case 103: case 104: case 105: {
         /* if_inline : if_then_part statements|co_statements_co|statements_co|
-         * co_statements (p_if_inline). SENTENCE("IF", cond, pd_if_body(stat)).
-         * No endif. Label-in-body deferred (nesting reason). */
-        AstNode *body = pd_if_body(p, PD_NODE(2), NULL);
-        if (pd_block_has_label(body)) {
-            c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
-            r = make_nop(p); break;
-        }
+         * co_statements (p_if_inline). SENTENCE("IF", cond, body). No endif. */
+        AstNode *body = pd_if_body_block(p, PD_NODE(2), NULL);
+        pd_label_gate(c, body, prodno);
         r = make_sentence_node(p, "IF", PD_LINENO(1));
         ast_add_child(p->cs, r, PD_NODE(1));
         ast_add_child(p->cs, r, body);
@@ -9121,15 +9139,15 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         AstNode *else_node = NULL;
         if (prodno == 110) {            /* ... endif: then_=make_block(then_,endif) */
             AstNode *endif = PD_NODE(3);
-            then_ = pd_if_body(p, then_, endif);
+            then_ = pd_if_body_block(p, then_, endif);
             else_node = NULL;
         } else if (prodno == 111) {     /* ... else_part: else_=make_block(*list) */
             PdElse *el = (PdElse *)rhs[2].value;
-            if (!el || pd_block_has_nop(el->e[0])) { /* deferred (label / leading-`:` NOP) */
+            if (!el) {                  /* deferred (label else) */
                 c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
                 r = make_nop(p); break;
             }
-            then_ = pd_if_body(p, then_, NULL);
+            then_ = pd_if_body_block(p, then_, NULL);
             else_node = pd_make_block_n(p, el->e, el->n);
         } else {                        /* 112: ... elseiflist (nested) */
             AstNode *nested = PD_NODE(3);
@@ -9137,17 +9155,15 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
                 c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
                 r = make_nop(p); break;
             }
-            then_ = pd_if_body(p, then_, NULL);
+            then_ = pd_if_body_block(p, then_, NULL);
             else_node = nested;
         }
         AstNode *nif = make_sentence_node(p, "IF", pe->lineno);
         if (pe->cond) ast_add_child(p->cs, nif, pe->cond);
         ast_add_child(p->cs, nif, then_);
         if (else_node) ast_add_child(p->cs, nif, else_node);
-        if (pd_block_has_label(then_) || pd_block_has_label(else_node)) {
-            c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
-            r = make_nop(p); break;
-        }
+        pd_label_gate(c, then_, prodno);
+        pd_label_gate(c, else_node, prodno);
         r = nif; /* make_block(NOP, IF) unwraps to the IF sentence */
         break;
     }
@@ -9160,16 +9176,13 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         AstNode *stats_, *eliflist;
         /* The production always builds a (possibly-empty) BLOCK for the then-
          * part (parse_if_statement:5575), NOT Python's make_nop — match it. */
-        if (prodno == 106) { stats_ = pd_if_body(p, PD_NODE(3), NULL); eliflist = PD_NODE(4); }
+        if (prodno == 106) { stats_ = pd_if_body_block(p, PD_NODE(3), NULL); eliflist = PD_NODE(4); }
         else               { stats_ = make_block_node(p, PD_LINENO(2)); eliflist = PD_NODE(3); }
         if (!eliflist || eliflist->tag == AST_NOP) {
             c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
             r = make_nop(p); break;
         }
-        if (pd_block_has_label(stats_)) {
-            c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
-            r = make_nop(p); break;
-        }
+        pd_label_gate(c, stats_, prodno);
         r = make_sentence_node(p, "IF", PD_LINENO(2));
         if (cond_) ast_add_child(p->cs, r, cond_);
         ast_add_child(p->cs, r, stats_);
@@ -9182,17 +9195,15 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
      * endif=p[4][1]. */
     case 131: {
         AstNode *cond_ = PD_NODE(1);
-        AstNode *then_ = pd_if_body(p, PD_NODE(3), NULL);
+        AstNode *then_ = pd_if_body_block(p, PD_NODE(3), NULL);
         PdElse *el = (PdElse *)rhs[3].value;
-        if (!el || pd_block_has_nop(el->e[0])) { /* deferred (label / leading-`:` NOP) */
+        if (!el) { /* deferred (label else) */
             c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
             r = make_nop(p); break;
         }
         AstNode *else_block = pd_make_block2(p, el->e[0], el->n > 1 ? el->e[1] : NULL);
-        if (pd_block_has_label(then_) || pd_block_has_label(else_block)) {
-            c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
-            r = make_nop(p); break;
-        }
+        pd_label_gate(c, then_, prodno);
+        pd_label_gate(c, else_block, prodno);
         r = make_sentence_node(p, "IF", PD_LINENO(2));
         if (cond_) ast_add_child(p->cs, r, cond_);
         ast_add_child(p->cs, r, then_);
@@ -9205,15 +9216,13 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
     case 130: {
         AstNode *ifn = PD_NODE(1);
         PdElse *el = (PdElse *)rhs[1].value;
-        if (!ifn || ifn->tag == AST_NOP || !el || pd_block_has_nop(el->e[0])) {
+        if (!ifn || ifn->tag == AST_NOP || !el) {
             c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
             r = make_nop(p); break;
         }
         AstNode *else_block = pd_make_block2(p, el->e[0], el->n > 1 ? el->e[1] : NULL);
-        if (pd_block_has_label(else_block) || pd_block_has_label(ifn)) {
-            c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
-            r = make_nop(p); break;
-        }
+        pd_label_gate(c, else_block, prodno);
+        pd_label_gate(c, ifn, prodno);
         ast_add_child(p->cs, ifn, else_block);
         r = ifn;
         break;
