@@ -9049,6 +9049,40 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         *out = rhs[1].value;
         *out_lineno = PD_LINENO(1);
         return true;
+    case 346: { /* param_def : singleid LP RP typedef (p_param_def_array):
+                 * array parameter. make_param_decl(id, typeref, is_array=True).
+                 * Build ARGUMENT(is_array=true) + body symbol CLASS_array.
+                 * (typeref NULL -> p[0]=None in Python; here type defaults like
+                 * the scalar path. Sigil-named array params deferred.) */
+        PdId *id = (PdId *)rhs[0].value;
+        TypeInfo *td = (TypeInfo *)rhs[3].value;  /* typedef after LP RP */
+        const char *pname = id->name;
+        size_t pnl = strlen(pname);
+        if (pnl > 0 && is_deprecated_suffix(pname[pnl - 1])) {
+            c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
+            r = make_nop(p); break;
+        }
+        if (p->cs->opts.strict && td && td->implicit)
+            err_undeclared_type(p->cs, id->lineno, pname);
+        TypeInfo *ptype = td;
+        if (!ptype) ptype = type_new_ref(p->cs, p->cs->default_type, id->lineno, true);
+        AstNode *arg = ast_new(p->cs, AST_ARGUMENT, id->lineno);
+        arg->u.argument.name = arena_strdup(&p->cs->arena, pname);
+        arg->u.argument.is_array = true;
+        arg->type_ = ptype;
+        AstNode *bsym = symboltable_declare(p->cs->symbol_table, p->cs,
+                                            pname, id->lineno, CLASS_array);
+        if (bsym) {
+            bsym->type_ = ptype;
+            bsym->u.id.declared = true;
+            bsym->u.id.scope = SCOPE_parameter;
+        }
+        PdParam *pp = arena_alloc(&p->cs->arena, sizeof(PdParam));
+        pp->arg = arg; pp->body_sym = bsym;
+        *out = pp;
+        *out_lineno = id->lineno;
+        return true;
+    }
     case 347: {
         PdId *id = (PdId *)rhs[0].value;
         TypeInfo *td = (TypeInfo *)rhs[1].value;   /* typedef (NULL = implicit) */
@@ -9090,9 +9124,12 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         *out_lineno = id->lineno;
         return true;
     }
-    case 345: { /* param_definition : param_def -> byref = default_byref */
+    case 345: { /* param_definition : param_def (p_param_definition) ->
+                 * array param byref=True; else byref=default_byref. */
         PdParam *pp = (PdParam *)rhs[0].value;
-        if (pp && pp->arg) pp->arg->u.argument.byref = p->cs->opts.default_byref;
+        if (pp && pp->arg)
+            pp->arg->u.argument.byref = pp->arg->u.argument.is_array
+                                            ? true : p->cs->opts.default_byref;
         *out = pp; *out_lineno = PD_LINENO(1);
         return true;
     }
