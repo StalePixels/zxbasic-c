@@ -9378,6 +9378,25 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         break;
     }
 
+    /* ---- RESTORE (p_restore, 158/159/160) ----
+     * statement : RESTORE | RESTORE ID | RESTORE NUMBER. SENTENCE("RESTORE")
+     * + optional AST_ID label child (name/class_=label), matching the
+     * production parser (parser.c:4361-4377). */
+    case 158: /* RESTORE (bare) */
+        r = make_sentence_node(p, "RESTORE", PD_LINENO(1));
+        break;
+    case 159: case 160: { /* RESTORE ID | RESTORE NUMBER */
+        r = make_sentence_node(p, "RESTORE", PD_LINENO(1));
+        const char *label = PD_SVAL(2);
+        char buf[32];
+        if (!label) { snprintf(buf, sizeof(buf), "%d", (int)PD_NUM(2)); label = buf; }
+        AstNode *lbl = ast_new(p->cs, AST_ID, PD_LINENO(2));
+        lbl->u.id.name = arena_strdup(&p->cs->arena, label);
+        lbl->u.id.class_ = CLASS_label;
+        ast_add_child(p->cs, r, lbl);
+        break;
+    }
+
     /* ---- leaf expressions ---- */
     case 280: /* bexpr : NUMBER */
         r = make_number(p, PD_NUM(1), PD_LINENO(1), NULL);
