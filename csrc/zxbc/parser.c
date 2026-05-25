@@ -10211,6 +10211,25 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         r = addr_of_id(p, id->name, id->lineno);
         break;
     }
+    case 314: { /* bexpr : ADDRESSOF ARRAY_ID arg_list (p_addr_of_array_element):
+                 * make_array_access -> ARRAYACCESS, then UNARY[ADDRESS] with
+                 * type uinteger, matching the production (parser.c:2276-2285:
+                 * UNARY ADDRESS over parse_call_or_array(addressof_ctx=true)).
+                 * make_call_node(expr_context=true) marks the entry accessed
+                 * (== Python mark_entry_as_accessed). */
+        const char *aname = PD_SVAL(2);
+        int aln = PD_LINENO(2);
+        AstNode *arglist = (AstNode *)rhs[2].value;
+        if (!arglist) { r = NULL; break; } /* p[3] None -> p[0] None */
+        AstNode *acc = make_call_node(p, aname, aln, arglist, true, true, false);
+        if (!acc || acc->tag != AST_ARRAYACCESS) { r = NULL; break; }
+        AstNode *n = ast_new(p->cs, AST_UNARY, PD_LINENO(1));
+        n->u.unary.operator = arena_strdup(&p->cs->arena, "ADDRESS");
+        ast_add_child(p->cs, n, acc);
+        n->type_ = st->basic_types[TYPE_uinteger];
+        r = n;
+        break;
+    }
 
     /* ---- call / array-access subsystem ----
      * argument : expr (321, p_argument) -> make_argument(expr) = AST_ARGUMENT
@@ -10219,6 +10238,20 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         AstNode *expr = PD_NODE(1);
         if (!expr) { r = NULL; break; }
         AstNode *arg = ast_new(p->cs, AST_ARGUMENT, expr->lineno);
+        arg->u.argument.byref = p->cs->opts.default_byref;
+        ast_add_child(p->cs, arg, expr);
+        arg->type_ = expr->type_;
+        r = arg;
+        break;
+    }
+    case 322: { /* argument : ID WEQ expr (p_named_argument): make_argument(
+                 * expr, name=ID). Match the production's named-ARGUMENT build
+                 * (parser.c:2546-2551): name, byref=default, child=expr,
+                 * type_=expr->type_, lineno=expr->lineno. */
+        AstNode *expr = PD_NODE(3);
+        if (!expr) { r = NULL; break; } /* make_argument None -> None */
+        AstNode *arg = ast_new(p->cs, AST_ARGUMENT, expr->lineno);
+        arg->u.argument.name = arena_strdup(&p->cs->arena, PD_SVAL(1));
         arg->u.argument.byref = p->cs->opts.default_byref;
         ast_add_child(p->cs, arg, expr);
         arg->type_ = expr->type_;
@@ -10633,6 +10666,28 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         ast_add_child(p->cs, r,
             make_typecast(p->cs, st->basic_types[TYPE_ubyte], PD_NODE(5), PD_LINENO(4)));
         break;
+    case 219: case 220: case 221: case 222: {
+        /* statement : POKE [LP] numbertype [COMMA] expr COMMA expr [RP]
+         * (p_poke2 219/220, p_poke3 221/222). The production stores the
+         * numbertype on the POKE sentence's type_ and typecasts addr->uinteger,
+         * val->numbertype, both at the POKE line (parser.c:4214-4248). */
+        bool paren = (prodno == 220 || prodno == 222);
+        bool poke3 = (prodno == 221 || prodno == 222);
+        int ti = paren ? 2 : 1;          /* numbertype 0-based index */
+        int ai = ti + 1 + (poke3 ? 1 : 0); /* addr after type (and COMMA for poke3) */
+        int vi = ai + 2;                  /* val after `addr COMMA` */
+        TypeInfo *nt = (TypeInfo *)rhs[ti].value;
+        AstNode *addr = (AstNode *)rhs[ai].value;
+        AstNode *val = (AstNode *)rhs[vi].value;
+        if (!addr || !val) { r = NULL; break; } /* p[0] = None */
+        int ln = PD_LINENO(1);
+        r = make_sentence_node(p, "POKE", ln);
+        if (nt) r->type_ = nt;
+        ast_add_child(p->cs, r,
+            make_typecast(p->cs, st->basic_types[TYPE_uinteger], addr, ln));
+        ast_add_child(p->cs, r, make_typecast(p->cs, nt, val, ln));
+        break;
+    }
     case 67: /* statement : RANDOMIZE */
         r = make_sentence_node(p, "RANDOMIZE", PD_LINENO(1));
         ast_add_child(p->cs, r,
