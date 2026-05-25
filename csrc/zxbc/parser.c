@@ -8836,6 +8836,11 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
     case 330: { /* function_header_pre : function_def param_decl typedef
                  * (p_function_header_pre). No-param: param_decl is an empty
                  * PARAMLIST; typedef NULL (no AS) or the return type. */
+        /* p_function_header_pre (zxbparser.py:2949): `if p[1] is None or p[2]
+         * is None: p[0] = None; return`. function_def (332/333) always builds
+         * a PdFuncDef, but param_decl `LP error RP` (340) returns NULL — match
+         * Python and propagate None so case 324/325 see a NULL header. */
+        if (!rhs[0].value || !rhs[1].value) { r = NULL; break; }
         PdFuncDef *fd = (PdFuncDef *)rhs[0].value;
         AstNode *params = (AstNode *)rhs[1].value;
         TypeInfo *td = (TypeInfo *)rhs[2].value;
@@ -8929,8 +8934,13 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
          * function_header error-token productions 328/329, which take the
          * default NOP path), rhs[0].value is a NOP AstNode, NOT a PdFuncDef —
          * type-punning it would dereference garbage (let_expr_type_crash).
-         * The file is already flagged UNWIRED; bail to NOP without touching it. */
-        if (c->unwired) { r = make_nop(p); break; }
+         * The file is already flagged UNWIRED; bail to NOP without touching it.
+         * In emit_errors (swap) mode pd_label_gate does NOT set c->unwired, so
+         * also guard on a NULL header value: that is exactly p_funcdecl's
+         * `if p[1] is None: p[0] = None; return` (zxbparser.py:2905) — return
+         * None WITHOUT leaving the scope or popping FUNCTION_LEVEL (Python
+         * recovers via the error mechanism; gl.has_errors aborts compilation). */
+        if (c->unwired || !rhs[0].value) { r = NULL; break; }
         PdFuncDef *fd = (PdFuncDef *)rhs[0].value;
         AstNode *body = (AstNode *)rhs[1].value;
         if (!body) body = make_block_node(p, fd->lineno);
@@ -9000,6 +9010,16 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
                  * 7552-7572); Python returns None but the C-vs-C compare is
                  * against the production, so match it. */
         if (c->unwired) { r = make_nop(p); break; }
+        /* p_funcdeclforward (zxbparser.py:2920): `if p[2] is None: if
+         * FUNCTION_LEVEL: FUNCTION_LEVEL.pop(); return` — a NULL header_pre
+         * (function_def None, or param_decl `LP error RP` -> None) pops the
+         * function level but does NOT leave the scope. emit_errors mode reaches
+         * here with c->unwired unset, so guard on the NULL value. */
+        if (!rhs[1].value) {
+            if (p->cs->function_level.len > 0)
+                vec_pop(p->cs->function_level);
+            r = NULL; break;
+        }
         PdFuncDef *fd = (PdFuncDef *)rhs[1].value;
         symboltable_exit_scope(p->cs->symbol_table);
         if (p->cs->function_level.len > 0)
