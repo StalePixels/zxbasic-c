@@ -8832,6 +8832,41 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         break;
     }
 
+    /* ---- WHILE subsystem ----
+     * while_start : WHILE expr (181) -> the cond; push loop_stack(WHILE).
+     * Carry the WHILE-keyword line as the result lineno (p_while_sentence uses
+     * p.lineno(1) == while_start's line == WHILE token). */
+    case 181: {
+        LoopInfo li = { LOOP_WHILE, PD_LINENO(1), NULL };
+        vec_push(p->cs->loop_stack, li);
+        *out = rhs[1].value;       /* the cond expr */
+        *out_lineno = PD_LINENO(1); /* WHILE token line */
+        return true;
+    }
+    case 175: case 176: /* label_end_while : label WEND | label END WHILE -> label */
+        r = PD_NODE(1);
+        break;
+    case 177: case 178: /* label_end_while : WEND | END WHILE -> NULL */
+        *out = NULL;
+        *out_lineno = PD_LINENO(1);
+        return true;
+    case 179: case 180: { /* statement : while_start co_statements_co|program_co
+                          * label_end_while (p_while_sentence): pop loop_stack;
+                          * make_sentence("WHILE", cond, make_block(body, lew)).
+                          * (always-cond warning omitted, as production.) */
+        AstNode *cond = PD_NODE(1);
+        AstNode *body = pd_if_body(p, PD_NODE(2), PD_NODE(3));
+        if (p->cs->loop_stack.len > 0) vec_pop(p->cs->loop_stack);
+        if (pd_block_has_label(body)) {
+            c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
+            r = make_nop(p); break;
+        }
+        r = make_sentence_node(p, "WHILE", PD_LINENO(1));
+        ast_add_child(p->cs, r, cond);
+        ast_add_child(p->cs, r, body);
+        break;
+    }
+
     /* RETURN (214 p_return) | RETURN expr (215 p_return_expr). Faithful to
      * parser.c:3763-3848 (which itself ports the Python actions). */
     case 214: { /* statement : RETURN */
