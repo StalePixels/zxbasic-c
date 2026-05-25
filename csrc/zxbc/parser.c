@@ -10835,6 +10835,41 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
     case 65: /* statement : CLS */
         r = make_sentence_node(p, "CLS", PD_LINENO(1));
         break;
+    case 144: /* statement : END expr (p_end) -> END[expr] (RAW, matching the
+               * production parser.c:4180-4187 which adds the expr raw). */
+        r = make_sentence_node(p, "END", PD_LINENO(1));
+        ast_add_child(p->cs, r, PD_NODE(2));
+        break;
+    case 145: /* statement : END (bare) -> END[NUMBER(0, uinteger)] matching
+               * the production (parser.c:4185 — NUMBER(0) typed uinteger, not
+               * Python's auto-ubyte). */
+        r = make_sentence_node(p, "END", PD_LINENO(1));
+        ast_add_child(p->cs, r,
+            make_number(p, 0, PD_LINENO(1), st->basic_types[TYPE_uinteger]));
+        break;
+    case 146: /* statement : ERROR expr (p_error_raise) -> ERROR[expr] RAW.
+               * The C production (parser.c:4191-4196) adds the code expr raw
+               * (NOT Python's MINUS(typecast(ubyte,expr),1)) — match C-vs-C. */
+        r = make_sentence_node(p, "ERROR", PD_LINENO(1));
+        ast_add_child(p->cs, r, PD_NODE(2));
+        break;
+    case 147: /* statement : STOP expr (p_stop_raise) -> STOP[expr] RAW
+               * (production parser.c:4209 keeps the explicit expr raw). */
+        r = make_sentence_node(p, "STOP", PD_LINENO(1));
+        ast_add_child(p->cs, r, PD_NODE(2));
+        break;
+    case 148: { /* statement : STOP (bare) -> STOP[MINUS(typecast(ubyte,
+                 * NUMBER(9)), NUMBER(1))] folding to 8 (production
+                 * parser.c:4211-4216). */
+        int ln = PD_LINENO(1);
+        AstNode *nine = make_number(p, 9, ln, NULL);
+        AstNode *q = make_typecast(p->cs, st->basic_types[TYPE_ubyte], nine, ln);
+        AstNode *one = make_number(p, 1, ln, NULL);
+        AstNode *code = make_binary_node(p->cs, "MINUS", q, one, ln, NULL);
+        r = make_sentence_node(p, "STOP", ln);
+        ast_add_child(p->cs, r, code);
+        break;
+    }
     case 66: /* statement : ASM (make_asm_sentence(p[1], lineno)) */
         r = make_asm_node(p, PD_SVAL(1) ? PD_SVAL(1) : "", PD_LINENO(1));
         break;
