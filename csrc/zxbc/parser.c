@@ -8359,6 +8359,83 @@ static AstNode *pd_builtin1(Parser *p, const char *fname, BTokenType kw,
     return make_builtin_node(p, n, arg, kw, lineno);
 }
 
+/* Compute the SAVE/LOAD/VERIFY `... DATA [id]` start/length pair, faithfully
+ * mirroring the production parser's DATA-form branch (parser.c:4597-4699 /
+ * Python p_save_data + p_load_data, zxbparser.py:2257-2354). With an `id`:
+ * start = UNARY[ADDRESS, access_id(id)] (uinteger), length = the array memsize
+ * or the scalar type size. Without an id: the .core.ZXBASIC_USER_DATA[_LEN]
+ * root-global labels' ADDRESS. Returns false (→ p[0]=None) if the id is
+ * unresolvable. */
+static bool loadsave_data_startlen(Parser *p, const char *id_name, int id_ln,
+                                   int data_ln, AstNode **start, AstNode **length) {
+    TypeInfo *uint_t = p->cs->symbol_table->basic_types[TYPE_uinteger];
+    if (id_name) {
+        AstNode *entry = symboltable_access_id(p->cs->symbol_table, p->cs,
+                                               id_name, id_ln, NULL, CLASS_var);
+        if (!entry) return false;  /* p[0] = None */
+        entry->u.id.accessed = true;
+        AstNode *s = make_unary_node(p->cs, "ADDRESS", entry, id_ln);
+        if (s) s->type_ = uint_t;
+        AstNode *l;
+        if (entry->u.id.class_ == CLASS_array) {
+            int memsize = (entry->type_ ? type_size(entry->type_) : 0);
+            if (entry->u.id.arr_boundlist) {
+                AstNode *bl = entry->u.id.arr_boundlist;
+                for (int bi = 0; bi < bl->child_count; bi++) {
+                    AstNode *b = bl->children[bi];
+                    if (b && b->child_count >= 2 &&
+                        b->children[0]->tag == AST_NUMBER &&
+                        b->children[1]->tag == AST_NUMBER) {
+                        int lo = (int)b->children[0]->u.number.value;
+                        int hi = (int)b->children[1]->u.number.value;
+                        memsize *= (hi - lo + 1);
+                    }
+                }
+            }
+            l = make_number(p, memsize, id_ln, NULL);
+        } else {
+            l = make_number(p, entry->type_ ? type_size(entry->type_) : 0,
+                            id_ln, NULL);
+        }
+        *start = s; *length = l;
+        return true;
+    }
+    /* No-id form: the .core.ZXBASIC_USER_DATA[_LEN] root-global labels. */
+    const char *names[2] = { ".core.ZXBASIC_USER_DATA",
+                             ".core.ZXBASIC_USER_DATA_LEN" };
+    AstNode *out2[2];
+    for (int k = 0; k < 2; k++) {
+        AstNode *lbl = symboltable_access_label(p->cs->symbol_table, p->cs,
+                                                names[k], data_ln);
+        if (lbl) {
+            char *m = arena_strdup(&p->cs->arena, names[k]);
+            lbl->u.id.mangled = m;
+            lbl->t = m;  /* LabelRef.t == parent.mangled */
+            lbl->u.id.class_ = CLASS_label;
+            lbl->u.id.scope = SCOPE_global;
+            lbl->u.id.declared = true;
+            lbl->u.id.accessed = true;
+            lbl->type_ = uint_t;
+        }
+        out2[k] = make_unary_node(p->cs, "ADDRESS", lbl, data_ln);
+        if (out2[k]) out2[k]->type_ = uint_t;
+    }
+    *start = out2[0]; *length = out2[1];
+    return true;
+}
+
+/* Build the SAVE/LOAD/VERIFY sentence: SENTENCE(kind, str_expr, start, length)
+ * (parser.c:4770-4774). NULL children are dropped by ast_add_child. */
+static AstNode *make_loadsave_node(Parser *p, const char *kind, int ln,
+                                   AstNode *str_expr, AstNode *start,
+                                   AstNode *length) {
+    AstNode *s = make_sentence_node(p, kind, ln);
+    if (str_expr) ast_add_child(p->cs, s, str_expr);
+    if (start)    ast_add_child(p->cs, s, start);
+    if (length)   ast_add_child(p->cs, s, length);
+    return s;
+}
+
 /* Snapshot a substr bound's RAW (pre-uinteger-cast) value: a constant NUMBER
  * is copied to a fresh auto-typed node (so a later make_typecast on the
  * original does not mutate this snapshot); any other node is returned as-is
@@ -10256,6 +10333,111 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
      * `LP arguments TO ... RP` forms — production-specific shapes) build deeply
      * production-specific trees diverging from both Python and 302/303; defer
      * to a future focused pass (they fall to the default UNWIRED path). */
+
+    /* ---- SAVE / LOAD / VERIFY (p_save_code/p_save_data/p_load_or_verify/
+     * p_load_code/p_load_data, 232-246) ----
+     * SENTENCE(kind, str_expr, start, length) — start/length computed per form.
+     * The production typecasts at the keyword line `ln` and CODE/COMMA lines;
+     * the str-type error fires at `ln` (parser.c:4576-4774). Faithful C-vs-C. */
+    case 238: case 239: /* load_or_verify : LOAD | VERIFY -> the kind string */
+        *out = pd_new_id(p, prodno == 238 ? "LOAD" : "VERIFY", PD_LINENO(1));
+        *out_lineno = PD_LINENO(1);
+        return true;
+    case 232: case 233: case 234: { /* SAVE expr CODE expr COMMA expr |
+                                     * SAVE expr ID | SAVE expr ARRAY_ID
+                                     * (p_save_code). */
+        int ln = PD_LINENO(1);
+        AstNode *sx = PD_NODE(2);
+        if (sx && sx->type_ && !type_equal(sx->type_, st->basic_types[TYPE_string]))
+            err_expected_string(p->cs, ln, sx->type_->name ? sx->type_->name : "");
+        AstNode *start = NULL, *length = NULL;
+        if (prodno == 232) {        /* CODE expr COMMA expr */
+            start = make_typecast(p->cs, st->basic_types[TYPE_uinteger], PD_NODE(4), PD_LINENO(3));
+            length = make_typecast(p->cs, st->basic_types[TYPE_uinteger], PD_NODE(6), PD_LINENO(5));
+        } else {                    /* SAVE expr ID|ARRAY_ID — SCREEN$/SCREEN/CODE */
+            const char *idt = PD_SVAL(3);
+            int id_ln = PD_LINENO(3);
+            bool is_code = idt && (strcasecmp(idt, "CODE") == 0);
+            bool is_screen = idt && (strcasecmp(idt, "SCREEN") == 0 ||
+                                     strcasecmp(idt, "SCREEN$") == 0);
+            if (!is_code && !is_screen) {
+                zxbc_error(p->cs, id_ln,
+                           "Unexpected \"%s\" ID. Expected \"SCREEN$\" instead", idt ? idt : "");
+                r = NULL; break;
+            }
+            if (is_code) { start = make_number(p, 0, id_ln, NULL); length = make_number(p, 0, id_ln, NULL); }
+            else { start = make_number(p, 16384, id_ln, NULL); length = make_number(p, 6912, id_ln, NULL); }
+        }
+        r = make_loadsave_node(p, "SAVE", ln, sx, start, length);
+        break;
+    }
+    case 235: case 236: case 237: { /* SAVE expr DATA [ID [LP RP]] (p_save_data) */
+        int ln = PD_LINENO(1);
+        AstNode *sx = PD_NODE(2);
+        if (sx && sx->type_ && !type_equal(sx->type_, st->basic_types[TYPE_string]))
+            err_expected_string(p->cs, ln, sx->type_->name ? sx->type_->name : "");
+        const char *idn = (prodno == 235) ? NULL : PD_SVAL(4);
+        int id_ln = (prodno == 235) ? PD_LINENO(3) : PD_LINENO(4);
+        AstNode *start = NULL, *length = NULL;
+        if (!loadsave_data_startlen(p, idn, id_ln, PD_LINENO(3), &start, &length)) {
+            r = make_loadsave_node(p, "SAVE", ln, NULL, NULL, NULL); break; /* p[0]=None drop */
+        }
+        r = make_loadsave_node(p, "SAVE", ln, sx, start, length);
+        break;
+    }
+    case 240: case 241: case 242: case 243: { /* load_or_verify expr ID|CODE
+                                               * [expr [COMMA expr]] (p_load_code) */
+        PdId *lv = (PdId *)rhs[0].value;
+        const char *kind = lv ? lv->name : "LOAD";
+        int ln = lv ? lv->lineno : PD_LINENO(1);
+        AstNode *sx = PD_NODE(2);
+        if (sx && sx->type_ && !type_equal(sx->type_, st->basic_types[TYPE_string]))
+            err_expected_string(p->cs, ln, sx->type_->name ? sx->type_->name : "");
+        AstNode *start = NULL, *length = NULL;
+        if (prodno == 240) {        /* expr ID — SCREEN$/SCREEN/CODE */
+            const char *idt = PD_SVAL(3);
+            int id_ln = PD_LINENO(3);
+            bool is_code = idt && (strcasecmp(idt, "CODE") == 0);
+            bool is_screen = idt && (strcasecmp(idt, "SCREEN") == 0 ||
+                                     strcasecmp(idt, "SCREEN$") == 0);
+            if (!is_code && !is_screen) {
+                zxbc_error(p->cs, id_ln,
+                           "Unexpected \"%s\" ID. Expected \"SCREEN$\" instead", idt ? idt : "");
+                r = NULL; break;
+            }
+            if (is_code) { start = make_number(p, 0, id_ln, NULL); length = make_number(p, 0, id_ln, NULL); }
+            else { start = make_number(p, 16384, id_ln, NULL); length = make_number(p, 6912, id_ln, NULL); }
+        } else if (prodno == 241) { /* CODE (bare): start=0, length=0 */
+            int c_ln = PD_LINENO(3);
+            start = make_number(p, 0, c_ln, NULL); length = make_number(p, 0, c_ln, NULL);
+        } else if (prodno == 242) { /* CODE expr: start=expr, length=0 */
+            int c_ln = PD_LINENO(3);
+            start = make_typecast(p->cs, st->basic_types[TYPE_uinteger], PD_NODE(4), c_ln);
+            length = make_number(p, 0, c_ln, NULL);
+        } else {                    /* CODE expr COMMA expr */
+            start = make_typecast(p->cs, st->basic_types[TYPE_uinteger], PD_NODE(4), PD_LINENO(3));
+            length = make_typecast(p->cs, st->basic_types[TYPE_uinteger], PD_NODE(6), PD_LINENO(5));
+        }
+        r = make_loadsave_node(p, kind, ln, sx, start, length);
+        break;
+    }
+    case 244: case 245: case 246: { /* load_or_verify expr DATA [ID [LP RP]]
+                                     * (p_load_data) */
+        PdId *lv = (PdId *)rhs[0].value;
+        const char *kind = lv ? lv->name : "LOAD";
+        int ln = lv ? lv->lineno : PD_LINENO(1);
+        AstNode *sx = PD_NODE(2);
+        if (sx && sx->type_ && !type_equal(sx->type_, st->basic_types[TYPE_string]))
+            err_expected_string(p->cs, ln, sx->type_->name ? sx->type_->name : "");
+        const char *idn = (prodno == 244) ? NULL : PD_SVAL(4);
+        int id_ln = (prodno == 244) ? PD_LINENO(3) : PD_LINENO(4);
+        AstNode *start = NULL, *length = NULL;
+        if (!loadsave_data_startlen(p, idn, id_ln, PD_LINENO(3), &start, &length)) {
+            r = make_loadsave_node(p, kind, ln, NULL, NULL, NULL); break;
+        }
+        r = make_loadsave_node(p, kind, ln, sx, start, length);
+        break;
+    }
 
     /* ---- RESTORE (p_restore, 158/159/160) ----
      * statement : RESTORE | RESTORE ID | RESTORE NUMBER. SENTENCE("RESTORE")
