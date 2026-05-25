@@ -9336,12 +9336,10 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
                           * make_sentence("WHILE", cond, make_block(body, lew)).
                           * (always-cond warning omitted, as production.) */
         AstNode *cond = PD_NODE(1);
-        AstNode *body = pd_if_body(p, PD_NODE(2), PD_NODE(3));
+        /* make_block(p[2], p[3]) — recursive flatten (pd_make_block2), matching
+         * PYTHON for labelled WHILE bodies (the swap gate). */
+        AstNode *body = pd_make_block2(p, PD_NODE(2), PD_NODE(3));
         if (p->cs->loop_stack.len > 0) vec_pop(p->cs->loop_stack);
-        if (pd_block_has_label(body)) {
-            c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
-            r = make_nop(p); break;
-        }
         r = make_sentence_node(p, "WHILE", PD_LINENO(1));
         ast_add_child(p->cs, r, cond);
         ast_add_child(p->cs, r, body);
@@ -9377,15 +9375,11 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
                        * | do_start label_loop | DO label_loop (p_do_loop):
                        * "DO_LOOP"[body]. For 153 (bare DO) push here. */
         int doln = PD_LINENO(1);
-        AstNode *body;
-        if (prodno == 151) body = pd_if_body(p, PD_NODE(2), PD_NODE(3));
-        else body = pd_if_body(p, PD_NODE(2), NULL);
+        AstNode *body;  /* make_block(p[2], p[3]) / p[2] — recursive flatten */
+        if (prodno == 151) body = pd_make_block2(p, PD_NODE(2), PD_NODE(3));
+        else body = pd_make_block2(p, PD_NODE(2), NULL);
         if (prodno == 153) { LoopInfo li = {LOOP_DO, doln, NULL}; vec_push(p->cs->loop_stack, li); }
         if (p->cs->loop_stack.len > 0) vec_pop(p->cs->loop_stack);
-        if (pd_block_has_label(body)) {
-            c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
-            r = make_nop(p); break;
-        }
         r = make_sentence_node(p, "DO_LOOP", doln);
         ast_add_child(p->cs, r, body);
         break;
@@ -9397,13 +9391,13 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         bool bare = (prodno == 156 || prodno == 164);
         bool has_prog = (prodno == 154 || prodno == 162);
         AstNode *body, *cond;
-        if (has_prog) { body = pd_if_body(p, PD_NODE(2), PD_NODE(3)); cond = PD_NODE(5); }
-        else { body = pd_if_body(p, PD_NODE(2), NULL); cond = PD_NODE(4); }
+        if (has_prog) { body = pd_make_block2(p, PD_NODE(2), PD_NODE(3)); cond = PD_NODE(5); }
+        else { body = pd_make_block2(p, PD_NODE(2), NULL); cond = PD_NODE(4); }
         if (bare) { LoopInfo li = {LOOP_DO, doln, NULL}; vec_push(p->cs->loop_stack, li); }
         if (p->cs->loop_stack.len > 0) vec_pop(p->cs->loop_stack);
         /* NULL cond == a semantic error in the post-test expr (do_crash:
          * `LOOP WHILE A=""`); error-path AST shapes diverge — defer. */
-        if (pd_block_has_label(body) || !cond) {
+        if (!cond) {
             c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
             r = make_nop(p); break;
         }
@@ -9418,9 +9412,9 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         int doln = PD_LINENO(1);
         AstNode *cond = PD_NODE(1); /* do_while_start/do_until_start value */
         bool has_body = (prodno == 165 || prodno == 166 || prodno == 168 || prodno == 169);
-        AstNode *body = has_body ? pd_if_body(p, PD_NODE(2), NULL) : make_block_node(p, doln);
+        AstNode *body = has_body ? pd_make_block2(p, PD_NODE(2), NULL) : make_block_node(p, doln);
         if (p->cs->loop_stack.len > 0) vec_pop(p->cs->loop_stack);
-        if (pd_block_has_label(body) || !cond) {
+        if (!cond) {
             c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
             r = make_nop(p); break;
         }
