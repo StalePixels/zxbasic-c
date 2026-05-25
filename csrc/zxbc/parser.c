@@ -10082,6 +10082,49 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         ast_add_child(p->cs, r, aexpr); /* RAW expr, matching the production */
         break;
     }
+    case 82: case 83: { /* statement : [LET] ID substr EQ expr (p_str_assign).
+                         * The C PRODUCTION builds this as the LET-statement
+                         * STRSLICE-lvalue path: STRSLICE[id, lower, upper]
+                         * (the WRITE substr keeps the uinteger pre-cast bounds,
+                         * NO base-subtract — parser.c:2705-2814 with
+                         * expr_context=false) wrapped in LETARRAY[lv, RAW expr]
+                         * (parser.c:5055-5057). Python builds LETSUBSTR; the C
+                         * production's Shape-A LETARRAY is the byte-clean
+                         * baseline astcmp validates (C-vs-C). */
+        int idi = (prodno == 83) ? 1 : 0;   /* ID 0-based index */
+        const char *name = PD_SVAL(idi + 1);
+        int ln = rhs[idi].lineno;
+        PdSubstr *ss = (PdSubstr *)rhs[idi + 1].value;
+        AstNode *rexpr = (AstNode *)rhs[idi + 3].value;
+        if (!ss || !rexpr) { r = NULL; break; }  /* q/s/r None -> p[0]=None */
+        /* RHS must be string (p_str_assign:1327 — error, NOT abort). The
+         * lineno is p.lineno(EQ) — the EQ token. */
+        if (!type_is_string(rexpr->type_)) {
+            const TypeInfo *rft = (rexpr->type_ && rexpr->type_->final_type)
+                                      ? rexpr->type_->final_type : rexpr->type_;
+            const char *rtn = (rft && rft->tag == AST_BASICTYPE)
+                                  ? basictype_to_string(rft->basic_type) : "unknown";
+            err_expected_string(p->cs, rhs[idi + 2].lineno, rtn);
+        }
+        /* access_var(default_type=string) — the WRITE lvalue is NOT marked
+         * accessed (expr_context=false; only the READ p_expr_id_substr marks). */
+        AstNode *id_node = symboltable_access_var(p->cs->symbol_table, p->cs,
+                               name, ln, st->basic_types[TYPE_string]);
+        if (!id_node) { r = NULL; break; }  /* p[0] = None */
+        if (!ss->lower || !ss->upper) {  /* bound typecast failed — see case 291 */
+            c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
+            r = NULL; break;
+        }
+        AstNode *lv = ast_new(p->cs, AST_STRSLICE, ln);
+        ast_add_child(p->cs, lv, id_node);
+        ast_add_child(p->cs, lv, ss->lower);
+        ast_add_child(p->cs, lv, ss->upper);
+        lv->type_ = st->basic_types[TYPE_string];
+        r = make_sentence_node(p, "LETARRAY", PD_LINENO(1));
+        ast_add_child(p->cs, r, lv);
+        ast_add_child(p->cs, r, rexpr);  /* RAW expr */
+        break;
+    }
 
     /* ---- RESTORE (p_restore, 158/159/160) ----
      * statement : RESTORE | RESTORE ID | RESTORE NUMBER. SENTENCE("RESTORE")
@@ -10112,6 +10155,30 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         r = pd_builtin1(p, "STR", BTOK_STR, PD_NODE(2), PD_LINENO(1)); break;
     case 391: /* string : INKEY (p_inkey) -> string */
         r = pd_builtin0(p, "INKEY", TYPE_string, PD_LINENO(1)); break;
+    case 392: /* string : CHR bexpr (p_chr_one) -> CHR builtin, single ubyte arg */
+        r = pd_builtin1(p, "CHR", BTOK_CHR, PD_NODE(2), PD_LINENO(1)); break;
+    case 393: { /* string : CHR arg_list (p_chr): >=1 arg; each arg's VALUE
+                 * (unwrapped from ARGUMENT) becomes a direct BUILTIN child,
+                 * make_builtin_node casts each to ubyte (parser.c:2110-2126,
+                 * matching the production's multi-arg CHR builder). */
+        AstNode *al = (AstNode *)rhs[1].value;
+        if (!al || al->child_count < 1) {
+            zxbc_error(p->cs, PD_LINENO(1), "CHR$ function need at less 1 parameter");
+            r = NULL; break;
+        }
+        AstNode *n = ast_new(p->cs, AST_BUILTIN, PD_LINENO(1));
+        n->u.builtin.fname = arena_strdup(&p->cs->arena, "CHR");
+        AstNode *first = NULL;
+        for (int i = 0; i < al->child_count; i++) {
+            AstNode *a = al->children[i];
+            AstNode *v = (a && a->tag == AST_ARGUMENT && a->child_count > 0)
+                             ? a->children[0] : a;
+            if (i == 0) first = v;
+            ast_add_child(p->cs, n, v);
+        }
+        r = make_builtin_node(p, n, first, BTOK_CHR, PD_LINENO(1));
+        break;
+    }
     case 379: r = pd_builtin1(p, "PEEK", BTOK_PEEK, PD_NODE(2), PD_LINENO(1)); break;
     case 381: r = pd_builtin1(p, "IN",   BTOK_IN,   PD_NODE(2), PD_LINENO(1)); break;
     case 386: r = pd_builtin1(p, "LEN",  BTOK_LEN,  PD_NODE(2), PD_LINENO(1)); break;
