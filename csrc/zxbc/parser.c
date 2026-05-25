@@ -5468,7 +5468,7 @@ static AstNode *parse_if_statement(Parser *p) {
                 p->lexer.pos = save_pos;
             }
             AstNode *stmt = parse_statement(p);
-            if (stmt) ast_add_child(p->cs, then_block, stmt);
+            if (stmt && stmt->tag != AST_NOP) ast_add_child(p->cs, then_block, stmt);
             if (!match(p, BTOK_CO)) break;
         }
         if (!ended && match(p, BTOK_ENDIF)) ended = true;
@@ -5485,7 +5485,7 @@ static AstNode *parse_if_statement(Parser *p) {
                 }
                 if (match(p, BTOK_ENDIF)) { ended = true; break; }
                 AstNode *stmt = parse_statement(p);
-                if (stmt) ast_add_child(p->cs, else_block, stmt);
+                if (stmt && stmt->tag != AST_NOP) ast_add_child(p->cs, else_block, stmt);
                 if (!match(p, BTOK_CO)) break;
             }
         }
@@ -5516,7 +5516,7 @@ static AstNode *parse_if_statement(Parser *p) {
                     skip_newlines(p);
                     while (!check(p, BTOK_EOF) && !check(p, BTOK_ENDIF) && !check(p, BTOK_END)) {
                         AstNode *stmt = parse_statement(p);
-                        if (stmt) ast_add_child(p->cs, else_block, stmt);
+                        if (stmt && stmt->tag != AST_NOP) ast_add_child(p->cs, else_block, stmt);
                         while (match(p, BTOK_NEWLINE) || match(p, BTOK_CO)) {}
                     }
                     if (match(p, BTOK_ENDIF)) { ended = true; }
@@ -5542,7 +5542,7 @@ static AstNode *parse_if_statement(Parser *p) {
     while (!check(p, BTOK_EOF) && !check(p, BTOK_ELSE) &&
            !check(p, BTOK_ELSEIF) && !check(p, BTOK_ENDIF) && !check(p, BTOK_END)) {
         AstNode *stmt = parse_statement(p);
-        if (stmt) ast_add_child(p->cs, then_block, stmt);
+        if (stmt && stmt->tag != AST_NOP) ast_add_child(p->cs, then_block, stmt);
         /* Consume statement separator (newline or :) */
         while (match(p, BTOK_NEWLINE) || match(p, BTOK_CO)) {}
     }
@@ -5693,7 +5693,7 @@ static AstNode *parse_for_statement(Parser *p) {
     AstNode *body = make_block_node(p, lineno);
     while (!check(p, BTOK_EOF) && !check(p, BTOK_NEXT)) {
         AstNode *stmt = parse_statement(p);
-        if (stmt) ast_add_child(p->cs, body, stmt);
+        if (stmt && stmt->tag != AST_NOP) ast_add_child(p->cs, body, stmt);
         /* Faithful to the for-body grammar `for_start program_co label_next`
          * (zxbparser.py:1553): the body is a `program_co`, every program_line
          * of which ends in NEWLINE; a body statement must therefore be
@@ -5803,7 +5803,7 @@ static AstNode *parse_while_statement(Parser *p) {
             p->lexer.pos = save_pos;
         }
         AstNode *stmt = parse_statement(p);
-        if (stmt) ast_add_child(p->cs, body, stmt);
+        if (stmt && stmt->tag != AST_NOP) ast_add_child(p->cs, body, stmt);
         while (match(p, BTOK_NEWLINE) || match(p, BTOK_CO)) {}
     }
 
@@ -5909,7 +5909,7 @@ static AstNode *parse_do_statement(Parser *p) {
     bool seen_nl_terminated = false;
     while (!check(p, BTOK_EOF) && !check(p, BTOK_LOOP)) {
         AstNode *stmt = parse_statement(p);
-        if (stmt) ast_add_child(p->cs, body, stmt);
+        if (stmt && stmt->tag != AST_NOP) ast_add_child(p->cs, body, stmt);
         bool sep = false, nl = false;
         while (check(p, BTOK_NEWLINE) || check(p, BTOK_CO)) {
             if (check(p, BTOK_NEWLINE)) nl = true;
@@ -8678,20 +8678,14 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
     case 96: case 98: /* endif : label END IF | label ENDIF -> the label */
         r = PD_NODE(1);
         break;
-    case 93: /* statement : if_then_part NEWLINE co_statements_co endif: the
-              * production keeps a leading-`:` NOP body child the engine's
-              * co_statements_co path drops (ifthencosntcoendif, byte-clean
-              * either way) — defer -> UNWIRED. */
-        c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
-        r = make_nop(p);
-        break;
-    case 90: case 92: { /* statement : if_then_part NEWLINE program_co|
-                       * statements_co endif (p_if_sentence): SENTENCE("IF",
-                       * cond, pd_if_body(stat, endif)). pd_if_body one-level-
-                       * flattens to match the production. A LABEL in the body
-                       * is where the engine's program_co/label_line flatten
-                       * differs from the production's nested compound (both
-                       * byte-clean — verified ifthen); defer -> UNWIRED. */
+    case 90: case 92: case 93: { /* statement : if_then_part NEWLINE
+                       * program_co|statements_co|co_statements_co endif
+                       * (p_if_sentence): SENTENCE("IF", cond, pd_if_body(stat,
+                       * endif)). pd_if_body one-level-flattens to match the
+                       * production (body NOPs now skipped both sides — batch 18).
+                       * Only a LABEL in the body still diverges (program_co/
+                       * label_line flatten vs production's nested compound,
+                       * byte-clean — ifthen); defer that -> UNWIRED. */
         AstNode *body = pd_if_body(p, PD_NODE(3), PD_NODE(4));
         if (pd_block_has_label(body)) {
             c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
@@ -8712,12 +8706,8 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
         r = make_nop(p);
         break;
-    case 101: /* statement : if_then_part co_statements_co endif — leading-`:`
-               * NOP quirk (as 93); defer. */
-        c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
-        r = make_nop(p);
-        break;
-    case 100: { /* statement : if_then_part statements_co endif (same-line). */
+    case 100: case 101: { /* statement : if_then_part statements_co|
+                          * co_statements_co endif (same-line). */
         AstNode *body = pd_if_body(p, PD_NODE(2), PD_NODE(3));
         if (pd_block_has_label(body)) {
             c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
@@ -8728,15 +8718,10 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         ast_add_child(p->cs, r, body);
         break;
     }
-    case 103: case 105: /* if_inline co_statements forms — leading-`:` NOP
-                         * quirk; defer. */
-        c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
-        r = make_nop(p);
-        break;
-    case 102: case 104: {
-        /* if_inline : if_then_part statements|statements_co (p_if_inline).
-         * SENTENCE("IF", cond, pd_if_body(stat)). No endif. Label-in-body
-         * deferred (nesting reason). */
+    case 102: case 103: case 104: case 105: {
+        /* if_inline : if_then_part statements|co_statements_co|statements_co|
+         * co_statements (p_if_inline). SENTENCE("IF", cond, pd_if_body(stat)).
+         * No endif. Label-in-body deferred (nesting reason). */
         AstNode *body = pd_if_body(p, PD_NODE(2), NULL);
         if (pd_block_has_label(body)) {
             c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
@@ -8750,6 +8735,102 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
     case 99: /* statement : if_inline (no else) -> the IF SENTENCE */
         r = PD_NODE(1);
         break;
+
+    /* ---- FOR subsystem ----
+     * step : <empty> (142) -> make_number(1); STEP expr (143) -> expr. */
+    case 142:
+        r = make_number(p, 1, p->lexer.lineno, NULL);
+        break;
+    case 143:
+        r = PD_NODE(2);
+        break;
+    case 141: { /* for_start : FOR ID EQ expr TO expr step (p_for_sentence_start)
+                 * push loop_stack; resolve var (common_type); build
+                 * SENTENCE("FOR", var, e1, e2, e3). Faithful to parser.c:
+                 * 5662-5773 (var resolution + typecasts + FOR sentence). The
+                 * body is appended at for_sentence. (always-loop warnings are
+                 * stderr-only / the production omits them — Phase C.) */
+        const char *var_name = PD_SVAL(2);
+        int var_lineno = PD_LINENO(2);
+        int for_ln = PD_LINENO(1);
+        AstNode *start_expr = PD_NODE(4), *end_expr = PD_NODE(6), *step_expr = PD_NODE(7);
+        TypeInfo *id_type = check_common_type(p->cs, start_expr, end_expr);
+        if (id_type && step_expr) {
+            AstNode *tc = ast_new(p->cs, AST_NUMBER, for_ln);
+            tc->type_ = id_type;
+            id_type = check_common_type(p->cs, tc, step_expr);
+        }
+        AstNode *var = symboltable_access_id(p->cs->symbol_table, p->cs,
+                                             var_name, var_lineno, id_type, CLASS_var);
+        if (var) {
+            if (var->u.id.class_ == CLASS_const)
+                zxbc_error(p->cs, var_lineno, "'%s' is a CONST, not a VAR", var_name);
+            else if (var->u.id.class_ == CLASS_function)
+                zxbc_error(p->cs, var_lineno, "'%s' is a FUNCTION, not a VAR", var_name);
+            else if (var->u.id.class_ == CLASS_sub)
+                zxbc_error(p->cs, var_lineno, "Cannot assign a value to '%s'. It's not a variable", var_name);
+            if (var->u.id.class_ == CLASS_unknown) var->u.id.class_ = CLASS_var;
+            var->u.id.accessed = true;
+        }
+        LoopInfo li = { LOOP_FOR, for_ln, arena_strdup(&p->cs->arena, var_name) };
+        vec_push(p->cs->loop_stack, li);
+        AstNode *s = make_sentence_node(p, "FOR", for_ln);
+        if (var) {
+            start_expr = make_typecast(p->cs, var->type_, start_expr, var_lineno);
+            end_expr = make_typecast(p->cs, var->type_, end_expr, var_lineno);
+            step_expr = make_typecast(p->cs, var->type_, step_expr, var_lineno);
+            ast_add_child(p->cs, s, var);
+        } else {
+            AstNode *fb = ast_new(p->cs, AST_ID, for_ln);
+            fb->u.id.name = arena_strdup(&p->cs->arena, var_name);
+            ast_add_child(p->cs, s, fb);
+        }
+        if (start_expr) ast_add_child(p->cs, s, start_expr);
+        if (end_expr) ast_add_child(p->cs, s, end_expr);
+        if (step_expr) ast_add_child(p->cs, s, step_expr);
+        r = s;
+        break;
+    }
+    case 137: case 139: /* label_next : label NEXT | label NEXT ID -> the label
+                         * (+ NEXT-var check for 139). */
+        if (prodno == 139 && p->cs->loop_stack.len > 0) {
+            const char *nv = PD_SVAL(3);
+            const char *fv = p->cs->loop_stack.data[p->cs->loop_stack.len - 1].var_name;
+            if (nv && fv && strcmp(fv, nv) != 0)
+                err_wrong_for_var(p->cs, PD_LINENO(3), fv, nv);
+        }
+        r = PD_NODE(1);
+        break;
+    case 138: /* label_next : NEXT -> NOP */
+        r = make_nop(p);
+        break;
+    case 140: /* label_next : NEXT ID -> NOP (+ NEXT-var check) */
+        if (p->cs->loop_stack.len > 0) {
+            const char *nv = PD_SVAL(2);
+            const char *fv = p->cs->loop_stack.data[p->cs->loop_stack.len - 1].var_name;
+            if (nv && fv && strcmp(fv, nv) != 0)
+                err_wrong_for_var(p->cs, PD_LINENO(2), fv, nv);
+        }
+        r = make_nop(p);
+        break;
+    case 134: case 135: case 136: { /* statement : for_start
+                       * program_co|co_statements_co|program label_next
+                       * (p_for_sentence): append body make_block(p[2], p[3]);
+                       * pop loop_stack. */
+        AstNode *forsent = PD_NODE(1);
+        AstNode *body = pd_if_body(p, PD_NODE(2), PD_NODE(3));
+        if (p->cs->loop_stack.len > 0) vec_pop(p->cs->loop_stack);
+        if (!forsent || forsent->tag != AST_SENTENCE) { r = forsent; break; }
+        /* Body NOPs now skipped in the production loop too (batch 18); only the
+         * label-compound nesting still diverges — defer that. */
+        if (pd_block_has_label(body)) {
+            c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
+            r = make_nop(p); break;
+        }
+        ast_add_child(p->cs, forsent, body);
+        r = forsent;
+        break;
+    }
 
     /* RETURN (214 p_return) | RETURN expr (215 p_return_expr). Faithful to
      * parser.c:3763-3848 (which itself ports the Python actions). */
