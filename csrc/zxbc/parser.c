@@ -9617,6 +9617,23 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         break;
     }
 
+    case 316: { /* bexpr : ID bexpr (p_bexpr_func) — parenless single-arg call.
+                 * make_call(name, [argument(bexpr)]). Build a 1-elem ARGLIST
+                 * and route through make_call_node (which resolves the entry
+                 * and builds ARRAYLOAD/STRSLICE/FUNCCALL). */
+        const char *name = PD_SVAL(1);
+        int ln = PD_LINENO(1);
+        AstNode *argexpr = PD_NODE(2);
+        if (!argexpr) { r = NULL; break; }
+        AstNode *arg = ast_new(p->cs, AST_ARGUMENT, argexpr->lineno);
+        arg->u.argument.byref = p->cs->opts.default_byref;
+        ast_add_child(p->cs, arg, argexpr);
+        arg->type_ = argexpr->type_;
+        AstNode *al = ast_new(p->cs, AST_ARGLIST, ln);
+        ast_add_child(p->cs, al, arg);
+        r = make_call_node(p, name, ln, al, true, false, false);
+        break;
+    }
     case 397: { /* bexpr : math_fn bexpr (p_expr_trig) — math_fn (398-406)
                  * carries the fn name; kw mapped from it. */
         PdId *mf = (PdId *)rhs[0].value;       /* {name, kw} */
