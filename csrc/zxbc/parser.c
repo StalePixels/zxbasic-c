@@ -2937,6 +2937,48 @@ static AstNode *parse_call_or_array(Parser *p, const char *name, int lineno, boo
                           addressof_ctx, check(p, BTOK_LP));
 }
 
+/* SymbolCALL.__init__ array-arg propagation (symbols/call.py:44-55).
+ * For each positional (arg, param) pair where the argument value is a bare
+ * array ID, the param is an array, and the param's ref was flagged
+ * is_dynamically_accessed (any variable-subscript ARRAYACCESS in the callee
+ * body), propagate the flag to the passed array's ref. This is what makes a
+ * non-zero-based array passed by reference emit its `<mangled>.__LBOUND__`
+ * descriptor slot + bound table (VarTranslator.visit_ARRAYDECL,
+ * var_translator.py:58 — array13). Python zips arglist with ref.params
+ * (FuncRef); the C reads the callee PARAMLIST stamped on the resolved
+ * function ID and the per-param is_dynamically_accessed snapshot copied at
+ * the callee's def-completion (the body-scope param symbol IS the PARAMLIST
+ * child in Python, so no copy is needed there). Skipped silently for
+ * builtins / unresolved / non-function entries (params NULL), exactly as the
+ * Python `isinstance(ref, FuncRef)` guard. Shared by both the expression /
+ * paren-call builder (make_call_node) and the parenless statement sub-call
+ * builder (pd_sub_call) — Python routes both through SymbolCALL.make_node. */
+static void propagate_array_arg_dyn(AstNode *entry, AstNode *arglist) {
+    if (!entry || entry->tag != AST_ID || !arglist ||
+        arglist->tag != AST_ARGLIST)
+        return;
+    AstNode *pl = entry->u.id.params;
+    if (!pl || pl->tag != AST_PARAMLIST)
+        return;
+    int zipn = arglist->child_count < pl->child_count
+                   ? arglist->child_count : pl->child_count;
+    for (int z = 0; z < zipn; z++) {
+        AstNode *arg = arglist->children[z];
+        AstNode *param = pl->children[z];
+        if (!arg || arg->tag != AST_ARGUMENT || arg->child_count < 1)
+            continue;
+        if (!param || param->tag != AST_ARGUMENT)
+            continue;
+        AstNode *av = arg->children[0];  /* arg.value */
+        if (av && av->tag == AST_ID &&
+            av->u.id.class_ == CLASS_array &&
+            param->u.argument.is_array &&
+            param->u.argument.is_dynamically_accessed) {
+            av->u.id.is_dynamically_accessed = true;
+        }
+    }
+}
+
 /* make_call node-build core (zxbparser.py make_call :365-420 +
  * make_func_call/make_array_access/make_strslice). Resolves the entry via
  * access_call and builds ARRAYACCESS/ARRAYLOAD (array), STRSLICE (string
@@ -3254,6 +3296,9 @@ static AstNode *make_call_node(Parser *p, const char *name, int lineno,
     }
     ast_add_child(p->cs, n, entry);
     ast_add_child(p->cs, n, arglist);
+
+    /* SymbolCALL.__init__ array-arg propagation (symbols/call.py:44-55). */
+    propagate_array_arg_dyn(entry, arglist);
 
     /* SymbolCALL.filename = gl.FILENAME at parse point
      * (symbols/call.py:42) — used as fname= for the R3-R10 argument
@@ -7879,6 +7924,44 @@ static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function, bool is_decl
                 e->u.id.accessed = true;
             }
         }
+
+        /* Mirror each body-scope array param's ref.is_dynamically_accessed
+         * (set by any ARRAYACCESS on it during body parse, parser.c:3099 ==
+         * arrayaccess.py:37) onto the matching PARAMLIST ARGUMENT wrapper,
+         * BEFORE the body scope is popped. The CALL-site array-arg
+         * propagation (SymbolCALL.__init__ / call.py:49-55) reads it to
+         * flag a non-zero-based array passed to such a param, driving
+         * VarTranslator.visit_ARRAYDECL's __LBOUND__ descriptor slot+table
+         * (var_translator.py:58 — array13). In Python the param symbol IS
+         * the PARAMLIST child so no copy is needed; the C separates them. */
+        for (int pi = 0; pi < params->child_count; pi++) {
+            AstNode *param = params->children[pi];
+            if (!param || param->tag != AST_ARGUMENT ||
+                !param->u.argument.is_array || !param->u.argument.name)
+                continue;
+            /* Body symbols register under the deprecated-suffix-stripped
+             * name (line ~7677); strip the param name the same way to match. */
+            const char *pn = param->u.argument.name;
+            char pstrip[256];
+            size_t pl = strlen(pn);
+            if (pl > 0 && pl < sizeof(pstrip) &&
+                is_deprecated_suffix(pn[pl - 1])) {
+                memcpy(pstrip, pn, pl - 1);
+                pstrip[pl - 1] = '\0';
+                pn = pstrip;
+            }
+            for (int si = 0; si < bs->ordered_count; si++) {
+                AstNode *e = bs->ordered[si];
+                if (e && e->tag == AST_ID &&
+                    e->u.id.scope == SCOPE_parameter &&
+                    e->u.id.class_ == CLASS_array && e->u.id.name &&
+                    strcmp(e->u.id.name, pn) == 0) {
+                    param->u.argument.is_dynamically_accessed =
+                        e->u.id.is_dynamically_accessed;
+                    break;
+                }
+            }
+        }
     }
 
     /* S5.7d — capture the body scope's insertion-ordered entries onto the
@@ -8557,6 +8640,9 @@ static AstNode *pd_sub_call(Parser *p, const char *name, int lineno,
     if (!arglist) arglist = ast_new(p->cs, AST_ARGLIST, lineno);
     ast_add_child(p->cs, s, arglist);
 
+    /* SymbolCALL.__init__ array-arg propagation (symbols/call.py:44-55). */
+    propagate_array_arg_dyn(id_node, arglist);
+
     if (id_node->tag == AST_ID &&
         id_node->u.id.class_ != CLASS_var && id_node->u.id.class_ != CLASS_const) {
         if (p->cs->current_file)
@@ -9045,6 +9131,48 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
                                       e->u.id.name ? e->u.id.name : "",
                                       "Parameter");
                     e->u.id.accessed = true;
+                }
+            }
+
+            /* Mirror each body-scope array param's
+             * ref.is_dynamically_accessed (set by any variable-subscript
+             * ARRAYACCESS during body parse, parser.c:3099 ==
+             * arrayaccess.py:37) onto the matching PARAMLIST ARGUMENT
+             * wrapper BEFORE exit_scope pops the body scope. The CALL-site
+             * array-arg propagation (propagate_array_arg_dyn,
+             * SymbolCALL.__init__/call.py:49-55) reads it to flag a
+             * non-zero-based array passed to such a param, driving
+             * VarTranslator.visit_ARRAYDECL's __LBOUND__ descriptor
+             * slot+table (var_translator.py:58 — array13). In Python the
+             * param symbol IS the PARAMLIST child so no copy is needed;
+             * the C separates the ARGUMENT wrapper from the body-scope ID. */
+            if (fd->params) {
+                for (int pi = 0; pi < fd->params->child_count; pi++) {
+                    AstNode *param = fd->params->children[pi];
+                    if (!param || param->tag != AST_ARGUMENT ||
+                        !param->u.argument.is_array ||
+                        !param->u.argument.name)
+                        continue;
+                    const char *pn = param->u.argument.name;
+                    char pstrip[256];
+                    size_t pnl = strlen(pn);
+                    if (pnl > 0 && pnl < sizeof(pstrip) &&
+                        is_deprecated_suffix(pn[pnl - 1])) {
+                        memcpy(pstrip, pn, pnl - 1);
+                        pstrip[pnl - 1] = '\0';
+                        pn = pstrip;
+                    }
+                    for (int si = 0; si < bs->ordered_count; si++) {
+                        AstNode *e = bs->ordered[si];
+                        if (e && e->tag == AST_ID &&
+                            e->u.id.scope == SCOPE_parameter &&
+                            e->u.id.class_ == CLASS_array && e->u.id.name &&
+                            strcmp(e->u.id.name, pn) == 0) {
+                            param->u.argument.is_dynamically_accessed =
+                                e->u.id.is_dynamically_accessed;
+                            break;
+                        }
+                    }
                 }
             }
         }

@@ -338,6 +338,15 @@ struct AstNode {
             char *name;       /* parameter name */
             bool byref;
             bool is_array;
+            /* For a PARAMLIST array ARGUMENT only: snapshot of the body-
+             * scope param symbol's ref.is_dynamically_accessed, copied at
+             * function-def completion (before the body scope is popped).
+             * Python's param symbol IS the PARAMLIST child, so call.py:49-55
+             * reads `param.ref.is_dynamically_accessed` directly off the
+             * body-set flag; the C separates the ARGUMENT wrapper from the
+             * body-scope ID, so the flag is mirrored here for the CALL-site
+             * array-arg propagation (var_translator.py:58 __LBOUND__). */
+            bool is_dynamically_accessed;
             /* S5.7b — cumulative parameter offset, assigned left-to-right
              * by parser_assign_param_offsets (paramlist.py:53-58
              * PARAMLIST.append_child: param.ref.offset = self.size;
