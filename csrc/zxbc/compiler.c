@@ -1488,6 +1488,21 @@ AstNode *symboltable_access_label(SymbolTable *st, CompilerState *cs,
  * nodes that were resolved to VAR/FUNCTION/ARRAY have different tokens.
  * In our C code, we only check AST_ID nodes that remain CLASS_unknown
  * or CLASS_label in the symbol table. */
+/* A CALL/FUNCCALL callee (child[0]) is the C analogue of a Python token
+ * "FUNCTION" node — make_node/to_function flips an undeclared callee's token
+ * away from "ID", so Python's check_pending_labels (which acts only on token
+ * "ID"/"LABEL") skips it; the call's own undeclared-ness is owned by
+ * check_pending_calls' "Undeclared function" instead. The C leaves the callee
+ * AST_ID at CLASS_unknown (flipping its class here regressed the
+ * forward-nested SUB redefinition path — paramstr5/opt2_* FALSE_POS), so
+ * mark each CALL/FUNCCALL callee pointer and skip it in the ID scan below,
+ * reproducing the token-"FUNCTION" exemption without mutating the shared
+ * symbol entry. */
+static bool pl_is_marked(AstNode **marks, int n, const AstNode *p) {
+    for (int i = 0; i < n; i++) if (marks[i] == p) return true;
+    return false;
+}
+
 bool check_pending_labels(CompilerState *cs, AstNode *ast) {
     if (!ast) return true;
 
@@ -1499,9 +1514,28 @@ bool check_pending_labels(CompilerState *cs, AstNode *ast) {
     AstNode **stack = arena_alloc(&cs->arena, stack_cap * sizeof(AstNode *));
     stack[stack_len++] = ast;
 
+    /* Callee-exemption set (CALL/FUNCCALL child[0] pointers). */
+    int callee_cap = 64;
+    int callee_len = 0;
+    AstNode **callees = arena_alloc(&cs->arena, callee_cap * sizeof(AstNode *));
+
     while (stack_len > 0) {
         AstNode *node = stack[--stack_len];
         if (!node) continue;
+
+        /* Record a CALL/FUNCCALL callee (child[0]) as token-"FUNCTION"
+         * exempt before pushing children. */
+        if ((node->tag == AST_CALL || node->tag == AST_FUNCCALL) &&
+            node->child_count > 0 && node->children[0] &&
+            node->children[0]->tag == AST_ID) {
+            if (callee_len >= callee_cap) {
+                int nc = callee_cap * 2;
+                AstNode **n2 = arena_alloc(&cs->arena, nc * sizeof(AstNode *));
+                memcpy(n2, callees, callee_len * sizeof(AstNode *));
+                callees = n2; callee_cap = nc;
+            }
+            callees[callee_len++] = node->children[0];
+        }
 
         /* Push children */
         for (int i = 0; i < node->child_count; i++) {
@@ -1515,21 +1549,53 @@ bool check_pending_labels(CompilerState *cs, AstNode *ast) {
             stack[stack_len++] = node->children[i];
         }
 
-        /* Only check AST_ID nodes that were explicitly created as labels
-         * (by GOTO/GOSUB). CLASS_unknown nodes are implicit variables, not labels.
-         * This matches Python's check: node.token in ("ID", "LABEL") — but in Python,
-         * variables get resolved to "VAR" token, so only unresolved labels remain. */
+        /* Faithful port of Python check_pending_labels (api/check.py:199-230):
+         * the traversal acts on nodes whose token is in ("ID", "LABEL"). A
+         * RESOLVED variable carries token "VAR" (CLASS_var) and is skipped;
+         * an UNRESOLVED scalar reference keeps token "ID" (CLASS_unknown);
+         * a label reference carries token "LABEL" (CLASS_label). For each,
+         * get_entry(name); if entry is None or its class is still unknown,
+         * Python errors. Two distinct C messages are emitted to match the
+         * oracle byte-for-byte:
+         *   - CLASS_label  -> "Undeclared label"   (the C analogue of
+         *     Python's SYMBOL_TABLE.check_labels(), symboltable.py:759-762,
+         *     which runs first at zxbparser.py:529 over self.labels and owns
+         *     the GOTO/GOSUB undeclared-target message).
+         *   - CLASS_unknown -> "Undeclared identifier"  (api/check.py:224 —
+         *     an unresolved bare ID, e.g. `@a` / `POKE @a` referencing a
+         *     never-declared `a`; the `@` operator's access_id uses
+         *     ignore_explicit_flag so it does not auto-declare, leaving the
+         *     id CLASS_unknown for this catch — both in #pragma explicit and
+         *     in the implicit default mode, exactly as the oracle rejects). */
         if (node->tag != AST_ID) continue;
-        if (node->u.id.class_ != CLASS_label) continue;
 
-        /* Look up in symbol table — the label must be declared somewhere */
-        AstNode *entry = symboltable_lookup(cs->symbol_table, node->u.id.name);
-        if (!entry || entry->u.id.class_ == CLASS_unknown) {
-            zxbc_error(cs, node->lineno, "Undeclared label \"%s\"", node->u.id.name);
-            result = false;
-        } else if (entry->u.id.class_ != CLASS_label) {
-            /* Label name refers to something else (var, func, etc.) — Python would
-             * catch this differently, but for now just check it's a label */
+        if (node->u.id.class_ == CLASS_label) {
+            /* Look up in symbol table — the label must be declared somewhere */
+            AstNode *entry = symboltable_lookup(cs->symbol_table, node->u.id.name);
+            if (!entry || entry->u.id.class_ == CLASS_unknown) {
+                zxbc_error(cs, node->lineno, "Undeclared label \"%s\"", node->u.id.name);
+                result = false;
+            }
+            continue;
+        }
+
+        if (node->u.id.class_ == CLASS_unknown) {
+            /* A CALL/FUNCCALL callee is Python's token-"FUNCTION" — exempt
+             * (its undeclared-ness is reported by check_pending_calls). */
+            if (pl_is_marked(callees, callee_len, node))
+                continue;
+            /* Python token "ID": an unresolved bare identifier. get_entry
+             * resolves by name; if still absent or unknown, it never became
+             * a real symbol -> "Undeclared identifier". A name that DID get
+             * declared elsewhere (e.g. forward-declared label/var sharing
+             * the name) resolves to a non-unknown entry and passes. */
+            AstNode *entry = symboltable_lookup(cs->symbol_table, node->u.id.name);
+            if (!entry || entry->u.id.class_ == CLASS_unknown) {
+                zxbc_error(cs, node->lineno, "Undeclared identifier \"%s\"",
+                           node->u.id.name);
+                result = false;
+            }
+            continue;
         }
     }
 

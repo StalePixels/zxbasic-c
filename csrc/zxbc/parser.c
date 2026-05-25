@@ -8653,6 +8653,10 @@ static AstNode *pd_sub_call(Parser *p, const char *name, int lineno,
         id_node->u.id.class_ != CLASS_var && id_node->u.id.class_ != CLASS_const) {
         if (p->cs->current_file)
             s->u.call.filename = arena_strdup(&p->cs->arena, p->cs->current_file);
+        /* Preserve the sigil-bearing original name for the undeclared-function
+         * diagnostic (Python ID.original_name, check.py:194). */
+        if (name)
+            s->u.call.original_name = arena_strdup(&p->cs->arena, name);
         s->u.call.callee_inline =
             (id_node->u.id.params != NULL && !id_node->u.id.forwarded);
         vec_push(p->cs->function_calls, s);
