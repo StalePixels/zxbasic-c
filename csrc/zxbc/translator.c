@@ -1685,11 +1685,18 @@ static int tr_builtin_dispatch(Visitor *v, AstNode *node) {
      * `pop af/de/bc` that pops the inner call's pushed result.  Mirror
      * the lazy allocation: a value-bearing operand with no .t gets a
      * fresh temp here so the outer fparam pops the stacked result
-     * (test 70: SIN COS TAN ABS LN EXP SQR b). */
+     * (test 70: SIN COS TAN ABS LN EXP SQR b).
+     *
+     * CHR is exempt: it is an ARGLIST-emulation that owns its own child
+     * descent (visit + ic_param every child in reverse, see the CHR branch
+     * below) and never reads `ot`.  Allocating a temp into op->t here would
+     * clobber a NUMBER child's literal .t (e.g. "32" -> "_3"), turning the
+     * child's `ld a, 32` into a `pop af` of an unstacked temp (chr1/chr). */
     const char *ot;
+    bool is_chr = (fn && strcmp(fn, "CHR") == 0);
     if (op && op->t) {
         ot = op->t;
-    } else if (op) {
+    } else if (op && !is_chr) {
         op->t = compiler_new_temp(tr->cs);
         ot = op->t;
     } else {
@@ -1812,10 +1819,11 @@ static int tr_builtin_dispatch(Visitor *v, AstNode *node) {
      * and runtime_call(CHR).
      *
      * The C parser stores the CHR args as direct children of the
-     * BUILTIN (no ARGLIST/ARGUMENT wrappers).  tr_visit_builtin pre-
-     * visited children[0]; we still need to visit + ic_param the
-     * remaining children (and the first, since visit_ID is emit-free)
-     * — in REVERSE order so the push matches Python's stack layout.
+     * BUILTIN (no ARGLIST/ARGUMENT wrappers).  tr_visit_builtin SKIPS the
+     * generic children[0] pre-visit for CHR (see there), so this handler
+     * owns the full argument descent: visit + ic_param EVERY child in
+     * REVERSE order so the push order matches Python's visit_ARGLIST
+     * (translator.py:210-212) stack layout — last arg pushed first.
      * The parser already cast every child to ubyte at BTOK_CHR. */
     if (strcmp(fn, "CHR") == 0) {
         const TypeInfo *uint_t =
@@ -1825,8 +1833,7 @@ static int tr_builtin_dispatch(Visitor *v, AstNode *node) {
         for (int i = node->child_count - 1; i >= 0; i--) {
             AstNode *ch = node->children[i];
             if (!ch) continue;
-            if (i != 0)  /* children[0] was already visited above */
-                visitor_visit(v, ch);
+            visitor_visit(v, ch);
             tr_ic_param(tr, ubyte_t, ch->t ? ch->t : "0");
         }
         char nb[16];
@@ -1927,7 +1934,19 @@ static int tr_builtin_dispatch(Visitor *v, AstNode *node) {
 static AstNode *tr_visit_builtin(Visitor *v, AstNode *node) {
     Translator *tr = v->ctx;
     AstNode *op = node->child_count > 0 ? node->children[0] : NULL;
-    if (op) visitor_visit(v, op);          /* yield node.operand */
+    /* CHR is the one multi-arg builtin whose Python operand is an ARGLIST
+     * (symbols/builtin.py:operand == children[0]; the generic visit walks
+     * it via visit_ARGLIST, which yields the ARGUMENTs in REVERSE order —
+     * translator.py:210-212).  The C parser flattens those args into the
+     * BUILTIN's direct children (no ARGLIST node), so the faithful
+     * equivalent is to visit ALL of CHR's children in reverse inside the
+     * CHR handler.  Pre-visiting children[0] here would force the FIRST arg
+     * to be evaluated first, inverting Python's stack layout (chr0:
+     * CHR$(a+1, b) must evaluate `b` before `a+1`).  Skip the generic
+     * pre-visit for CHR; the dispatch owns its argument descent. */
+    if (op && !(node->u.builtin.fname &&
+                strcmp(node->u.builtin.fname, "CHR") == 0))
+        visitor_visit(v, op);              /* yield node.operand */
     if (tr_builtin_dispatch(v, node)) {
         if (node->u.builtin.discard_result)
             tr_ic_fparam(tr, node->type_, compiler_new_temp(tr->cs));
