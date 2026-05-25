@@ -1575,6 +1575,73 @@ static AstNode *make_strslice_node(Parser *p, AstNode *s, AstNode *lower,
     return strslice_fold(p, slice);
 }
 
+/* make_strslice over a string SCALAR VARIABLE `s$(...)` — the CLASS_var-string
+ * branch of make_call (zxbparser.py:399-411 / parse_call_or_array). Builds the
+ * STRSLICE[entry, bound...] node directly from the arglist (each ARGUMENT's
+ * bound is base-subtracted + uinteger-typecast). Handles BOTH the READ
+ * (expr_context — `Print s$(n)`) and the single-index WRITE lvalue
+ * (!expr_context — `s$(n) = rhs`, p_substr_assignment_no_let) shapes, which
+ * differ in the MINUS application (see the inline comment). Extracted from
+ * parse_call_or_array (behaviour-preserving) so the Phase-D substr-write
+ * reduce-actions (80/81) build the byte-identical lvalue. */
+static AstNode *make_strslice_var(Parser *p, AstNode *entry, AstNode *arglist,
+                                  bool expr_context, int lineno) {
+    /* S5.8a: STRSLICE-node construction does NOT mark the string accessed in
+     * Python (only the READ path does, via mark_entry_as_accessed). The
+     * substring lvalue write-target productions resolve only via
+     * access_call/access_var (never .accessed) — gate on expr_context so a
+     * write-only string's `accessed` stays False (O>1 DCE prunes it, matching
+     * Python). */
+    AstNode *n = ast_new(p->cs, AST_STRSLICE, lineno);
+    if (expr_context)
+        entry->u.id.accessed = true;
+    ast_add_child(p->cs, n, entry);
+    /* OPTIONS.string_base adjustment + STR_INDEX_TYPE promotion —
+     * STRSLICE.make_node (symbols/strslice.py:74-83) wraps each slice bound in
+     * `TYPECAST(STR_INDEX_TYPE, MINUS(<idx>, <base>))`. The TYPECAST(uinteger)
+     * is UNCONDITIONAL (widens a small constant index to 16-bit). The MINUS:
+     *   READ (expr_context): UNCONDITIONAL, base auto-inferred (NULL) — exactly
+     *     Python's bare NUMBER(string_base); folds `idx-0` for a constant.
+     *   WRITE (!expr_context): only when string_base != 0, base typed str_idx —
+     *     p_substr_assignment_no_let (zxbparser.py:1221-1245); for base 0 the
+     *     translator supplies it. */
+    int strbase = p->cs->opts.string_base;
+    TypeInfo *str_idx = p->cs->symbol_table->basic_types[TYPE_uinteger];
+    for (int i = 0; i < arglist->child_count; i++) {
+        AstNode *ch = arglist->children[i];
+        if (ch) {
+            AstNode *idx = ch;
+            AstNode *parent = NULL;
+            int parent_idx = -1;
+            if (ch->tag == AST_ARGUMENT && ch->child_count > 0) {
+                idx = ch->children[0];
+                parent = ch;
+                parent_idx = 0;
+            }
+            AstNode *val = idx;
+            if (expr_context) {
+                AstNode *base = make_number(p, strbase, lineno, NULL);
+                val = make_binary_node(p->cs, "MINUS", idx, base, lineno, NULL);
+            } else if (strbase != 0) {
+                AstNode *base = make_number(p, strbase, lineno, str_idx);
+                val = make_binary_node(p->cs, "MINUS", val, base, lineno, NULL);
+            }
+            AstNode *cast = make_typecast(p->cs, str_idx, val, lineno);
+            if (cast) {
+                if (parent) {
+                    parent->children[parent_idx] = cast;
+                    parent->type_ = cast->type_;
+                } else {
+                    ch = cast;
+                }
+            }
+        }
+        ast_add_child(p->cs, n, ch);
+    }
+    n->type_ = p->cs->symbol_table->basic_types[TYPE_string];
+    return n;
+}
+
 /* Build the LETARRAYSUBSTR lvalue for a string-ARRAY element substring
  * assignment — the single-paren-group / comma-subscript family that
  * Python parses with its dedicated p_let_arr_substr* productions
@@ -3154,130 +3221,7 @@ static AstNode *make_call_node(Parser *p, const char *name, int lineno,
     }
 
     if (entry && entry->u.id.class_ == CLASS_var && type_is_string(entry->type_)) {
-        /* String slicing: name(expr).  S5.8a: STRSLICE-node construction
-         * does NOT mark the string accessed in Python.  The substring
-         * *lvalue* write-target productions p_substr_assignment_no_let
-         * (zxbparser.py:1221-1245), p_substr_assignment (:1248-1305) and
-         * p_str_assign (:1308-1335) resolve the target only via
-         * SYMBOL_TABLE.access_call / access_var, and access_id /
-         * access_var / access_call (src/api/symboltable/symboltable.py
-         * :326 / :368 / :434) NEVER set .accessed — only the explicit
-         * mark_entry_as_accessed (zxbparser.py:167) does, and none of the
-         * three productions call it.  So a string used only as a
-         * substring lvalue stays accessed=False in Python, and
-         * OptimizerVisitor.visit_LETSUBSTR (optimize.py:360-365, O>1 +
-         * not accessed → NOP) + VarTranslator.visit_VARDECL DCE prune it
-         * to the bare wrapper + W150.  The C port's already-correct
-         * ports of those gates (passes/optimizer.c opt_visit_letsubstr,
-         * var_translator.c vt_visit_vardecl) were defeated only by this
-         * branch unconditionally marking accessed at parse time.  Gate it
-         * by expr_context exactly like the CLASS_array branch above
-         * (true on every read/@-address path parser.c:517,555; false on
-         * the substring-lvalue write target) so a write-only string's
-         * accessed is False — byte-identical to Python.  Resolves R2
-         * (lvalsubstr_nolet / opt2_letsubstr_not_used / sys_letsubstr0);
-         * STRSLICE-node-local, mirrors the S5.6 array-gate precedent. */
-        AstNode *n = ast_new(p->cs, AST_STRSLICE, lineno);
-        if (expr_context)
-            entry->u.id.accessed = true;
-        ast_add_child(p->cs, n, entry);
-        /* OPTIONS.string_base adjustment + STR_INDEX_TYPE promotion —
-         * STRSLICE.make_node (symbols/strslice.py:74-83) wraps each slice
-         * bound in `TYPECAST(STR_INDEX_TYPE, MINUS(<idx>, <base>))`,
-         * base = OPTIONS.string_base.  Two pieces, with different
-         * conditions:
-         *   - the MINUS is only material when base != 0 (for base==0,
-         *     `idx - 0` folds to `idx` for constants and is a no-op at
-         *     the IR level for non-constants — verified against the
-         *     corpus), so it is applied only then;
-         *   - the TYPECAST(STR_INDEX_TYPE=uinteger) is UNCONDITIONAL in
-         *     Python and must be here too.  It is what promotes a small
-         *     constant index (auto-typed ubyte from its value) up to
-         *     uinteger so visit_NUMBER -> ic_param emits the 16-bit
-         *     `ld hl, N; push hl` shape Python uses, not the 8-bit
-         *     `ld a, N; push af` (probe st_single_index: `Print s(2)`).
-         *     For an already-uinteger bound make_typecast short-circuits
-         *     (returns the node unchanged), so the corpus stays
-         *     byte-identical.  Single-index shape (`a$(idx)`, no TO):
-         *     the arglist holds one ARGUMENT(idx) used as both lower and
-         *     upper; the WRITE lvalue (LET a$(idx) = rhs) Python's
-         *     p_substr_assignment (zxbparser.py:1297-1304) likewise
-         *     typecasts to uinteger and subtracts base once — exact
-         *     match for both read and write at this site. */
-        int strbase = p->cs->opts.string_base;
-        TypeInfo *str_idx = p->cs->symbol_table->basic_types[TYPE_uinteger];
-        for (int i = 0; i < arglist->child_count; i++) {
-            AstNode *ch = arglist->children[i];
-            if (ch) {
-                AstNode *idx = ch;
-                AstNode *parent = NULL;
-                int parent_idx = -1;
-                if (ch->tag == AST_ARGUMENT && ch->child_count > 0) {
-                    idx = ch->children[0];
-                    parent = ch;
-                    parent_idx = 0;
-                }
-                /* MINUS — the READ and WRITE substring shapes have DIFFERENT
-                 * faithful sources in Python, so they must be emitted
-                 * differently here (this site builds the STRSLICE bound for
-                 * both the `s$(n)` READ and the `s$(n)=rhs` WRITE lvalue).
-                 *
-                 * READ (expr_context): STRSLICE.make_node (strslice.py:74-83,
-                 * the `string : ID substr` / make_call branch) wraps each
-                 * bound in TYPECAST(uinteger, MINUS(idx, NUMBER(string_base)))
-                 * UNCONDITIONALLY.  BINARY.make_node folds `idx - 0` for a
-                 * constant bound but builds a real MINUS for a non-constant
-                 * one -> the extra `subu16/subu8 t, idx, 0` round-trip at -O0
-                 * (binary.py:144).  base is AUTO-INFERRED (NULL) exactly like
-                 * Python's bare NUMBER(string_base) (number.py:47-53): 0 ->
-                 * ubyte, so `MINUS(ubyte_idx, ubyte_0)` stays at 8-bit
-                 * (push af/pop af) and the outer TYPECAST then widens — a
-                 * bare ubyte index (slice2's thingToPrint$(n)) must subtract
-                 * at 8-bit.  The READ never reaches tr_letsubstr_emit.
-                 *
-                 * WRITE (!expr_context): the single-index lvalue
-                 * `s$(idx) = rhs` is Python's p_substr_assignment_no_let
-                 * (zxbparser.py:1221-1245), which applies the MINUS with the
-                 * base typed UINTEGER (`_TYPE(gl.STR_INDEX_TYPE)`, :1236) and
-                 * ONLY when string_base != 0 in effect — for base 0 the
-                 * translator (tr_letsubstr_emit, translator.c:2851,
-                 * `parser_did_rewrite=(string_base!=0)`) supplies it.  This
-                 * is byte-for-byte the parent c9c34b2c form: a 16-bit (not
-                 * 8-bit) subtract, gated base!=0, base typed str_idx (NOT
-                 * NULL).  Applying the READ form here would (a) double the
-                 * round-trip for base 0 and (b) subtract at the wrong width
-                 * (8-bit) for a ubyte index at base!=0. */
-                AstNode *val = idx;
-                if (expr_context) {
-                    AstNode *base = make_number(p, strbase, lineno, NULL);
-                    val = make_binary_node(p->cs, "MINUS", idx, base,
-                                           lineno, NULL);
-                } else if (strbase != 0) {
-                    AstNode *base = make_number(p, strbase, lineno, str_idx);
-                    val = make_binary_node(p->cs, "MINUS", val, base,
-                                           lineno, NULL);
-                }
-                AstNode *cast = make_typecast(p->cs, str_idx, val, lineno);
-                /* make_typecast may (a) return the node mutated in place
-                 * (constant NUMBER retyped to uinteger), (b) return a
-                 * fresh TYPECAST wrapper (non-constant bound), or (c)
-                 * return the node unchanged (already uinteger).  In every
-                 * case keep the ARGUMENT.type_ in lockstep with its child
-                 * (parser.c set arg.type_ = arg_expr.type_ at creation)
-                 * so visit_ARGUMENT emits the right param_<TSUFFIX>. */
-                if (cast) {
-                    if (parent) {
-                        parent->children[parent_idx] = cast;
-                        parent->type_ = cast->type_;
-                    } else {
-                        ch = cast;
-                    }
-                }
-            }
-            ast_add_child(p->cs, n, ch);
-        }
-        n->type_ = p->cs->symbol_table->basic_types[TYPE_string];
-        return n;
+        return make_strslice_var(p, entry, arglist, expr_context, lineno);
     }
 
     /* Function call */
@@ -10142,6 +10086,106 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         r = make_sentence_node(p, "LETARRAY", PD_LINENO(1));
         ast_add_child(p->cs, r, lv);
         ast_add_child(p->cs, r, rexpr);  /* RAW expr */
+        break;
+    }
+    case 80: { /* statement : ID LP expr RP EQ expr (p_substr_assignment_no_let):
+                * single-index scalar substr write. The C PRODUCTION resolves
+                * `a$(idx)` via parse_call_or_array's CLASS_var-string branch ->
+                * make_strslice_var(expr_context=false) -> STRSLICE[entry,
+                * ARGUMENT[uinteger(base-sub idx)]], then LETARRAY[lv, RAW expr]
+                * (parser.c:4929-5057). Build an arglist of one ARGUMENT[idx] and
+                * route through the shared helper. */
+        const char *name = PD_SVAL(1);
+        int ln = PD_LINENO(1);
+        AstNode *idx = PD_NODE(3);
+        AstNode *rexpr = PD_NODE(6);
+        if (!idx || !rexpr) { r = NULL; break; }
+        AstNode *entry = symboltable_access_call(p->cs->symbol_table, p->cs,
+                                                 name, ln, NULL);
+        if (!entry) { r = NULL; break; }  /* p[0] = None */
+        /* entry.class_ == unknown -> var (p_substr_assignment_no_let:1229). */
+        if (entry->u.id.class_ == CLASS_unknown) entry->u.id.class_ = CLASS_var;
+        /* RHS must be string (error, NOT abort) at p.lineno(5)=EQ. */
+        if (!type_is_string(rexpr->type_)) {
+            const TypeInfo *rft = (rexpr->type_ && rexpr->type_->final_type)
+                                      ? rexpr->type_->final_type : rexpr->type_;
+            const char *rtn = (rft && rft->tag == AST_BASICTYPE)
+                                  ? basictype_to_string(rft->basic_type) : "unknown";
+            err_expected_string(p->cs, rhs[4].lineno, rtn);
+        }
+        if (!entry->tag || entry->tag != AST_ID ||
+            entry->u.id.class_ != CLASS_var || !type_is_string(entry->type_)) {
+            /* non-string-var target — production routes elsewhere; defer. */
+            c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
+            r = make_nop(p); break;
+        }
+        AstNode *al = ast_new(p->cs, AST_ARGLIST, ln);
+        AstNode *arg = ast_new(p->cs, AST_ARGUMENT, idx->lineno);
+        arg->u.argument.byref = p->cs->opts.default_byref;
+        ast_add_child(p->cs, arg, idx);
+        arg->type_ = idx->type_;
+        ast_add_child(p->cs, al, arg);
+        AstNode *lv = make_strslice_var(p, entry, al, false, ln);
+        if (!lv) { r = NULL; break; }
+        r = make_sentence_node(p, "LETARRAY", PD_LINENO(1));
+        ast_add_child(p->cs, r, lv);
+        ast_add_child(p->cs, r, rexpr);  /* RAW expr */
+        break;
+    }
+    case 81: { /* statement : LET ID arg_list EQ expr (p_substr_assignment):
+                * scalar string substr write (1 index) or whole-string (0). The
+                * C PRODUCTION builds make_strslice_var -> STRSLICE wrapped in
+                * LETARRAY (Shape A), not Python's LETSUBSTR. */
+        const char *name = PD_SVAL(2);
+        int ln = PD_LINENO(2);
+        AstNode *arglist = PD_NODE(3);
+        AstNode *rexpr = PD_NODE(5);
+        if (!arglist || !rexpr) { r = NULL; break; }  /* p[3]/p[5] None */
+        AstNode *entry = symboltable_access_call(p->cs->symbol_table, p->cs,
+                                                 name, ln, NULL);
+        if (!entry) { r = NULL; break; }
+        /* The not-a-var / non-string-target cases are error paths where the
+         * OLD production builds a FUNCCALL-based LETARRAY recovery shape
+         * (e.g. explicit-mode undeclared `LET a(5) = "5"`, explicit5) while
+         * Python p_substr_assignment errors + None. The engine matches PYTHON;
+         * defer those to Phase-E-reconcile (do not contort to the old
+         * production's error-recovery tree). Only the genuine string-var substr
+         * write is wired. */
+        if (entry->u.id.class_ != CLASS_var &&
+            entry->u.id.class_ != CLASS_unknown) {
+            c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
+            r = make_nop(p); break;
+        }
+        if (entry->u.id.class_ == CLASS_unknown) entry->u.id.class_ = CLASS_var;
+        if (!type_is_string(entry->type_)) {
+            c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
+            r = make_nop(p); break;
+        }
+        if (!type_is_string(rexpr->type_)) {
+            const TypeInfo *rft = (rexpr->type_ && rexpr->type_->final_type)
+                                      ? rexpr->type_->final_type : rexpr->type_;
+            const char *rtn = (rft && rft->tag == AST_BASICTYPE)
+                                  ? basictype_to_string(rft->basic_type) : "unknown";
+            err_expected_string(p->cs, PD_LINENO(4), rtn);
+            r = NULL; break;
+        }
+        if (arglist->child_count > 1) {
+            zxbc_error(p->cs, ln, "Accessing string with too many indexes. Expected only one.");
+            r = NULL; break;
+        }
+        /* 0-index whole-string `LET a$() = x`: Python builds LETSUBSTR with the
+         * MIN..MAX bounds; the C production's make_strslice_var with an empty
+         * arglist yields STRSLICE[entry] (no bounds) — a different shape, so
+         * defer the 0-index form. The 1-index form is the common substr write. */
+        if (arglist->child_count == 0) {
+            c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
+            r = make_nop(p); break;
+        }
+        AstNode *lv = make_strslice_var(p, entry, arglist, false, ln);
+        if (!lv) { r = NULL; break; }
+        r = make_sentence_node(p, "LETARRAY", PD_LINENO(1));
+        ast_add_child(p->cs, r, lv);
+        ast_add_child(p->cs, r, rexpr);
         break;
     }
 
