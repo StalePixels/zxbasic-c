@@ -9069,26 +9069,43 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         *out = pe; *out_lineno = PD_LINENO(1);
         return true;
     }
-    case 115: /* ELSE NEWLINE co_statements_co endif: a leading `:` in the
-               * co_statements_co else body is a NOP the PRODUCTION's else loop
-               * KEEPS but the engine's make_block drops (co_statements case 14
-               * filters it before this reduce sees it) — a byte-clean nesting
-               * divergence (Phase-E-reconcile). The engine matches Python here;
-               * defer to hold DIFF 0 (ifthensntcoelsecocoendif). */
-    case 120: case 122: case 123: /* same co_statements_co else-body class */
-        c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
-        *out = NULL; *out_lineno = PD_LINENO(1);
+    case 115: { /* ELSE NEWLINE co_statements_co endif -> [p[3], p[4]]. The
+                 * co_statements_co leading-`:` NOP is dropped by make_block at
+                 * the consumer (matching PYTHON); the astcmp-vs-old-production
+                 * divergence is gated at the consumer's pd_label_gate. */
+        PdElse *pe = arena_alloc(&p->cs->arena, sizeof(PdElse));
+        pe->e[0] = PD_NODE(3); pe->e[1] = PD_NODE(4); pe->n = 2;
+        *out = pe; *out_lineno = PD_LINENO(1);
         return true;
+    }
+    case 120: { /* ELSE co_statements_co endif -> [p[2], p[3]] */
+        PdElse *pe = arena_alloc(&p->cs->arena, sizeof(PdElse));
+        pe->e[0] = PD_NODE(2); pe->e[1] = PD_NODE(3); pe->n = 2;
+        *out = pe; *out_lineno = PD_LINENO(1);
+        return true;
+    }
+    case 122: case 123: { /* p_else_part: ELSE co_statements_co|co_statements
+                           * -> [p[2], make_nop()] */
+        PdElse *pe = arena_alloc(&p->cs->arena, sizeof(PdElse));
+        pe->e[0] = PD_NODE(2); pe->e[1] = make_nop(p); pe->n = 2;
+        *out = pe; *out_lineno = PD_LINENO(1);
+        return true;
+    }
     case 116: { /* ELSE NEWLINE endif (len==4) -> [make_nop(), p[3]] */
         PdElse *pe = arena_alloc(&p->cs->arena, sizeof(PdElse));
         pe->e[0] = make_nop(p); pe->e[1] = PD_NODE(3); pe->n = 2;
         *out = pe; *out_lineno = PD_LINENO(1);
         return true;
     }
-    case 117: case 118: /* ELSE NEWLINE label ... endif -> HAS LABEL, defer */
-        c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
-        *out = NULL; *out_lineno = PD_LINENO(1);
+    case 117: case 118: { /* ELSE NEWLINE label statements_co|co_statements_co
+                           * endif (p_else_part_endif len==6) -> [p[3],p[4],p[5]]
+                           * = [label, stmts, endif]. */
+        PdElse *pe = arena_alloc(&p->cs->arena, sizeof(PdElse));
+        pe->e[0] = PD_NODE(3); pe->e[1] = PD_NODE(4); pe->e[2] = PD_NODE(5);
+        pe->n = 3;
+        *out = pe; *out_lineno = PD_LINENO(1);
         return true;
+    }
     case 119: { /* ELSE statements_co endif (p[2] != "\n") -> [p[2], p[3]]. */
         PdElse *pe = arena_alloc(&p->cs->arena, sizeof(PdElse));
         pe->e[0] = PD_NODE(2); pe->e[1] = PD_NODE(3); pe->n = 2;
@@ -9106,10 +9123,15 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
     case 125: /* else_part : else_part_inline (p_else_part_is_inline) -> pass */
         *out = rhs[0].value; *out_lineno = PD_LINENO(1);
         return true;
-    case 126: case 127: case 128: /* else_part : label ELSE ... -> HAS LABEL */
-        c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
-        *out = NULL; *out_lineno = PD_LINENO(1);
+    case 126: case 127: case 128: { /* else_part : label ELSE program_co|
+                       * statements_co|co_statements_co endif (p_else_part_label)
+                       * -> [make_block(lbl, p[3]), p[4]]. */
+        PdElse *pe = arena_alloc(&p->cs->arena, sizeof(PdElse));
+        pe->e[0] = pd_make_block2(p, PD_NODE(1), PD_NODE(3));
+        pe->e[1] = PD_NODE(4); pe->n = 2;
+        *out = pe; *out_lineno = PD_LINENO(1);
         return true;
+    }
 
     /* elseif_expr : ELSEIF expr then (108) | label ELSEIF expr then (109).
      * Carry (label_, cond_). The label form (109) is deferred. */
@@ -9201,7 +9223,7 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
             c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
             r = make_nop(p); break;
         }
-        AstNode *else_block = pd_make_block2(p, el->e[0], el->n > 1 ? el->e[1] : NULL);
+        AstNode *else_block = pd_make_block_n(p, el->e, el->n);
         pd_label_gate(c, then_, prodno);
         pd_label_gate(c, else_block, prodno);
         r = make_sentence_node(p, "IF", PD_LINENO(2));
@@ -9220,7 +9242,7 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
             c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
             r = make_nop(p); break;
         }
-        AstNode *else_block = pd_make_block2(p, el->e[0], el->n > 1 ? el->e[1] : NULL);
+        AstNode *else_block = pd_make_block_n(p, el->e, el->n);
         pd_label_gate(c, else_block, prodno);
         pd_label_gate(c, ifn, prodno);
         ast_add_child(p->cs, ifn, else_block);
