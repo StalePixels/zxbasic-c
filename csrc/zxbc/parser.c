@@ -8189,6 +8189,21 @@ static bool pd_is_null(const AstNode *n) {
     return false;
 }
 
+/* Does a (possibly-block) node contain a LABEL sentence at top level? Used to
+ * defer IF/loop bodies whose label_line nesting via program_co differs from
+ * the production parser's flat then-block (resolved precisely later). */
+static bool pd_block_has_label(const AstNode *n) {
+    if (!n) return false;
+    if (n->tag == AST_SENTENCE && n->u.sentence.kind &&
+        strcmp(n->u.sentence.kind, "LABEL") == 0)
+        return true;
+    if (n->tag == AST_BLOCK) {
+        for (int i = 0; i < n->child_count; i++)
+            if (pd_block_has_label(n->children[i])) return true;
+    }
+    return false;
+}
+
 /* make_block / SymbolBLOCK.append (symbols/block.py): build a BLOCK, append
  * each arg skipping nulls and FLATTENING child BLOCKs. */
 static void pd_block_append(Parser *p, AstNode *blk, AstNode *arg) {
@@ -8618,6 +8633,92 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         break;
     }
     case 55: /* statement : function_declaration (p_staement_func_decl) */
+        r = PD_NODE(1);
+        break;
+
+    /* ---- IF subsystem (no-else forms first) ----
+     * if_then_part : IF expr then (129) -> the condition expr. (The
+     * always-true/false warning is stderr-only and the production parser does
+     * not emit it, so omit it here to match the C-vs-C baseline; Phase C.) */
+    case 129:
+        r = PD_NODE(2); /* the condition; NULL propagates */
+        break;
+    case 132: case 133: /* then : <empty> | THEN -> no value */
+        *out = NULL;
+        *out_lineno = (len > 0) ? PD_LINENO(1) : p->lexer.lineno;
+        return true;
+    case 95: case 97: /* endif : END IF | ENDIF -> NOP (p_endif) */
+        r = make_nop(p);
+        break;
+    case 96: case 98: /* endif : label END IF | label ENDIF -> the label */
+        r = PD_NODE(1);
+        break;
+    case 90: case 92: { /* statement : if_then_part NEWLINE
+                       * program_co|statements_co endif (p_if_sentence):
+                       * make_sentence("IF", cond, make_block(stat, endif)).
+                       * p.lineno(2)=NEWLINE line. (co_statements_co form 93 is
+                       * deferred — leading-`:` NOP nesting diverges.) */
+        AstNode *stat = pd_make_block2(p, PD_NODE(3), PD_NODE(4));
+        /* A label in the body (program_co label_line) or an empty body nests/
+         * flattens differently than the production's flat then-block loop
+         * (ifthen) — defer to UNWIRED; simple bodies are EQUAL. */
+        if (pd_block_has_label(stat) || stat->child_count == 0) {
+            c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
+            r = make_nop(p); break;
+        }
+        r = make_sentence_node(p, "IF", PD_LINENO(2));
+        ast_add_child(p->cs, r, PD_NODE(1));
+        ast_add_child(p->cs, r, stat);
+        break;
+    }
+    case 93: /* statement : if_then_part NEWLINE co_statements_co endif
+              * (leading-`:` NOP nesting diverges) — defer. */
+        c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
+        r = make_nop(p);
+        break;
+    case 91: /* statement : if_then_part NEWLINE endif (empty body) — defer */
+        c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
+        r = make_nop(p);
+        break;
+    case 94: /* statement : if_then_part NEWLINE label statements_co endif
+              * (label body) — defer (label-in-body nests differently). */
+        c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
+        r = make_nop(p);
+        break;
+    case 100: { /* statement : if_then_part statements_co endif (same-line). */
+        AstNode *stat = pd_make_block2(p, PD_NODE(2), PD_NODE(3));
+        if (pd_block_has_label(stat) || stat->child_count == 0) {
+            c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
+            r = make_nop(p); break;
+        }
+        r = make_sentence_node(p, "IF", PD_LINENO(1));
+        ast_add_child(p->cs, r, PD_NODE(1));
+        ast_add_child(p->cs, r, stat);
+        break;
+    }
+    case 101: /* statement : if_then_part co_statements_co endif — defer. */
+        c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
+        r = make_nop(p);
+        break;
+    case 102: case 104: { /* if_inline : if_then_part statements|statements_co
+                          * (p_if_inline). SENTENCE("IF", cond, stat). The
+                          * co_statements forms (103/105) defer — leading-`:`
+                          * NOP nesting diverges. */
+        AstNode *stat = PD_NODE(2);
+        if (pd_is_null(stat) || pd_block_has_label(stat)) {
+            c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
+            r = make_nop(p); break;
+        }
+        r = make_sentence_node(p, "IF", PD_LINENO(1));
+        ast_add_child(p->cs, r, PD_NODE(1));
+        ast_add_child(p->cs, r, stat);
+        break;
+    }
+    case 103: case 105: /* if_inline co_statements forms — defer. */
+        c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
+        r = make_nop(p);
+        break;
+    case 99: /* statement : if_inline (no else) -> the IF SENTENCE */
         r = PD_NODE(1);
         break;
 
