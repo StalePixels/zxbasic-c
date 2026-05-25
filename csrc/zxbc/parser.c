@@ -9434,6 +9434,32 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         r = dim_build_array(p, aname, bounds, type, NULL, NULL, ln);
         break;
     }
+    case 41: { /* var_arr_decl_addr : var_arr_decl AT expr (p_arr_decl_attr):
+                * the array was already declared + built (ARRAYDECL) by
+                * var_arr_decl (42); apply the AT address. The C PRODUCTION
+                * array-AT path does NOT replicate Python's CONSTEXPR/is_static
+                * address validation — it attaches the raw expr via
+                * dim_build_array (parser.c:6515-6577 -> 6995-7001): add the AT
+                * expr as a child, set id->addr_expr, and flip a local array's
+                * scope to global (make_static is not modeled — parser.c:6925).
+                * Reproduce that exact addendum on the already-built node for
+                * C-vs-C identity. */
+        AstNode *decl = (AstNode *)rhs[0].value;
+        AstNode *at_expr = (AstNode *)rhs[2].value;
+        if (!decl || !at_expr) {
+            /* p_arr_decl_attr: arr_decl or expr None -> p[0] = None. */
+            r = NULL; break;
+        }
+        ast_add_child(p->cs, decl, at_expr);
+        AstNode *aid = decl->child_count > 0 ? decl->children[0] : NULL;
+        if (aid && aid->tag == AST_ID) {
+            aid->u.id.addr_expr = at_expr;
+            if (aid->u.id.scope == SCOPE_local)
+                aid->u.id.scope = SCOPE_global;
+        }
+        r = decl;
+        break;
+    }
     case 39: case 40: /* var_decl : var_arr_decl | var_arr_decl_addr */
         r = PD_NODE(1);
         break;
