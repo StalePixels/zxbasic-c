@@ -9807,6 +9807,23 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         r = arg;
         break;
     }
+    case 323: { /* argument : ARRAY_ID (p_argument_array): access_array the
+                 * whole-array name, mark accessed, wrap in ARGUMENT. The
+                 * production reaches the bare ARRAY_ID argument via the id-read
+                 * path and wraps the array entry node — so build the same
+                 * ARGUMENT[entry] with byref=default, type_=entry->type_. */
+        const char *aname = PD_SVAL(1);
+        int aln = PD_LINENO(1);
+        AstNode *entry = symboltable_access_array(p->cs->symbol_table, p->cs, aname, aln, NULL);
+        if (!entry) { r = NULL; break; }  /* p[0] = None */
+        mark_label_accessed(entry); /* mark_entry_as_accessed */
+        AstNode *arg = ast_new(p->cs, AST_ARGUMENT, aln);
+        arg->u.argument.byref = p->cs->opts.default_byref;
+        ast_add_child(p->cs, arg, entry);
+        arg->type_ = entry->type_;
+        r = arg;
+        break;
+    }
     case 319: { /* arguments : argument -> ARGLIST[argument] */
         if (!rhs[0].value) { r = NULL; break; }
         AstNode *al = ast_new(p->cs, AST_ARGLIST, PD_LINENO(1));
