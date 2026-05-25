@@ -10311,6 +10311,16 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         return true;
     }
 
+    case 279: { /* expr : CAST LP numbertype COMMA expr RP (p_cast) ->
+                 * make_typecast(numbertype, expr). The production passes the
+                 * CAST keyword line (parser.c:2307), not Python's p.lineno(6);
+                 * match C-vs-C. */
+        TypeInfo *target = (TypeInfo *)rhs[2].value;
+        AstNode *expr = (AstNode *)rhs[4].value;
+        if (!expr) { r = NULL; break; }
+        r = make_typecast(p->cs, target, expr, PD_LINENO(1));
+        break;
+    }
     case 280: /* bexpr : NUMBER */
         r = make_number(p, PD_NUM(1), PD_LINENO(1), NULL);
         break;
@@ -10463,6 +10473,20 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         r = n;
         break;
     }
+    case 315: /* bexpr : ADDRESSOF ID arg_list (p_err_undefined_arr_access):
+               * Python ALWAYS errors 'Undeclared array "%s"' + None when the
+               * lexer gave ID (zxbparser.py:2833-2836). The OLD production
+               * resolves `@name(args)` via parse_call_or_array and, for a
+               * name that resolves to an array (lexer ID-vs-ARRAY_ID parse-
+               * timing — including a self-referencing array init `DIM a(..)
+               * => {@a(1)}` where `a` is not yet declared when @a(1) reduces),
+               * builds a valid UNARY[ADDRESS, ARRAYACCESS] address instead of
+               * erroring (arrlabels10d). The two cannot be distinguished at
+               * this reduce, so defer the WHOLE production to Phase-E-reconcile
+               * (the engine matches PYTHON, validated at the swap). */
+        c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
+        r = NULL;
+        break;
 
     /* ---- call / array-access subsystem ----
      * argument : expr (321, p_argument) -> make_argument(expr) = AST_ARGUMENT
