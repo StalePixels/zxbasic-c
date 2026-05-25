@@ -8275,6 +8275,17 @@ static AstNode *pd_make_block2(Parser *p, AstNode *a, AstNode *b) {
     return blk;
 }
 
+/* Binary op with parse_infix's exact error recovery: make_binary_node, and on
+ * NULL (a type error already reported) fall back to the LEFT operand — matching
+ * the production parser's parse_infix `if (!result) return left;` (parser.c:
+ * 3522), the byte-clean swap baseline the engine must equal. */
+static AstNode *pd_binary(Parser *p, const char *op, AstNode *left,
+                          AstNode *right, int lineno) {
+    AstNode *result = make_binary_node(p->cs, op, left, right, lineno, NULL);
+    if (!result) return left;  /* parse_infix recovery */
+    return result;
+}
+
 /* Single-arg parenless builtin (`KW bexpr`): build the AST_BUILTIN(fname) with
  * the pre-built arg as child[0], then make_builtin_node (the extracted node-
  * build core does the per-builtin fold/type). */
@@ -9844,6 +9855,117 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
     case 318: /* arg_list : LP arguments RP -> the arguments ARGLIST */
         r = PD_NODE(2);
         break;
+
+    /* ---- PRINT subsystem (zxbparser.py:1978-2073) ----
+     * Every Python "list" reduce builds the PRINT SENTENCE and grows it; the
+     * comparator checks tag/kind/children (and eol is set for Phase-E byte
+     * correctness even though the comparator ignores it). */
+    case 189: { /* print_elem : expr (p_print_elem_expr): pass the expr through,
+                 * boolean -> ubyte typecast. */
+        AstNode *e = PD_NODE(1);
+        if (e) {
+            const TypeInfo *et = e->type_;
+            const TypeInfo *ef = (et && et->final_type) ? et->final_type : et;
+            if (ef && ef->basic_type == TYPE_boolean) {
+                AstNode *cast = make_typecast(p->cs, st->basic_types[TYPE_ubyte],
+                                              e, PD_LINENO(1));
+                if (cast) e = cast;
+            }
+        }
+        r = e;  /* may be NULL (None) */
+        break;
+    }
+    case 190: case 191: case 192: /* print_elem : print_at | print_tab | attr */
+        r = PD_NODE(1);
+        break;
+    case 193: case 194: { /* print_elem : BOLD|ITALIC expr (p_print_list_expr):
+                           * make_sentence("<NAME>_TMP", ubyte(expr)). */
+        const char *nm = (prodno == 193) ? "BOLD_TMP" : "ITALIC_TMP";
+        AstNode *cast = make_typecast(p->cs, st->basic_types[TYPE_ubyte],
+                                      PD_NODE(2), PD_LINENO(1));
+        AstNode *sen = make_sentence_node(p, nm, PD_LINENO(1));
+        if (cast) ast_add_child(p->cs, sen, cast);
+        r = sen;
+        break;
+    }
+    case 203: /* print_elem : <empty> (p_print_list_epsilon) -> None */
+        r = NULL;
+        break;
+    case 197: case 198: case 199:
+    case 200: case 201: case 202: { /* attr : OVER|INVERSE|INK|PAPER|BRIGHT|
+                                     * FLASH expr (p_attr): make_sentence(
+                                     * "<NAME>_TMP", ubyte(expr)). */
+        const char *nm =
+            (prodno == 197) ? "OVER_TMP" :
+            (prodno == 198) ? "INVERSE_TMP" :
+            (prodno == 199) ? "INK_TMP" :
+            (prodno == 200) ? "PAPER_TMP" :
+            (prodno == 201) ? "BRIGHT_TMP" : "FLASH_TMP";
+        AstNode *cast = make_typecast(p->cs, st->basic_types[TYPE_ubyte],
+                                      PD_NODE(2), PD_LINENO(1));
+        AstNode *sen = make_sentence_node(p, nm, PD_LINENO(1));
+        if (cast) ast_add_child(p->cs, sen, cast);
+        r = sen;
+        break;
+    }
+    case 207: { /* print_at : AT expr COMMA expr (p_print_list_at) ->
+                 * SENTENCE("PRINT_AT", ubyte(row), ubyte(col)). */
+        AstNode *row = make_typecast(p->cs, st->basic_types[TYPE_ubyte],
+                                     PD_NODE(2), PD_LINENO(1));
+        AstNode *col = make_typecast(p->cs, st->basic_types[TYPE_ubyte],
+                                     PD_NODE(4), PD_LINENO(3));
+        AstNode *sen = make_sentence_node(p, "PRINT_AT", PD_LINENO(1));
+        if (row) ast_add_child(p->cs, sen, row);
+        if (col) ast_add_child(p->cs, sen, col);
+        r = sen;
+        break;
+    }
+    case 208: { /* print_tab : TAB expr (p_print_list_tab) ->
+                 * SENTENCE("PRINT_TAB", ubyte(col)). */
+        AstNode *col = make_typecast(p->cs, st->basic_types[TYPE_ubyte],
+                                     PD_NODE(2), PD_LINENO(1));
+        AstNode *sen = make_sentence_node(p, "PRINT_TAB", PD_LINENO(1));
+        if (col) ast_add_child(p->cs, sen, col);
+        r = sen;
+        break;
+    }
+    case 204: { /* print_list : print_elem (p_print_list_elem): build the PRINT
+                 * SENTENCE at p.lexer.lineno, eol=True, with the elem as a
+                 * direct child (None filtered). */
+        AstNode *sen = make_sentence_node(p, "PRINT", p->lexer.lineno);
+        sen->u.sentence.eol = true;
+        AstNode *elem = (AstNode *)rhs[0].value;
+        if (elem) ast_add_child(p->cs, sen, elem);
+        r = sen;
+        break;
+    }
+    case 205: { /* print_list : print_list SC print_elem (p_print_list):
+                 * eol = (p[3] is not None); append p[3] iff present; SC adds no
+                 * separator child. */
+        AstNode *sen = (AstNode *)rhs[0].value;
+        AstNode *elem = (AstNode *)rhs[2].value;
+        sen->u.sentence.eol = (elem != NULL);
+        if (elem) ast_add_child(p->cs, sen, elem);
+        r = sen;
+        break;
+    }
+    case 206: { /* print_list : print_list COMMA print_elem (p_print_list_comma):
+                 * eol = (p[3] is not None); append a PRINT_COMMA SENTENCE, then
+                 * p[3] iff present. */
+        AstNode *sen = (AstNode *)rhs[0].value;
+        AstNode *elem = (AstNode *)rhs[2].value;
+        sen->u.sentence.eol = (elem != NULL);
+        AstNode *sep = make_sentence_node(p, "PRINT_COMMA", PD_LINENO(2));
+        ast_add_child(p->cs, sen, sep);
+        if (elem) ast_add_child(p->cs, sen, elem);
+        r = sen;
+        break;
+    }
+    case 188: /* statement : PRINT print_list (p_print_sentence) -> the
+               * print_list SENTENCE; mark PRINT used. */
+        p->cs->print_is_used = true;
+        r = PD_NODE(2);
+        break;
     case 299: case 301: { /* func_call : ID arg_list | ARRAY_ID arg_list
                            * (p_idcall_expr / p_arr_access_expr) -> make_call.
                            * In the LALR grammar this is a READ (expr context);
@@ -9902,27 +10024,37 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
      * coercion + constant folding + CONSTEXPR/string-concat exactly as the
      * production parser's parse_infix; the operator strings match
      * operator_name() so the C-vs-C AST compare is self-consistent. p.lineno
-     * is the OPERATOR's line (p.lineno(2)). ---- */
-    case 255: r = make_binary_node(p->cs, "PLUS", PD_NODE(1), PD_NODE(3), PD_LINENO(2), NULL); break;
-    case 256: r = make_binary_node(p->cs, "MINUS", PD_NODE(1), PD_NODE(3), PD_LINENO(2), NULL); break;
-    case 257: r = make_binary_node(p->cs, "MULT", PD_NODE(1), PD_NODE(3), PD_LINENO(2), NULL); break;
-    case 258: r = make_binary_node(p->cs, "DIV", PD_NODE(1), PD_NODE(3), PD_LINENO(2), NULL); break;
-    case 259: r = make_binary_node(p->cs, "MOD", PD_NODE(1), PD_NODE(3), PD_LINENO(2), NULL); break;
-    case 260: r = make_binary_node(p->cs, "POW", PD_NODE(1), PD_NODE(3), PD_LINENO(2), NULL); break;
-    case 261: r = make_binary_node(p->cs, "SHL", PD_NODE(1), PD_NODE(3), PD_LINENO(2), NULL); break;
-    case 262: r = make_binary_node(p->cs, "SHR", PD_NODE(1), PD_NODE(3), PD_LINENO(2), NULL); break;
-    case 264: r = make_binary_node(p->cs, "EQ", PD_NODE(1), PD_NODE(3), PD_LINENO(2), NULL); break;
-    case 265: r = make_binary_node(p->cs, "LT", PD_NODE(1), PD_NODE(3), PD_LINENO(2), NULL); break;
-    case 266: r = make_binary_node(p->cs, "LE", PD_NODE(1), PD_NODE(3), PD_LINENO(2), NULL); break;
-    case 267: r = make_binary_node(p->cs, "GT", PD_NODE(1), PD_NODE(3), PD_LINENO(2), NULL); break;
-    case 268: r = make_binary_node(p->cs, "GE", PD_NODE(1), PD_NODE(3), PD_LINENO(2), NULL); break;
-    case 269: r = make_binary_node(p->cs, "NE", PD_NODE(1), PD_NODE(3), PD_LINENO(2), NULL); break;
-    case 270: r = make_binary_node(p->cs, "OR", PD_NODE(1), PD_NODE(3), PD_LINENO(2), NULL); break;
-    case 271: r = make_binary_node(p->cs, "BOR", PD_NODE(1), PD_NODE(3), PD_LINENO(2), NULL); break;
-    case 272: r = make_binary_node(p->cs, "XOR", PD_NODE(1), PD_NODE(3), PD_LINENO(2), NULL); break;
-    case 273: r = make_binary_node(p->cs, "BXOR", PD_NODE(1), PD_NODE(3), PD_LINENO(2), NULL); break;
-    case 274: r = make_binary_node(p->cs, "AND", PD_NODE(1), PD_NODE(3), PD_LINENO(2), NULL); break;
-    case 275: r = make_binary_node(p->cs, "BAND", PD_NODE(1), PD_NODE(3), PD_LINENO(2), NULL); break;
+     * is the OPERATOR's line (p.lineno(2)).
+     *
+     * pd_binary mirrors parse_infix's error recovery EXACTLY: when
+     * make_binary_node returns NULL (a type error, e.g. `"A" + i` -> "Cannot
+     * convert value to string"), parse_infix does `if (!result) return left;`
+     * (parser.c:3522) — i.e. it keeps the LEFT operand and drops the operator.
+     * Python's p_expr_*_expr instead propagates None, but the C-vs-C compare is
+     * against the PRODUCTION parser (the byte-clean swap baseline), which takes
+     * this recovery; matching it keeps DIFF 0 (surfaced by typecast1 once PRINT
+     * was wired). Affects only error fixtures (exit 1; the partial tree never
+     * reaches codegen). ---- */
+    case 255: r = pd_binary(p, "PLUS", PD_NODE(1), PD_NODE(3), PD_LINENO(2)); break;
+    case 256: r = pd_binary(p, "MINUS", PD_NODE(1), PD_NODE(3), PD_LINENO(2)); break;
+    case 257: r = pd_binary(p, "MULT", PD_NODE(1), PD_NODE(3), PD_LINENO(2)); break;
+    case 258: r = pd_binary(p, "DIV", PD_NODE(1), PD_NODE(3), PD_LINENO(2)); break;
+    case 259: r = pd_binary(p, "MOD", PD_NODE(1), PD_NODE(3), PD_LINENO(2)); break;
+    case 260: r = pd_binary(p, "POW", PD_NODE(1), PD_NODE(3), PD_LINENO(2)); break;
+    case 261: r = pd_binary(p, "SHL", PD_NODE(1), PD_NODE(3), PD_LINENO(2)); break;
+    case 262: r = pd_binary(p, "SHR", PD_NODE(1), PD_NODE(3), PD_LINENO(2)); break;
+    case 264: r = pd_binary(p, "EQ", PD_NODE(1), PD_NODE(3), PD_LINENO(2)); break;
+    case 265: r = pd_binary(p, "LT", PD_NODE(1), PD_NODE(3), PD_LINENO(2)); break;
+    case 266: r = pd_binary(p, "LE", PD_NODE(1), PD_NODE(3), PD_LINENO(2)); break;
+    case 267: r = pd_binary(p, "GT", PD_NODE(1), PD_NODE(3), PD_LINENO(2)); break;
+    case 268: r = pd_binary(p, "GE", PD_NODE(1), PD_NODE(3), PD_LINENO(2)); break;
+    case 269: r = pd_binary(p, "NE", PD_NODE(1), PD_NODE(3), PD_LINENO(2)); break;
+    case 270: r = pd_binary(p, "OR", PD_NODE(1), PD_NODE(3), PD_LINENO(2)); break;
+    case 271: r = pd_binary(p, "BOR", PD_NODE(1), PD_NODE(3), PD_LINENO(2)); break;
+    case 272: r = pd_binary(p, "XOR", PD_NODE(1), PD_NODE(3), PD_LINENO(2)); break;
+    case 273: r = pd_binary(p, "BXOR", PD_NODE(1), PD_NODE(3), PD_LINENO(2)); break;
+    case 274: r = pd_binary(p, "AND", PD_NODE(1), PD_NODE(3), PD_LINENO(2)); break;
+    case 275: r = pd_binary(p, "BAND", PD_NODE(1), PD_NODE(3), PD_LINENO(2)); break;
 
     /* ---- unary operators ---- */
     case 263: /* expr : MINUS expr %prec UMINUS */
