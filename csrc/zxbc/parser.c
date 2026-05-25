@@ -9026,9 +9026,14 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
      * if_then_part : IF expr then (129) -> the condition expr. (The
      * always-true/false warning is stderr-only and the production parser does
      * not emit it, so omit it here to match the C-vs-C baseline; Phase C.) */
-    case 129:
-        r = PD_NODE(2); /* the condition; NULL propagates */
-        break;
+    case 129: /* if_then_part : IF expr then -> the condition. The consumers
+               * (p_if_sentence etc.) use p.lineno(1) == the IF keyword line for
+               * the IF SENTENCE; carry that as the nonterminal's lineno (NOT the
+               * cond's, which for `IF a ...` is `a`'s DECLARATION line — the
+               * func_call_IC `#line` off-by-one). */
+        *out = rhs[1].value;          /* the cond expr (p[2]) */
+        *out_lineno = PD_LINENO(1);   /* IF keyword line */
+        return true;
     case 132: case 133: /* then : <empty> | THEN -> no value */
         *out = NULL;
         *out_lineno = (len > 0) ? PD_LINENO(1) : p->lexer.lineno;
