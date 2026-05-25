@@ -3598,7 +3598,8 @@ static AstNode *parse_dim_statement(Parser *p);
 static AstNode *dim_build_scalar(Parser *p, const char **names, int name_count,
                                  const char *name, TypeInfo *type,
                                  bool had_as_clause, AstNode *at_expr,
-                                 AstNode *init_expr, bool is_const, int lineno);
+                                 AstNode *init_expr, bool is_const, int lineno,
+                                 bool init_clause_present);
 static AstNode *dim_build_array(Parser *p, const char *name, AstNode *bounds,
                                 TypeInfo *type, AstNode *arr_at_expr,
                                 AstNode *init, int lineno);
@@ -6678,7 +6679,9 @@ static AstNode *parse_dim_statement(Parser *p) {
 
     /* Check for initializer: = expr */
     AstNode *init_expr = NULL;
+    bool init_clause_present = false;
     if (match(p, BTOK_EQ)) {
+        init_clause_present = true;
         if (check(p, BTOK_LBRACE)) {
             init_expr = parse_array_initializer(p);
         } else {
@@ -6696,7 +6699,8 @@ static AstNode *parse_dim_statement(Parser *p) {
      *   - p_var_decl_ini (zxbparser.py:693-695): `DIM idlist typedef EQ expr`
      *     -> "Initialized variables must be declared one by one." */
     return dim_build_scalar(p, names, name_count, name, type, had_as_clause,
-                            at_expr, init_expr, is_const, lineno);
+                            at_expr, init_expr, is_const, lineno,
+                            init_clause_present);
 }
 
 /* Scalar DIM/CONST declaration builder (extracted from parse_dim_statement so
@@ -6709,7 +6713,13 @@ static AstNode *parse_dim_statement(Parser *p) {
 static AstNode *dim_build_scalar(Parser *p, const char **names, int name_count,
                                  const char *name, TypeInfo *type,
                                  bool had_as_clause, AstNode *at_expr,
-                                 AstNode *init_expr, bool is_const, int lineno) {
+                                 AstNode *init_expr, bool is_const, int lineno,
+                                 bool init_clause_present) {
+    /* init_clause_present && init_expr==NULL means the `= <expr>` initializer
+     * failed to build (e.g. `DIM b = @a(0)` with `a` undeclared): Python's
+     * production aborts before declare_variable, so the var is never declared
+     * and emits NO [W100]. Track it to suppress the implicit-type warning. */
+    bool init_clause_errored = init_clause_present && (init_expr == NULL);
     if (name_count != 1) {
         if (at_expr) {
             zxbc_error(p->cs, lineno,
@@ -6805,11 +6815,21 @@ static AstNode *dim_build_scalar(Parser *p, const char **names, int name_count,
             decl_stripped[decl_nlen - 1] = '\0';
             decl_name = decl_stripped;
         }
+        /* Whether the entry already existed (e.g. a forward `@name` created a
+         * CLASS_unknown entry at its FIRST-reference lineno). Python
+         * declare_variable reuses that entry and PRESERVES its original
+         * lineno (symboltable.py:501-503 only sets lineno on a fresh
+         * declare); the entry's lineno feeds VariableVisitor's circular-dep
+         * message (`_original_variable.lineno`, dim_at_label4-7). */
+        bool entry_preexisted =
+            symboltable_lookup(p->cs->symbol_table, decl_name) != NULL;
         AstNode *id_node = symboltable_declare(p->cs->symbol_table, p->cs, decl_name, lineno, cls);
         /* Check for duplicate declaration */
+        bool dup_error = false;
         if (id_node->u.id.declared && id_node->lineno != lineno) {
             zxbc_error(p->cs, lineno, "Variable '%s' already declared at %s:%d",
                        name, p->cs->current_file, id_node->lineno);
+            dup_error = true;
         }
         /* Python declare_variable (symboltable.py:501-510): if a prior
          * forward reference (e.g. `@name` via p_addr_of_id -> access_id,
@@ -6827,8 +6847,32 @@ static AstNode *dim_build_scalar(Parser *p, const char **names, int name_count,
         if (id_node->u.id.class_ == CLASS_unknown)
             id_node->u.id.class_ = cls;
         id_node->u.id.declared = true;
-        id_node->lineno = lineno;
+        /* Preserve a pre-existing entry's first-reference lineno (Python
+         * declare_variable does not re-stamp it); only a freshly-created
+         * entry takes the DIM lineno. Without this, a `DIM b AT @c` whose
+         * `b` was forward-referenced by an earlier `@b` would report the
+         * circular-dependency error at the DIM line rather than the
+         * first-reference line (dim_at_label4/6/7). */
+        if (!entry_preexisted)
+            id_node->lineno = lineno;
         id_node->type_ = type;
+        /* declare_variable's [W100] (symboltable.py:531-532): an implicitly-
+         * typed scalar (TYPEREF.implicit and not still-unknown) warns
+         * `Using default implicit type '<t>' for '<name>'` at the DIM
+         * lineno. A `DIM x` / `DIM a AT @b` with no AS clause is implicit
+         * float; an explicit `AS <type>` or a sigil is not. Emitted at the
+         * DIM line (not the entry's first-reference line), matching the
+         * oracle's W100 vs circular-error lineno split. */
+        if (type && type->implicit && !dup_error && !init_clause_errored) {
+            BasicType tbt = type->final_type ? type->final_type->basic_type
+                                             : type->basic_type;
+            if (tbt != TYPE_unknown) {
+                const char *tn = type->name ? type->name
+                               : (p->cs->default_type ? p->cs->default_type->name
+                                                      : "float");
+                warn_implicit_type(p->cs, lineno, decl_name, tn);
+            }
+        }
         /* Python ID.t delegates to the ref: a global var's VarRef.t is
          * entry.mangled (varref.py:36-37). symboltable_declare (the
          * generic creator) sets .mangled but not .t (only
@@ -10081,7 +10125,7 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         int n = l->count > 64 ? 64 : l->count;
         for (int i = 0; i < n; i++) names[i] = l->ids[i]->name;
         r = dim_build_scalar(p, names, n, names[0], type, type != NULL,
-                             NULL, NULL, false, PD_LINENO(1));
+                             NULL, NULL, false, PD_LINENO(1), false);
         break;
     }
     case 32: { /* var_decl : DIM idlist typedef AT expr (p_var_decl_at) */
@@ -10091,7 +10135,7 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         int n = l->count > 64 ? 64 : l->count;
         for (int i = 0; i < n; i++) names[i] = l->ids[i]->name;
         r = dim_build_scalar(p, names, n, names[0], type, type != NULL,
-                             PD_NODE(5), NULL, false, PD_LINENO(1));
+                             PD_NODE(5), NULL, false, PD_LINENO(1), false);
         break;
     }
     case 33: case 34: { /* var_decl : DIM|CONST idlist typedef EQ expr */
@@ -10100,8 +10144,12 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         const char *names[64];
         int n = l->count > 64 ? 64 : l->count;
         for (int i = 0; i < n; i++) names[i] = l->ids[i]->name;
+        /* production has the `EQ expr` init clause; PD_NODE(5)==NULL means the
+         * initializer expression failed to build (semantic error already
+         * emitted) — pass init_clause_present=true so the [W100] is suppressed
+         * exactly as Python's aborted production does (alxinho1). */
         r = dim_build_scalar(p, names, n, names[0], type, type != NULL,
-                             NULL, PD_NODE(5), prodno == 34, PD_LINENO(1));
+                             NULL, PD_NODE(5), prodno == 34, PD_LINENO(1), true);
         break;
     }
 

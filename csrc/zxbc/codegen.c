@@ -333,6 +333,128 @@ static void get_inits(Arena *a, Backend *b, StrVec *memory) {
     }
 }
 
+/* ----------------------------------------------------------------
+ * VariableVisitor — circular-dependency check for `DIM v AT @other`
+ * aliasing chains. Faithful port of src/api/optimize.py:497-556
+ * (class VariableVisitor / VarDependency / has_circular_dependency /
+ * get_var_dependencies / visit_VARDECL). Runs on data_ast right before
+ * VarTranslator (zxbc.py:195-196), i.e. in the FULL-compile path only —
+ * Python --parse-only returns before this (zxbc.py:139), so the C runs it
+ * after the semantic_only early-return, never at parse-only.
+ *
+ * Python algorithm, distilled to its deterministic, set-order-independent
+ * result:
+ *   For each VARDECL entry `orig` (in data_ast order), walk the alias graph
+ *   transitively from orig.addr collecting every referenced VAR/VARARRAY/
+ *   LABEL/FUNCTION entry (recursing into each VAR's own .addr). If `orig`
+ *   itself is reachable (a cycle), Python's has_circular_dependency fires on
+ *   the dependency whose value == orig; that dependency was collected while
+ *   visiting its PARENT var's .addr — i.e. the parent is the var whose .addr
+ *   DIRECTLY references orig (orig's immediate predecessor in the cycle).
+ *   It emits, at orig.lineno:
+ *       Circular dependency between '<orig.name>' and '<parent.name>'
+ *   and breaks (one error per VARDECL). The parent is unambiguous for the
+ *   alias chains the corpus exercises (each var has a single AT clause, so a
+ *   single predecessor edge), so this reproduces the oracle byte-for-byte
+ *   without depending on CPython's id()-based set iteration order.
+ * ---------------------------------------------------------------- */
+
+/* Local pointer-set/vec (the optimizer's VVPtrVec/ptr_seen_or_add are
+ * file-static; mirror them here, same semantics: append-unique by pointer). */
+typedef VEC(AstNode *) VVPtrVec;
+static bool vv_seen_or_add(VVPtrVec *set, AstNode *n) {
+    for (int i = 0; i < set->len; i++)
+        if (set->data[i] == n) return true;
+    vec_push(*set, n);
+    return false;
+}
+
+/* Collect every VAR/VARARRAY/LABEL/FUNCTION ID entry referenced anywhere in
+ * an AT-address expression subtree (Python get_var_dependencies' inner
+ * visit_var "entry.token != VAR -> recurse children, add token-matching
+ * children"). `addr_node` is the .addr expr (a TYPECAST/UNARY/BINARY tree),
+ * never the var entry itself. */
+static void vv_collect_addr_refs(AstNode *addr_node, VVPtrVec *out,
+                                 VVPtrVec *seen) {
+    if (!addr_node) return;
+    if (vv_seen_or_add(seen, addr_node)) return;
+    if (addr_node->tag == AST_ID) {
+        SymbolClass c = addr_node->u.id.class_;
+        if (c == CLASS_var || c == CLASS_array || c == CLASS_label ||
+            c == CLASS_function)
+            vec_push(*out, addr_node);
+        return; /* an ID leaf has no expr children to descend */
+    }
+    for (int i = 0; i < addr_node->child_count; i++)
+        vv_collect_addr_refs(addr_node->children[i], out, seen);
+}
+
+/* Transitive alias-dependency closure of `orig` (Python get_var_dependencies
+ * + visit_var recursion through each VAR's .addr). Fills `deps` with every
+ * reachable referenced entry. Returns true if `orig` is itself reachable
+ * (a cycle); when so, *pred is set to the var whose .addr directly references
+ * orig (the message's `parent`). */
+static bool vv_dependency_cycle(AstNode *orig, AstNode **pred) {
+    VVPtrVec frontier; vec_init(frontier);
+    VVPtrVec visited;  vec_init(visited);
+    *pred = NULL;
+    bool cycle = false;
+
+    /* Seed: walk orig.addr (orig is a VAR; visit_var(orig) -> visit_var(orig.addr)). */
+    vec_push(frontier, orig);
+    while (frontier.len > 0) {
+        AstNode *v = frontier.data[--frontier.len];
+        if (!v || v->tag != AST_ID) continue;
+        if (vv_seen_or_add(&visited, v)) continue;
+        /* Only VARs carry an .addr alias edge (Python visit_var's VAR arm). */
+        if (v->u.id.class_ != CLASS_var) continue;
+        AstNode *addr = v->u.id.addr_expr;
+        if (!addr) continue;
+        VVPtrVec refs;  vec_init(refs);
+        VVPtrVec rseen; vec_init(rseen);
+        vv_collect_addr_refs(addr, &refs, &rseen);
+        for (int i = 0; i < refs.len; i++) {
+            AstNode *dep = refs.data[i];
+            if (dep == orig) {
+                /* dep == orig: a cycle. `v` is the var whose .addr references
+                 * orig — the message parent. Keep the FIRST such predecessor
+                 * (the corpus has exactly one per cycle). */
+                cycle = true;
+                if (*pred == NULL) *pred = v;
+            }
+            vec_push(frontier, dep);
+        }
+        vec_free(refs);
+        vec_free(rseen);
+    }
+    vec_free(frontier);
+    vec_free(visited);
+    return cycle;
+}
+
+/* VariableVisitor.visit over data_ast (optimize.py:546-556 visit_VARDECL,
+ * one per global VARDECL). Emits the circular-dependency error in data_ast
+ * order, exactly matching the oracle. Error-only: no AST mutation. */
+static void codegen_variable_visitor(CompilerState *cs, AstNode *data_ast) {
+    if (!data_ast) return;
+    for (int i = 0; i < data_ast->child_count; i++) {
+        AstNode *vd = data_ast->children[i];
+        if (!vd || vd->tag != AST_VARDECL) continue;
+        AstNode *orig = vd->child_count > 0 ? vd->children[0] : NULL;
+        if (!orig || orig->tag != AST_ID) continue;
+        /* Only an aliasing var (DIM v AT @expr) can be circular. */
+        if (orig->u.id.class_ != CLASS_var || orig->u.id.addr_expr == NULL)
+            continue;
+        AstNode *pred = NULL;
+        if (vv_dependency_cycle(orig, &pred) && pred) {
+            zxbc_error(cs, orig->lineno,
+                       "Circular dependency between '%s' and '%s'",
+                       orig->u.id.name ? orig->u.id.name : "",
+                       pred->u.id.name ? pred->u.id.name : "");
+        }
+    }
+}
+
 int codegen_emit(CompilerState *cs, AstNode *ast) {
     return codegen_emit_ex(cs, ast, false);
 }
@@ -780,6 +902,13 @@ int codegen_emit_ex(CompilerState *cs, AstNode *ast, bool semantic_only) {
         /* common.FLAG_end_emitted is NOT reset (Python only resets it in
          * common.init); the data path emits no `end` quad so it has no
          * observable effect either way — left unchanged for fidelity. */
+
+        /* VariableVisitor().visit(data_ast) (zxbc.py:195-196) — runs BEFORE
+         * VarTranslator. Error-only: the alias circular-dependency check
+         * (DIM v AT @other chains, dim_at_label4-7). Emits at the var's
+         * lineno and sets cs->error_count, which the gate below maps to
+         * rc 1 (Python gl.has_errors, zxbc.py:199-201). */
+        codegen_variable_visitor(cs, cs->data_ast);
 
         var_translator_visit(&tr, cs->data_ast);
 
