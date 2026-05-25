@@ -357,8 +357,21 @@ int main(int argc, char *argv[]) {
 
     /* Post-parse validation: check GOTO/GOSUB label targets and pending calls */
     if (rc == 0 && ast) {
-        check_pending_labels(&cs, ast);
-        check_pending_calls(&cs);
+        /* zxbparser.py:529-541 — Python emits the "Undeclared label"
+         * (SYMBOL_TABLE.check_labels, :529) and "Undeclared identifier"
+         * (check_pending_labels, :536) diagnostics and GATES the pending-call
+         * "Undeclared function" check behind them: `if gl.has_errors: return`
+         * (:532, after check_labels) and `if not check_pending_labels(ast):
+         * return` (:536) both short-circuit before check_pending_calls (:540).
+         * So a program with an undeclared label/identifier never reaches the
+         * pending-call check. The C merges check_labels + check_pending_labels
+         * into check_pending_labels (it emits both messages); mirror the gate
+         * by running check_pending_calls only when that pass was clean.
+         * (label_decl1: bare `WRONG_LABEL` with a later `GOTO WRONG_LABEL`
+         * -> "Undeclared label" ONLY, not also "Undeclared function".) */
+        bool labels_ok = check_pending_labels(&cs, ast);
+        if (labels_ok)
+            check_pending_calls(&cs);
 
         /* Check READ without DATA (matches Python translator check) */
         if (cs.data_is_used && cs.datas.len == 0) {
