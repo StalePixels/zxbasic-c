@@ -7768,7 +7768,15 @@ static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function, bool is_decl
         }
 
         AstNode *stmt = parse_statement(p);
-        if (stmt) ast_add_child(p->cs, body, stmt);
+        /* Python builds the function body via program_co/make_block, which
+         * skips null/NOP children (block.py:43-51 / is_null). The loop
+         * previously appended NOPs (e.g. the empty statement from an inline
+         * `FUNCTION f(): END FUNCTION` `:` separator), giving the body a
+         * spurious NOP child the grammar/PLY-engine path does not — the only
+         * divergence on def_func_inline_ok/lvalue02. Skip NOPs so the body
+         * matches Python (and the engine) exactly; a NOP emits nothing, so
+         * output is unchanged (byte-clean). */
+        if (stmt && stmt->tag != AST_NOP) ast_add_child(p->cs, body, stmt);
         while (match(p, BTOK_NEWLINE) || match(p, BTOK_CO)) {}
     }
 
@@ -8492,20 +8500,9 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
                 p->cs->symbol_table, body_scope, p->cs->opts.optimization_level);
         }
         if (fd->rejected) { r = make_nop(p); break; }
-        /* The production recursive-descent parser adds a NOP child to the
-         * function body for an empty/inline-`:`-only body (its body loop
-         * appends parse_statement's NOP without flattening — parser.c:7770-
-         * 7771), whereas the grammar's function_body/program_co path
-         * flattens NOPs away. For C-vs-C identity on the eventual swap this
-         * empty-body shape would differ (def_func_inline_ok / lvalue02:
-         * FUNCDECL body child_count 1 vs 0). Defer empty-body functions as
-         * UNWIRED (faithful — never a wrong tree); non-empty bodies match. */
-        if (!body || body->child_count == 0) {
-            c->unwired = true;
-            if (c->unwired_prod == 0) c->unwired_prod = prodno;
-            r = make_nop(p);
-            break;
-        }
+        /* Empty bodies now match: the production body loop skips NOPs
+         * (parser.c:7770), so an empty/inline-`:` function body is 0-child in
+         * both paths (== Python's make_block()). */
         AstNode *decl = ast_new(p->cs, AST_FUNCDECL, fd->lineno);
         ast_add_child(p->cs, decl, id_node);
         ast_add_child(p->cs, decl, fd->params);
