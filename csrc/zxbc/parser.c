@@ -9838,6 +9838,14 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         r = NULL;
         break;
     }
+    case 374: case 375: /* preproc_line : _PRAGMA _PUSH|_POP LP ID RP
+                         * (p_preproc_pragma_push / _pop). Python pushes/pops
+                         * the OPTIONS stack; the C PRODUCTION treats these as a
+                         * no-op line-skip (parser.c:4880-4906 — no OPTIONS
+                         * stack mutation), producing a NOP statement (no AST).
+                         * Match the production C-vs-C: no side effect, no node. */
+        r = NULL;
+        break;
 
     /* ---- const_vector subsystem (array initialisers `=> {…}` / `= {…}`) ----
      * Every Python "list" is represented as an AST_ARRAYINIT node, exactly the
@@ -10739,6 +10747,33 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         PdSubstr *ss = (PdSubstr *)rhs[1].value;
         if (!base || !ss) { r = NULL; break; }
         r = make_strslice_node(p, base, ss->lower, ss->upper, PD_LINENO(1));
+        break;
+    }
+    case 283: { /* string : func_call substr (p_string_func_call) ->
+                 * make_strslice(func_call, substr). */
+        AstNode *base = PD_NODE(1);
+        PdSubstr *ss = (PdSubstr *)rhs[1].value;
+        if (!base || !ss) { r = NULL; break; }
+        r = make_strslice_node(p, base, ss->lower, ss->upper, PD_LINENO(1));
+        break;
+    }
+    case 284: { /* string : func_call LP expr RP (p_string_func_call_single) ->
+                 * make_strslice(func_call, expr, expr) — single index. */
+        AstNode *base = PD_NODE(1);
+        AstNode *idx = PD_NODE(3);
+        if (!base || !idx) { r = NULL; break; }
+        r = make_strslice_node(p, base, idx, idx, PD_LINENO(1));
+        break;
+    }
+    case 286: /* string : string LP RP (p_string_lprp) -> pass-through p[1] */
+        r = PD_NODE(1);
+        break;
+    case 287: { /* string : string LP expr RP (p_string_lp_expr_rp) ->
+                 * make_strslice(string, expr, expr) at p.lineno(2). */
+        AstNode *base = PD_NODE(1);
+        AstNode *idx = PD_NODE(3);
+        if (!base || !idx) { r = NULL; break; }
+        r = make_strslice_node(p, base, idx, idx, PD_LINENO(2));
         break;
     }
     case 290: { /* string : LP expr RP substr (p_string_expr_lp): the LP-expr
