@@ -22,4 +22,13 @@
  * passes already run (main.c:116). */
 int codegen_emit(CompilerState *cs, AstNode *ast);
 
+/* Variant of codegen_emit. semantic_only=false is identical to codegen_emit
+ * (full ASM emit). semantic_only=true runs ONLY the pre-parse-only Python
+ * slice (translator.visit + FunctionTranslator.start + has_errors gate,
+ * zxbc.py:125-141) and returns 1 if any semantic error was emitted, 0
+ * otherwise — used by the --parse-only path to surface parse-time-visible
+ * codegen rejects (e.g. const typecast "Cant convert") exactly where the
+ * oracle does, without the post-return emission steps. */
+int codegen_emit_ex(CompilerState *cs, AstNode *ast, bool semantic_only);
+
 #endif /* ZXBC_CODEGEN_H */

@@ -9914,6 +9914,21 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
             bsym->u.id.declared = true;
             bsym->u.id.scope = SCOPE_parameter;
         }
+        /* declare_param (symboltable.py:655-656): `if entry.type_.implicit:
+         * warning_implicit_type(lineno, id_, type_)`. A param with no AS
+         * clause and no deprecated sigil keeps the implicit DEFAULT_TYPE
+         * (ptype->implicit, set at the type_new_ref above); a sigil/explicit
+         * type is non-implicit and never warns. rman's `Sub F(pbuffer)` ->
+         * [W100] Using default implicit type 'float' for 'pbuffer'. The C
+         * registers the param via symboltable_declare here (not
+         * symboltable_declare_param), so the warning is emitted at this
+         * faithful analogue site, at the param's lineno. */
+        if (ptype && ptype->implicit) {
+            const char *tn = ptype->name ? ptype->name
+                           : (p->cs->default_type ? p->cs->default_type->name
+                                                  : "float");
+            warn_implicit_type(p->cs, id->lineno, pname, tn);
+        }
         PdParam *pp = arena_alloc(&p->cs->arena, sizeof(PdParam));
         pp->arg = arg; pp->body_sym = bsym;
         *out = pp;

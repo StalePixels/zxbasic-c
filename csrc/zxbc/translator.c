@@ -4340,6 +4340,46 @@ static long tr_bound_val(AstNode *n) {
     return 0;
 }
 
+/* str(symbol) — the faithful analogue of the AST Symbol __str__ methods used
+ * by syntax_error_cant_convert_to_type's `str(node.operand)`
+ * (translator_visitor.py:232):
+ *   UNARY   -> "<OP>(<operand>)"          (unary.py:49-50)
+ *   BINARY  -> "<L> <OP> <R>"             (binary.py:47-48)
+ *   ID      -> name                       (_id.py:87-88)
+ *   NUMBER  -> str(value)                 (number.py:63-64)
+ *   else    -> token name                 (symbol_.py:65-66)
+ * Only the UNARY-ADDRESS-of-ID shape is exercised by the owned fixture
+ * (rman: `ADDRESS(buffer)`); the others are ported for completeness so any
+ * non-integral const typecast renders its operand exactly as the oracle. */
+static const char *tr_symbol_str(Translator *tr, AstNode *node) {
+    if (!node) return "";
+    if (node->tag == AST_ID)
+        return node->u.id.name ? node->u.id.name : "";
+    if (node->tag == AST_NUMBER)
+        return tr_traverse_const(tr, node); /* NUMBER.t == str(value) */
+    if (node->tag == AST_UNARY) {
+        const char *op = node->u.unary.operator ? node->u.unary.operator : "";
+        AstNode *operand = node->child_count > 0 ? node->children[0] : NULL;
+        const char *os = tr_symbol_str(tr, operand);
+        size_t need = strlen(op) + strlen(os) + 4;
+        char *out = arena_alloc(&tr->cs->arena, need);
+        snprintf(out, need, "%s(%s)", op, os);
+        return out;
+    }
+    if (node->tag == AST_BINARY) {
+        const char *op = node->u.binary.operator ? node->u.binary.operator : "";
+        AstNode *l = node->child_count > 0 ? node->children[0] : NULL;
+        AstNode *r = node->child_count > 1 ? node->children[1] : NULL;
+        const char *ls = tr_symbol_str(tr, l);
+        const char *rs = tr_symbol_str(tr, r);
+        size_t need = strlen(ls) + strlen(op) + strlen(rs) + 4;
+        char *out = arena_alloc(&tr->cs->arena, need);
+        snprintf(out, need, "%s %s %s", ls, op, rs);
+        return out;
+    }
+    return ast_tag_name(node->tag); /* Symbol.__str__ -> token */
+}
+
 /* TranslatorVisitor.traverse_const (translator_visitor.py:177-245) —
  * the FULL constant-expression stringifier, ported branch-for-branch.
  * Previously a NUMBER/CONST-leaf stub; @label / @label+N (p_addr_of_id
@@ -4447,6 +4487,21 @@ static const char *tr_traverse_const(Translator *tr, AstNode *node) {
             out = arena_alloc(&tr->cs->arena, il + 26);
             snprintf(out, il + 26, "((%s) & 0xFFFF) << 16", inner);
         } else {
+            /* translator_visitor.py:232-233 — a const typecast to a target
+             * that is NOT byte/integer/long/fixed (e.g. float) cannot be
+             * stringified as a static constant:
+             *   syntax_error_cant_convert_to_type(node.lineno,
+             *       str(node.operand), node.type_); return None
+             * rman: `F(@buffer)` passes ADDRESS(buffer) (a CONSTEXPR) to the
+             * implicit-float param, folding to TYPECAST(float, ADDRESS) here.
+             * Emit the verbatim reject (rc 1). The operand string is the
+             * Python str(node.operand) == "ADDRESS(buffer)"; the type name is
+             * str(node.type_) == type.name == "float". */
+            const char *expr_str = tr_symbol_str(tr, operand);
+            const char *tn = (node->type_ && node->type_->name)
+                                 ? node->type_->name
+                                 : (ft && ft->name ? ft->name : "");
+            err_cant_convert(tr->cs, node->lineno, expr_str, tn);
             return inner;
         }
         return out;

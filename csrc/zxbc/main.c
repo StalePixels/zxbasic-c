@@ -398,7 +398,21 @@ int main(int argc, char *argv[]) {
     }
 
     if (rc == 0 && cs.opts.parse_only) {
-        if (cs.opts.debug_level > 0)
+        /* Python runs translator.visit + FunctionTranslator.start (and the
+         * `if gl.has_errors: return 1` gate) BEFORE the parse-only return
+         * (zxbc.py:125-141). Those passes own a class of semantic rejects
+         * that fire while computing each node's `.t` — notably the const
+         * typecast-to-non-integral check (translator_visitor.py:232,
+         * "Cant convert '<expr>' to type <type>", rman). Run that same
+         * pre-parse-only slice here (semantic_only=true stops before
+         * emit_data_blocks/backend.emit, the post-return work at
+         * zxbc.py:144+ that owns e.g. arrlabels10's deferred data-block
+         * convert error — keeping it out of parse-only, exactly as the
+         * oracle does). */
+        codegen_emit_ex(&cs, ast, true);
+        if (cs.error_count > 0)
+            rc = 1;
+        if (rc == 0 && cs.opts.debug_level > 0)
             zxbc_info(&cs, "Parse OK (%d top-level statements)", ast->child_count);
     } else if (rc == 0) {
         /* Code generation (zxbc.py:125-214, output_file_type==ASM path). */

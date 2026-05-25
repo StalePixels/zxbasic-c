@@ -334,6 +334,18 @@ static void get_inits(Arena *a, Backend *b, StrVec *memory) {
 }
 
 int codegen_emit(CompilerState *cs, AstNode *ast) {
+    return codegen_emit_ex(cs, ast, false);
+}
+
+/* codegen_emit_ex: the full ASM-emit pipeline. When semantic_only is true,
+ * runs ONLY the slice Python executes BEFORE its parse-only return
+ * (zxbc.py:125-141): translator.visit + FunctionTranslator.start + the
+ * `if gl.has_errors` gate, then returns. This captures the parse-time-visible
+ * semantic rejects (e.g. the const typecast-to-float "Cant convert" in the
+ * FunctionTranslator) without performing the post-parse-only emission
+ * (emit_data_blocks/strings/jump_tables/backend.emit, zxbc.py:144+), whose
+ * own deferred errors Python does NOT surface at parse-only. */
+int codegen_emit_ex(CompilerState *cs, AstNode *ast, bool semantic_only) {
     Arena *a = &cs->arena;
 
     /* backend.init() (zxbc.py:91-93): common.init + MEMORY clear +
@@ -460,6 +472,15 @@ int codegen_emit(CompilerState *cs, AstNode *ast) {
      * site), so the __DATA__FUNCPTR__N thunks drain like ordinary
      * pending functions. No-op when no functions/DATA-funcptrs exist. */
     translator_function_start(&tr);
+
+    /* zxbc.py:135-141 — the `if gl.has_errors: return 1` gate immediately
+     * after FunctionTranslator.start, then the parse-only return. In
+     * semantic_only mode the C stops here too: the visit + function_start
+     * above have run every pre-parse-only pass (and emitted any
+     * "Cant convert" / function-body semantic reject), so return the
+     * has-errors status without the post-return emission steps. */
+    if (semantic_only)
+        return cs->error_count > 0 ? 1 : 0;
 
     /* 8  translator.emit_data_blocks() (zxbc.py:144). S5.8d: LIVE.
      * Emits the .DATA.__DATA__N blocks (type byte + value/funcptr ptr),
