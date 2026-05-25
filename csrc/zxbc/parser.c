@@ -9405,6 +9405,54 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         break;
     }
 
+    /* ---- array assignment (p_arr_assignment, 78/79) ----
+     * statement : ARRAY_ID arg_list EQ expr | LET ARRAY_ID arg_list EQ expr.
+     * Match the PRODUCTION parser's LET-statement array path (parser.c:4911-
+     * 4991): the ARRAYACCESS lvalue via make_call_node(expr_context=false),
+     * then SENTENCE("LETARRAY", arr, RAW-expr) — NO type_ on the sentence, the
+     * expr added WITHOUT a typecast (the C production does not typecast here,
+     * unlike Python's p_arr_assignment; C-vs-C matches the production). The
+     * string-array element-substr-assign special case (bounds+1 == len) is a
+     * separate production path -> defer to UNWIRED. */
+    case 78: case 79: {
+        int i = (prodno == 79) ? 2 : 1;
+        const char *aname = (const char *)rhs[i - 1].sval;
+        int aln = rhs[i - 1].lineno;
+        AstNode *arglist = (AstNode *)rhs[i].value;
+        AstNode *aexpr = (AstNode *)rhs[i + 2].value; /* expr at RHS pos i+3 (0-based i+2) */
+        if (!arglist || !aexpr) { r = NULL; break; }
+        /* Strip a deprecated suffix ($/%/&) for the symbol-table key — a
+         * string array `a$(...)` is stored under `a`. */
+        const char *alook = aname;
+        char abuf[256];
+        size_t anl = aname ? strlen(aname) : 0;
+        if (anl > 0 && anl < sizeof(abuf) && is_deprecated_suffix(aname[anl - 1])) {
+            memcpy(abuf, aname, anl - 1); abuf[anl - 1] = '\0'; alook = abuf;
+        }
+        AstNode *aentry = symboltable_lookup(p->cs->symbol_table, alook);
+        /* A STRING-typed array assign routes through the substr/strslice
+         * production in the C parser (STRSLICE lvalue, not LETARRAY/
+         * ARRAYACCESS) — sys_letarrsubstr*; defer the whole string-array case
+         * to UNWIRED. */
+        if (aentry && type_is_string(aentry->type_)) {
+            c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
+            r = make_nop(p); break;
+        }
+        AstNode *arr = make_call_node(p, aname, aln, arglist, false, false, false);
+        if (!arr || arr->tag != AST_ARRAYACCESS) {
+            /* string-slice / non-array shapes go through other production
+             * paths in the C parser — defer. */
+            c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
+            r = make_nop(p); break;
+        }
+        if (aentry && aentry->u.id.class_ == CLASS_array && aentry->u.id.addr_expr)
+            aentry->u.id.accessed = true;
+        r = make_sentence_node(p, "LETARRAY", aln);
+        ast_add_child(p->cs, r, arr);
+        ast_add_child(p->cs, r, aexpr); /* RAW expr, matching the production */
+        break;
+    }
+
     /* ---- RESTORE (p_restore, 158/159/160) ----
      * statement : RESTORE | RESTORE ID | RESTORE NUMBER. SENTENCE("RESTORE")
      * + optional AST_ID label child (name/class_=label), matching the
