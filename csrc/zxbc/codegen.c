@@ -982,6 +982,7 @@ int codegen_emit_ex(CompilerState *cs, AstNode *ast, bool semantic_only) {
                                cs->opts.output_file_type,
                                cs->opts.use_basic_loader,
                                cs->opts.autorun,
+                               cs->opts.zxnext,
                                cs->opts.append_binary,
                                cs->opts.append_binary_count,
                                cs->opts.append_headless_binary,

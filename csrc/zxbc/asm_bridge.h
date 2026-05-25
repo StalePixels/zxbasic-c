@@ -46,7 +46,7 @@
  * zxbpp.INCLUDEPATH). */
 int zxbc_asm_to_binary(const char *asm_text, const char *out_filename,
                        const char *format, bool use_basic_loader,
-                       bool autorun,
+                       bool autorun, bool zxnext,
                        char **binary_files, int binary_files_count,
                        char **headless_binary_files,
                        int headless_binary_files_count,

@@ -90,7 +90,7 @@ static void asm_set_include_paths(AsmState *as, const char *arch,
 
 int zxbc_asm_to_binary(const char *asm_text, const char *out_filename,
                        const char *format, bool use_basic_loader,
-                       bool autorun,
+                       bool autorun, bool zxnext,
                        char **binary_files, int binary_files_count,
                        char **headless_binary_files,
                        int headless_binary_files_count,
@@ -99,6 +99,13 @@ int zxbc_asm_to_binary(const char *asm_text, const char *out_filename,
     asm_init(&as);
     as.use_basic_loader = use_basic_loader;
     as.autorun = autorun;
+    /* Thread OPTIONS.zxnext into the inline-ASM assembler so an `ASM ... END
+     * ASM` block under `#pragma zxnext = TRUE` (or --zxnext) recognises the
+     * Z80N opcode set, mirroring Python: asmlex enables the Z80N tokens
+     * (asmlex.py:323) and asmparse selects zxnext_parser (asmparse.py:1001)
+     * iff OPTIONS.zxnext. Without this the inline-asm lexer reads e.g. MUL as
+     * the '*' operator (use_zxnext_asm). */
+    as.zxnext = zxnext;
     asm_set_include_paths(&as, arch, include_path);
 
     int aerr = asm_assemble(&as, asm_text);
