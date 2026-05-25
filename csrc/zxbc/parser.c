@@ -8824,7 +8824,13 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         id->u.id.class_ = cls;
         id->u.id.declared = true;
         id->u.id.convention = conv;
-        id->lineno = ln;
+        /* Only a FRESH declare records the line (symboltable.declare). A reused
+         * (forwarded) entry KEEPS its original DECLARE line so the later
+         * "previously declared at N" reconciliation error points at the DECLARE,
+         * not the definition (declare1/2/3, param3, declare6). Matches Python's
+         * declare_func (it never re-stamps entry.lineno on reuse) and the
+         * production parse_sub_or_func_decl. */
+        if (!pre) id->lineno = ln;
         fd->id_node = id;
         symboltable_enter_scope(p->cs->symbol_table, p->cs, fd->name_raw);
         vec_push(p->cs->function_level, fd->id_node);
@@ -8867,6 +8873,9 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
              * function always takes its computed ret_type (the common case is
              * untouched; broadening to all entries regressed CALL types). */
             AstNode *e = fd->id_node;
+            bool forwarded = e->u.id.forwarded;       /* zxbparser.py:2953 */
+            TypeInfo *previoustype_ = e->type_;        /* zxbparser.py:2960 */
+            AstNode *old_params = e->u.id.params;       /* DECLARE's PARAMLIST */
             bool ret_is_explicit = (td && !td->implicit) ||
                                    (fd->is_function && fd->suffix_type && !td);
             bool entry_type_set = e->type_ &&
@@ -8876,8 +8885,80 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
                 fd->ret_type = e->type_;       /* keep forwarded type */
             else
                 e->type_ = fd->ret_type;
+            /* forwarded type-mismatch (zxbparser.py:2966): a predeclared entry
+             * whose previous type differs from the now-resolved type is a
+             * "type mismatch" -> p[0]=None (declare6, funccall7, param3).
+             * Python compares `previoustype_ != p[0].type_`: equal iff both
+             * NULL or type_equal. */
+            bool type_changed = (previoustype_ == NULL) != (e->type_ == NULL) ||
+                (previoustype_ && e->type_ && !type_equal(previoustype_, e->type_));
+            if (forwarded && type_changed) {
+                err_func_type_mismatch(p->cs, PD_LINENO(3), e->u.id.name,
+                                       e->lineno);
+                r = NULL; break;
+            }
+            /* forwarded parameter check (zxbparser.py:2971-2990): count must
+             * match; then per-param name-rename warning + type/byref mismatch
+             * -> p[0]=None (declare1/2/3). old_params is the DECLARE's PARAMLIST
+             * still on the shared entry (case 325 set u.id.params at its own
+             * function_header_pre reduce). */
+            if (forwarded && old_params && params) {
+                if (old_params->child_count != params->child_count) {
+                    err_parameter_mismatch(p->cs, PD_LINENO(3), e->u.id.name,
+                                           e->lineno);
+                    r = NULL; break;
+                }
+                bool pmm = false;
+                for (int pi = 0; pi < old_params->child_count; pi++) {
+                    AstNode *a = old_params->children[pi];
+                    AstNode *b = params->children[pi];
+                    if (!a || !b) continue;
+                    if (a->u.argument.name && b->u.argument.name &&
+                        strcmp(a->u.argument.name, b->u.argument.name) != 0) {
+                        zxbc_warning(p->cs, PD_LINENO(3),
+                            "Parameter '%s' in function '%s' has been renamed to '%s'",
+                            a->u.argument.name, e->u.id.name, b->u.argument.name);
+                    }
+                    bool type_mm = a->type_ && b->type_ &&
+                                   !type_equal(a->type_, b->type_);
+                    bool byref_mm = a->u.argument.byref != b->u.argument.byref;
+                    if (type_mm || byref_mm) { pmm = true; break; }
+                }
+                if (pmm) {
+                    err_parameter_mismatch(p->cs, PD_LINENO(3), e->u.id.name,
+                                           e->lineno);
+                    r = NULL; break;
+                }
+            }
             fd->id_node->u.id.params = params;
             fd->id_node->u.id.param_size = parser_assign_param_offsets(p, params);
+        }
+        /* SUB return-type error (zxbparser.py:2994): a SUB with an explicit
+         * (non-implicit) AS clause -> "SUBs cannot have a return type
+         * definition" -> p[0]=None. The engine's empty typedef (358) is NULL,
+         * an explicit AS (359) is a non-implicit type, so `not p[3].implicit`
+         * == `td != NULL`. */
+        if (!fd->is_function && td) {
+            zxbc_error(p->cs, PD_LINENO(3),
+                       "SUBs cannot have a return type definition");
+            r = NULL; break;
+        }
+        /* strict-mode missing-type for a FUNCTION (zxbparser.py:2999-3000,
+         * check_type_is_explicit(p[0].lineno, ...)) -> error (strict3) at the
+         * function_def line. `p[3].implicit` == `td == NULL` in the engine. A
+         * SUB carries no return type and is exempt. The production
+         * (parser.c:7476) reports it at the same (header) line. */
+        if (fd->is_function && p->cs->opts.strict && !td && !fd->suffix_type) {
+            err_undeclared_type(p->cs, fd->lineno,
+                                fd->id_node ? fd->id_node->u.id.name : fd->name_raw);
+        }
+        /* fastcall with >1 param warning (zxbparser.py:3002). */
+        if (fd->conv == CONV_fastcall && params &&
+            params->child_count > 1) {
+            warn_fastcall_n_params(p->cs, PD_LINENO(3),
+                fd->is_function ? "FUNCTION" : "SUB",
+                fd->id_node ? fd->id_node->u.id.name : fd->name_raw,
+                params->child_count);
         }
         /* After parser_assign_param_offsets stamps each ARGUMENT's cumulative
          * offset, copy offset+byref onto the matching body-scope symbol — the
@@ -9021,6 +9102,14 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
             r = NULL; break;
         }
         PdFuncDef *fd = (PdFuncDef *)rhs[1].value;
+        /* duplicated DECLARE (zxbparser.py:2925): `if p[2].entry.forwarded:
+         * error("duplicated declaration for function '%s'")`. The entry's
+         * forwarded flag was set by a PREVIOUS DECLARE's case 325 below
+         * (dup_func_decl). Python continues (no None) — diagnose only. */
+        if (fd->id_node && fd->id_node->u.id.forwarded)
+            zxbc_error(p->cs, PD_LINENO(1),
+                       "duplicated declaration for %s '%s'",
+                       fd->is_function ? "function" : "sub", fd->name_raw);
         symboltable_exit_scope(p->cs->symbol_table);
         if (p->cs->function_level.len > 0)
             vec_pop(p->cs->function_level);
