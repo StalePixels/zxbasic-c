@@ -315,16 +315,26 @@ int main(int argc, char *argv[]) {
         zxbc_info(&cs, "Preprocessed source (%zu bytes)", strlen(source));
     }
 
-    /* Parse. The PLY/LALR(1) engine (the faithful port of Python's actual
-     * parser) is the parse path when ZXBC_ENGINE is set; otherwise the legacy
-     * recursive-descent parser. The engine drives the lexer itself
+    /* Parse. The PLY/LALR(1) engine (the faithful port of Python's ACTUAL
+     * parser) is now the DEFAULT parse path — it BES Python's parser (LALR(1)
+     * table + parse loop + the p_* reduce-actions), so its output is
+     * byte-for-byte identical on both valid and malformed input. Proven across
+     * the full firewall: codegen ASM_MISMATCH 0 / FALSE_POS 0; stages both
+     * archs GREEN (zx48k 895/886/886, zxnext 197/197/197); omatrix -O0..-O3
+     * EQUAL == legacy at every level (879/881/887/881) with FEWER BIN-DIFFs;
+     * parse FALSE_POS 0 and the error-path strictly improved (FALSE_NEG ⊆
+     * legacy, STDERR_MISMATCH 47→39). The engine drives the lexer itself
      * (parser_init_noprime) and emits p_error messages directly
-     * (plyparse_program_emit_errors), exactly as Python's PLY parser. The old
-     * parser is kept in the tree for A/B comparison until the engine swap is
-     * proven byte-identical across the full meter suite. */
+     * (plyparse_program_emit_errors), exactly as Python's PLY parser.
+     *
+     * The legacy recursive-descent parser is kept in-tree (dead) and selectable
+     * via ZXBC_LEGACY_PARSER for emergency A/B fallback; it is no longer the
+     * default. (The prior ZXBC_ENGINE opt-IN gate is retired — the engine is
+     * default; honour ZXBC_ENGINE too so existing scripts keep working.) */
     Parser parser;
     AstNode *ast;
-    if (getenv("ZXBC_ENGINE")) {
+    bool use_legacy = getenv("ZXBC_LEGACY_PARSER") != NULL;
+    if (!use_legacy) {
         parser_init_noprime(&parser, &cs, source);
         bool perr = false;
         ast = plyparse_program_emit_errors(&parser, &perr);
