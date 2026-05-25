@@ -222,6 +222,12 @@ static const char *tok_ply_value(const BToken *t, char *buf, size_t sz) {
         case BTOK_STRC:
             if (t->sval) return t->sval;
             break;
+        case BTOK_ERROR:
+            /* PLY's t_...ERROR token carries the offending char as its value
+             * (Phase A: BTOK_ERROR.sval). p_error renders `'%' <ERROR>`, not
+             * `'ERROR' <ERROR>` (lexerr). */
+            if (t->sval) return t->sval;
+            break;
         case BTOK_NUMBER: {
             z80h_pyfloat_repr(t->numval, buf, (int)sz);
             return buf;
@@ -8138,6 +8144,17 @@ typedef struct PdCtx {
     int unwired_prod;      /* first such production number (for reporting) */
     int last_lineno;       /* lexer.lineno tracker (== p.lexer.lineno) */
     bool in_preproc;       /* lex-adapter preproc-state tracker */
+    bool emit_errors;      /* Phase C-full: when true, pd_error emits the real
+                            * p_error message+line (for the error-validation
+                            * harness). When false (the astcmp meter), pd_error
+                            * only flags unwired so a p_error file classifies as
+                            * UNWIRED (not a DIFF) — the valid-corpus meter is
+                            * unchanged. */
+    bool p_error_fired;    /* set whenever pd_error fired (either mode). */
+    BToken last_btoken;    /* the BToken pd_lex last returned — pd_error renders
+                            * its p.value via the production's tok_ply_value
+                            * (correct for punctuation/keyword/ID/NUMBER). */
+    bool last_btoken_set;
 } PdCtx;
 
 /* A non-AST value carried on the parse stack for productions whose Python
@@ -8517,6 +8534,8 @@ static bool pd_lex(void *ud, PlySym *out) {
         break;
     }
     c->last_lineno = p->lexer.lineno;
+    c->last_btoken = t;          /* for pd_error's p.value rendering */
+    c->last_btoken_set = true;
     if (t.type == BTOK_EOF)
         return false; /* $end */
 
@@ -8827,6 +8846,18 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         *out = rhs[0].value;
         *out_lineno = PD_LINENO(1);
         return true;
+
+    /* ---- error-token productions (Phase C-full, p[0]=None) ----
+     * These fire only AFTER the engine synthesised an `error` token during
+     * recovery — pd_error already emitted the message. The action just yields
+     * None (zxbparser.py p_function_header_error / p_function_error /
+     * p_param_decl_errpr). Return NULL without flagging unwired (the p_error
+     * path already marked the file in astcmp mode). */
+    case 328: case 329: /* function_header : function_def error CO|NEWLINE */
+    case 331:           /* function_declaration : function_header program_co END error */
+    case 340:           /* param_decl : LP error RP */
+        r = NULL;
+        break;
 
     case 324: { /* function_declaration : function_header function_body
                  * (p_funcdecl): leave scope, compute offsets, pop
@@ -11587,13 +11618,85 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
     return true;
 }
 
+/* PLY symbol id for NEWLINE (resolved once; see ply_sym_name). */
+static int pd_newline_sym_id(void) {
+    static int id = -2;
+    if (id == -2) id = ply_term_id("NEWLINE");
+    return id;
+}
+
+/* Render the error-token's PLY `p.value` exactly as Python's lexer would.
+ * The engine's errtoken is the current lookahead == the BToken pd_lex last
+ * returned (c->last_btoken), so reuse the production's tok_ply_value (correct
+ * for punctuation lexemes, the upper-cased keyword reserved-word value, ID/
+ * STRC source text, and the NUMBER float repr). EXCEPTION: a preproc-state
+ * token whose PLY type is INTEGER/STRING carries the raw text in sval — Python
+ * sees that string as p.value, not the float — so use sval there. */
+static const char *pd_errtok_value(const PlySym *t, const BToken *bt,
+                                   char *buf, size_t sz) {
+    static int int_id = -2, str_id = -2;
+    if (int_id == -2) { int_id = ply_term_id("INTEGER"); str_id = ply_term_id("STRING"); }
+    if ((t->type == int_id || t->type == str_id) && t->sval)
+        return t->sval;
+    if (bt) return tok_ply_value(bt, buf, sz);
+    if (t->sval) return t->sval;
+    return "?";
+}
+
+/* p_error (zxbparser.py:3561-3583) — faithful port. errtoken==NULL means EOF.
+ * For a token: "Syntax Error. Unexpected token '%s' <%s>" (value, type), or
+ * "Unexpected end of line" for NEWLINE, at the token's lineno. For EOF: emit
+ * the loop-not-closed hint off the live cs->loop_stack (gl.LOOPS), then (unless
+ * there were prior errors — gl.has_errors) "Unexpected end of file" at the
+ * final lexer line. Does NOT set c->unwired — the engine recovers exactly as
+ * PLY (error_count=3) and keeps parsing. */
 static void pd_error(void *ud, const PlySym *errtoken) {
-    /* Phase C-full will implement p_error here. For Phase D (valid programs)
-     * this is not exercised; mark the parse as unusable if it fires. */
     PdCtx *c = ud;
-    (void)errtoken;
-    c->unwired = true;
-    if (c->unwired_prod == 0) c->unwired_prod = -1; /* -1 == hit p_error */
+    Parser *p = c->p;
+    CompilerState *cs = p->cs;
+
+    c->p_error_fired = true;
+    if (!c->emit_errors) {
+        /* astcmp-meter mode: a p_error file is honestly classified UNWIRED:-1
+         * (the engine is PLY-faithful; the production tolerates raw artifacts),
+         * NOT a DIFF. No message emitted so the valid-corpus meter + DIFF=0 are
+         * unchanged. The real message is emitted in emit_errors mode below. */
+        c->unwired = true;
+        if (c->unwired_prod == 0) c->unwired_prod = -1;
+        return;
+    }
+
+    if (errtoken != NULL) {
+        if (errtoken->type != pd_newline_sym_id()) {
+            char buf[64];
+            const BToken *bt = (c->last_btoken_set &&
+                                c->last_btoken.lineno == errtoken->lineno)
+                                   ? &c->last_btoken : NULL;
+            const char *val = pd_errtok_value(errtoken, bt, buf, sizeof(buf));
+            const char *tname = (errtoken->type >= 0 && errtoken->type < PLY_N_SYM)
+                                    ? ply_sym_name[errtoken->type] : "?";
+            zxbc_error(cs, errtoken->lineno,
+                       "Syntax Error. Unexpected token '%s' <%s>", val, tname);
+        } else {
+            zxbc_error(cs, errtoken->lineno, "Unexpected end of line");
+        }
+        return;
+    }
+
+    /* EOF (None). Loop-not-closed hints from the live loop stack (gl.LOOPS). */
+    if (cs->loop_stack.len > 0) {
+        LoopInfo *li = &cs->loop_stack.data[cs->loop_stack.len - 1];
+        if (li->type == LOOP_FOR)
+            err_for_without_next(cs, li->lineno);
+        else
+            err_loop_not_closed(cs, li->lineno,
+                                li->type == LOOP_WHILE ? "WHILE" : "DO");
+    }
+    /* If there were previous errors, this EOF is a consequence of them
+     * (gl.has_errors) — do not also emit "Unexpected end of file". */
+    if (cs->error_count > 0)
+        return;
+    zxbc_error(cs, c->last_lineno, "Unexpected end of file");
 }
 
 /* Init for the PLY-engine path: like parser_init but WITHOUT priming the
@@ -11624,5 +11727,22 @@ AstNode *plyparse_program(Parser *p, bool *unwired_out, int *unwired_prod_out) {
 
     if (unwired_out) *unwired_out = c.unwired;
     if (unwired_prod_out) *unwired_prod_out = c.unwired_prod;
+    return (AstNode *)res;
+}
+
+/* Phase C-full ERROR-EMIT mode: pd_error emits the real p_error message+line. */
+AstNode *plyparse_program_emit_errors(Parser *p, bool *p_error_fired_out) {
+    PdCtx c;
+    memset(&c, 0, sizeof(c));
+    c.p = p;
+    c.last_lineno = p->lexer.lineno;
+    c.emit_errors = true;
+
+    PlyParser eng;
+    ply_parser_init(&eng, pd_lex, pd_action, pd_error, &c);
+    eng.cur_lineno = p->lexer.lineno;
+    void *res = ply_parse(&eng);
+
+    if (p_error_fired_out) *p_error_fired_out = c.p_error_fired;
     return (AstNode *)res;
 }

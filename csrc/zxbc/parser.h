@@ -39,6 +39,12 @@ void parser_init_noprime(Parser *p, CompilerState *cs, const char *input);
  * first such production number (or -1 for p_error). */
 AstNode *plyparse_program(Parser *p, bool *unwired_out, int *unwired_prod_out);
 
+/* Phase C-full: parse via the engine in ERROR-EMIT mode — pd_error emits the
+ * real p_error message+line (to cs's err stream) and bumps cs->error_count,
+ * exactly as Python's p_error. *p_error_fired_out reports whether p_error
+ * fired. Used by the engine-vs-Python error-output validation harness. */
+AstNode *plyparse_program_emit_errors(Parser *p, bool *p_error_fired_out);
+
 /* ----------------------------------------------------------------
  * Expression parsing (Pratt parser)
  * ---------------------------------------------------------------- */

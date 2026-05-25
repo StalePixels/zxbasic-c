@@ -157,16 +157,35 @@ static char *read_file(const char *path) {
 int main(int argc, char **argv) {
     int argi = 1;
     int do_dump = 0;
+    int do_errors = 0;
     while (argi < argc && argv[argi][0] == '-') {
         if (strcmp(argv[argi], "--verbose") == 0) g_verbose = 1;
         else if (strcmp(argv[argi], "--dump") == 0) do_dump = 1;
+        else if (strcmp(argv[argi], "--errors") == 0) do_errors = 1;
         else break;
         argi++;
     }
-    if (argi >= argc) { fprintf(stderr, "usage: %s [--verbose] <file.bas>\n", argv[0]); return 3; }
+    if (argi >= argc) { fprintf(stderr, "usage: %s [--verbose|--dump|--errors] <file.bas>\n", argv[0]); return 3; }
     const char *path = argv[argi];
     char *src = read_file(path);
     if (!src) { perror("open"); return 3; }
+
+    /* Phase C-full error-output validation: run ONLY the engine in emit_errors
+     * mode (pd_error prints the real p_error message+line to stderr, bumps
+     * error_count), then exit 1 iff error_count>0 — mirroring zxbc main's
+     * `if (cs.error_count>0) return 1`. Compare this stderr + exit code against
+     * the Python oracle on the error-path fixtures. */
+    if (do_errors) {
+        CompilerState cse;
+        compiler_init(&cse);
+        cse.current_file = (char *)path;
+        Parser pe;
+        parser_init_noprime(&pe, &cse, src);
+        bool perr = false;
+        (void)plyparse_program_emit_errors(&pe, &perr);
+        free(src);
+        return (cse.error_count > 0) ? 1 : 0;
+    }
 
     /* (1) production parser */
     CompilerState cs1;
