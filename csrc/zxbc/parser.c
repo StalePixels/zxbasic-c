@@ -10963,6 +10963,57 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         ast_add_child(p->cs, r, lbl);
         break;
     }
+
+    /* ---- ON expr GOTO|GOSUB label_list (p_on_goto, 209-213) ----
+     * label_list carries the label nodes (Python: a list of check_and_make_label
+     * entries, zxbparser.py:2082-2096). Carry them as the children of an
+     * AST_ARGLIST container; p_on_goto spreads them. Each label is an
+     * AST_ID(name, class_=label), matching the production (parser.c:4615-4617).
+     * make_label_id builds the rendered label name (NUMBER -> its integer). */
+    case 210: case 211: case 212: { /* label_list : ID | NUMBER |
+                                     * label_list COMMA ID|NUMBER */
+        AstNode *lst;
+        int idx;  /* 0-based RHS index of the new ID/NUMBER token */
+        if (prodno == 212) { lst = (AstNode *)rhs[0].value; idx = 2; }
+        else { lst = ast_new(p->cs, AST_ARGLIST, PD_LINENO(1)); idx = 0; }
+        const char *label;
+        char buf[32];
+        if (rhs[idx].sval) label = rhs[idx].sval;
+        else { snprintf(buf, sizeof(buf), "%d", (int)rhs[idx].num); label = buf; }
+        AstNode *lbl = ast_new(p->cs, AST_ID, rhs[idx].lineno);
+        lbl->u.id.name = arena_strdup(&p->cs->arena, label);
+        lbl->u.id.class_ = CLASS_label;
+        ast_add_child(p->cs, lst, lbl);
+        *out = lst; *out_lineno = PD_LINENO(1);
+        return true;
+    }
+    case 213: { /* label_list : label_list COMMA NUMBER (same as 212's NUMBER
+                 * arm, kept distinct in the grammar) */
+        AstNode *lst = (AstNode *)rhs[0].value;
+        char buf[32];
+        const char *label = rhs[2].sval;
+        if (!label) { snprintf(buf, sizeof(buf), "%d", (int)rhs[2].num); label = buf; }
+        AstNode *lbl = ast_new(p->cs, AST_ID, rhs[2].lineno);
+        lbl->u.id.name = arena_strdup(&p->cs->arena, label);
+        lbl->u.id.class_ = CLASS_label;
+        ast_add_child(p->cs, lst, lbl);
+        *out = lst; *out_lineno = PD_LINENO(1);
+        return true;
+    }
+    case 209: { /* statement : ON expr goto label_list (p_on_goto) ->
+                 * SENTENCE("ON_" + goto_kind, expr, *labels). The production
+                 * adds expr RAW (parser.c:4608, no typecast) — match C-vs-C. */
+        AstNode *expr = PD_NODE(2);
+        PdId *gk = (PdId *)rhs[2].value;  /* goto: "GOTO"/"GOSUB" */
+        AstNode *lst = (AstNode *)rhs[3].value;
+        char kind[16];
+        snprintf(kind, sizeof(kind), "ON_%s", gk ? gk->name : "GOTO");
+        r = make_sentence_node(p, kind, PD_LINENO(1));
+        if (expr) ast_add_child(p->cs, r, expr);
+        if (lst) for (int i = 0; i < lst->child_count; i++)
+            ast_add_child(p->cs, r, lst->children[i]);
+        break;
+    }
     case 217: /* statement : POKE expr COMMA expr */
         r = make_sentence_node(p, "POKE", PD_LINENO(1));
         ast_add_child(p->cs, r,
