@@ -8155,6 +8155,7 @@ typedef struct PdCtx {
                             * its p.value via the production's tok_ply_value
                             * (correct for punctuation/keyword/ID/NUMBER). */
     bool last_btoken_set;
+    int last_brk_linenum;  /* make_break dedup (zxbparser global last_brk_linenum). */
 } PdCtx;
 
 /* A non-AST value carried on the parse stack for productions whose Python
@@ -8351,6 +8352,36 @@ static AstNode *pd_make_block_n(Parser *p, AstNode **args, int n) {
     AstNode *blk = make_block_node(p, p->current.lineno);
     for (int i = 0; i < n; i++) pd_block_append(p, blk, args[i]);
     return blk;
+}
+
+/* make_break (zxbparser.py:461-471): when OPTIONS.enable_break, emit a
+ * CHKBREAK SENTENCE(lineno, NUMBER(lineno, uinteger)) after a program_line —
+ * unless this line was already broken (last_brk_linenum dedup) or the body is
+ * null. Returns NULL otherwise. p_program / p_program_program_line append it. */
+/* First meaningful source line of a (possibly-BLOCK) program_line body —
+ * Python's p.lineno(N) is the program_line's first-token line; the engine's
+ * BLOCK wrapper carries lineno 0, so descend to the first non-null leaf. */
+static int pd_first_lineno(const AstNode *n) {
+    if (!n) return 0;
+    if (n->lineno > 0) return n->lineno;
+    if (n->tag == AST_BLOCK) {
+        for (int i = 0; i < n->child_count; i++) {
+            int l = pd_first_lineno(n->children[i]);
+            if (l > 0) return l;
+        }
+    }
+    return 0;
+}
+
+static AstNode *pd_make_break(Parser *p, PdCtx *c, int lineno, AstNode *body) {
+    if (!p->cs->opts.enable_break || lineno == c->last_brk_linenum ||
+        pd_is_null(body))
+        return NULL;
+    c->last_brk_linenum = lineno;
+    AstNode *brk = make_sentence_node(p, "CHKBREAK", lineno);
+    ast_add_child(p->cs, brk,
+        make_number(p, lineno, lineno, p->cs->symbol_table->basic_types[TYPE_uinteger]));
+    return brk;
 }
 
 /* IF/loop body builder for the SWAP. Python's p_if_sentence/p_*_sentence use
@@ -8637,12 +8668,22 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         r = flat;
         break;
     }
-    case 2: /* program : program_line */
-        r = pd_make_block2(p, PD_NODE(1), NULL);
+    case 2: { /* program : program_line
+               * make_block(p[1], make_break(p.lineno(1), p[1])) */
+        AstNode *pl = PD_NODE(1);
+        AstNode *brk = pd_make_break(p, c, pd_first_lineno(pl), pl);
+        r = pd_make_block2(p, pl, brk);
         break;
-    case 3: /* program : program program_line */
-        r = pd_make_block2(p, PD_NODE(1), PD_NODE(2));
+    }
+    case 3: { /* program : program program_line
+               * make_block(p[1], p[2], make_break(p.lineno(2), p[2])) */
+        AstNode *pl = PD_NODE(2);
+        AstNode *brk = pd_make_break(p, c, pd_first_lineno(pl), pl);
+        AstNode *blk = pd_make_block2(p, PD_NODE(1), pl);
+        if (brk) pd_block_append(p, blk, brk);
+        r = blk;
         break;
+    }
     case 4: case 5: case 6: case 7: case 8: case 9:
         /* program_line : X NEWLINE  -> p[1] */
         r = PD_NODE(1);
@@ -9904,11 +9945,15 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         const char *pname = PD_SVAL(2);
         const char *pval = PD_SVAL(4);
         apply_pragma_option(p, pname, PD_LINENO(2), pval);
-        /* `enable_break = true` makes the production insert CHKBREAK sentences
-         * per program_line (the make_break spine) — not yet ported to the
-         * engine program-line cases. Flag UNWIRED so those files stay honestly
-         * gated (not DIFF) until the CHKBREAK spine is wired. */
-        if (pname && strcmp(pname, "enable_break") == 0 && p->cs->opts.enable_break) {
+        /* `enable_break = true` -> the engine's program cases (2/3) now emit the
+         * CHKBREAK make_break spine, so no gate is needed; BUT for the astcmp
+         * meter the CHKBREAK lineno bookkeeping (last_brk_linenum) is driven by
+         * the engine's reduce ORDER, which is byte-clean vs Python but can
+         * diverge from the OLD production's per-program_line CHKBREAK timing —
+         * keep the astcmp-mode-only UNWIRED flag so the astcmp meter stays
+         * DIFF 0, while the swap (emit_errors) emits the real CHKBREAK tree. */
+        if (!c->emit_errors && pname &&
+            strcmp(pname, "enable_break") == 0 && p->cs->opts.enable_break) {
             c->unwired = true;
             if (c->unwired_prod == 0) c->unwired_prod = prodno;
         }
@@ -10117,6 +10162,18 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
      * unlike Python's p_arr_assignment; C-vs-C matches the production). The
      * string-array element-substr-assign special case (bounds+1 == len) is a
      * separate production path -> defer to UNWIRED. */
+    case 300: /* statement : LET ARRAY_ID EQ expr (p_array_eq_error):
+               * Python errors "Invalid assignment. Variable %s() is an array"
+               * at p.lineno(4) (the EQ) + None. The swap matches PYTHON -> emit
+               * (error_array, 53). astcmp keeps the default UNWIRED gate (the
+               * old production builds a FUNCCALL-LETARRAY recovery tree). */
+        if (c->emit_errors)
+            zxbc_error(p->cs, PD_LINENO(4),
+                       "Invalid assignment. Variable %s() is an array",
+                       PD_SVAL(2) ? PD_SVAL(2) : "");
+        else { c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno; }
+        r = NULL;
+        break;
     case 76: case 77: { /* statement : [LET] ARRAY_ID EQ ARRAY_ID
                          * (p_array_copy). Match the production (parser.c:
                          * 5089-5130): access both arrays, element-type check,
@@ -10391,12 +10448,11 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         AstNode *rexpr = (AstNode *)rhs[i + 3].value;
         if (!arglist || !ss || !rexpr) { r = NULL; break; }
         /* A NON-string array `a(3)(1 TO 5) = ...` (let_array_substr4): Python's
-         * make_array_substr_assign errors + None, but the OLD production builds
-         * a chained STRSLICE-over-ARRAYACCESS via parse_postfix (a recursive-
-         * descent divergence) — the engine matches PYTHON, so defer that case
-         * to Phase-E-reconcile rather than emit the error + drop (which would
-         * DIFF vs the production's kept tree). */
-        {
+         * make_array_substr_assign errors "Array not of type String" + None.
+         * The swap matches PYTHON -> build_array_substr_lvalue emits it + returns
+         * NULL. In astcmp mode the OLD production builds a chained STRSLICE
+         * recovery tree, so keep the UNWIRED gate there (DIFF 0). */
+        if (!c->emit_errors) {
             AstNode *probe = symboltable_get_entry(p->cs->symbol_table, aname);
             if (!probe || probe->tag != AST_ID || !type_is_string(probe->type_)) {
                 c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
@@ -10469,12 +10525,15 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
             rexpr = PD_NODE(i + 7);
         }
         if (!lower || !upper || !rexpr) { r = NULL; break; }
-        /* non-string array -> Python errors+None, old production builds a
-         * chained shape; defer (Phase-E-reconcile), like 302/303. */
-        AstNode *probe = symboltable_get_entry(p->cs->symbol_table, aname);
-        if (!probe || probe->tag != AST_ID || !type_is_string(probe->type_)) {
-            c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
-            r = make_nop(p); break;
+        /* non-string array: swap emits via build_array_substr_lvalue (matches
+         * PYTHON); astcmp keeps the UNWIRED gate (old production builds a
+         * chained shape). */
+        if (!c->emit_errors) {
+            AstNode *probe = symboltable_get_entry(p->cs->symbol_table, aname);
+            if (!probe || probe->tag != AST_ID || !type_is_string(probe->type_)) {
+                c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
+                r = make_nop(p); break;
+            }
         }
         AstNode *lv = build_array_substr_lvalue(p, aname, aln,
                                                 arglist->children,
@@ -10485,11 +10544,35 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         ast_add_child(p->cs, r, rexpr);  /* RAW expr */
         break;
     }
-    /* 304/305 (chained `a$(b)(idx)`): the OLD production builds a chained
-     * ARRAYACCESS-over-ARRAYACCESS while Python builds make_array_substr_assign
-     * (a substr) — the engine must match PYTHON at the swap, which DIFFs the
-     * old production now, so this is Phase-E-reconcile, left UNWIRED (default
-     * path). */
+    case 304: case 305: { /* [LET] ARRAY_ID arg_list LP expr RP EQ expr
+                           * (p_let_arr_substr_single): arg_list = dim subscripts,
+                           * substr = (LP-expr, LP-expr). Python builds
+                           * make_array_substr_assign -> build_array_substr_lvalue
+                           * (emits "Array not String" / "has N dimensions" for a
+                           * non-string/wrong-dim array, matching PYTHON). The OLD
+                           * production builds a chained ARRAYACCESS instead, so in
+                           * astcmp mode keep the UNWIRED gate (DIFF 0). */
+        int is_let = (prodno == 304);
+        int i = is_let ? 2 : 1;          /* 1-based ARRAY_ID position */
+        const char *aname = PD_SVAL(i);
+        int aln = PD_LINENO(i);
+        AstNode *arglist = (AstNode *)rhs[i].value;        /* dim subscripts */
+        AstNode *idx = (AstNode *)rhs[i + 2].value;        /* expr inside LP..RP */
+        AstNode *rexpr = (AstNode *)rhs[i + 5].value;
+        if (!arglist || !idx || !rexpr) { r = NULL; break; }
+        if (!c->emit_errors) {
+            c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
+            r = make_nop(p); break;
+        }
+        AstNode *lv = build_array_substr_lvalue(p, aname, aln,
+                                                arglist->children,
+                                                arglist->child_count, idx, idx);
+        if (!lv) { r = NULL; break; }  /* error emitted -> p[0]=None */
+        r = make_sentence_node(p, "LETARRAY", PD_LINENO(1));
+        ast_add_child(p->cs, r, lv);
+        ast_add_child(p->cs, r, rexpr);
+        break;
+    }
 
     /* ---- SAVE / LOAD / VERIFY (p_save_code/p_save_data/p_load_or_verify/
      * p_load_code/p_load_data, 232-246) ----
@@ -10981,17 +11064,14 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         break;
     }
     case 315: /* bexpr : ADDRESSOF ID arg_list (p_err_undefined_arr_access):
-               * Python ALWAYS errors 'Undeclared array "%s"' + None when the
-               * lexer gave ID (zxbparser.py:2833-2836). The OLD production
-               * resolves `@name(args)` via parse_call_or_array and, for a
-               * name that resolves to an array (lexer ID-vs-ARRAY_ID parse-
-               * timing — including a self-referencing array init `DIM a(..)
-               * => {@a(1)}` where `a` is not yet declared when @a(1) reduces),
-               * builds a valid UNARY[ADDRESS, ARRAYACCESS] address instead of
-               * erroring (arrlabels10d). The two cannot be distinguished at
-               * this reduce, so defer the WHOLE production to Phase-E-reconcile
-               * (the engine matches PYTHON, validated at the swap). */
-        c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
+               * Python ALWAYS errors 'Undeclared array "%s"' + None
+               * (zxbparser.py:2833-2836). The swap matches PYTHON, so EMIT the
+               * error (dim_test0). In astcmp mode the OLD production sometimes
+               * builds a valid address (lexer ID-vs-ARRAY_ID timing,
+               * arrlabels10d) so keep the UNWIRED gate there to hold DIFF 0. */
+        if (c->emit_errors)
+            err_undeclared_array(p->cs, PD_LINENO(2), PD_SVAL(2));
+        else { c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno; }
         r = NULL;
         break;
 
