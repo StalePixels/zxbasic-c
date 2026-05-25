@@ -8642,8 +8642,17 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
             for (int i = 0; i < params->child_count; i++) {
                 AstNode *arg = params->children[i];
                 if (!arg || arg->tag != AST_ARGUMENT) continue;
-                AstNode *bsym = symboltable_lookup(p->cs->symbol_table,
-                                                   arg->u.argument.name);
+                /* The body symbol is keyed under the suffix-stripped name
+                 * (declare strips the sigil); strip here too so a sigil
+                 * param (`s$`) reconciles. */
+                const char *an = arg->u.argument.name;
+                size_t anl = an ? strlen(an) : 0;
+                char anbuf[256];
+                if (anl > 0 && anl < sizeof(anbuf) &&
+                    is_deprecated_suffix(an[anl - 1])) {
+                    memcpy(anbuf, an, anl - 1); anbuf[anl - 1] = '\0'; an = anbuf;
+                }
+                AstNode *bsym = symboltable_lookup(p->cs->symbol_table, an);
                 if (bsym) {
                     bsym->u.id.offset = arg->u.argument.offset;
                     bsym->u.id.offset_set = true;
@@ -9137,20 +9146,35 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         TypeInfo *td = (TypeInfo *)rhs[1].value;   /* typedef (NULL = implicit) */
         AstNode *defval = (AstNode *)rhs[2].value; /* default_arg_value */
         const char *pname = id->name;
-        /* Defer sigil-typed params (the conflict-diagnostic path) for now. */
-        size_t pnl = strlen(pname);
-        if (pnl > 0 && is_deprecated_suffix(pname[pnl - 1])) {
-            c->unwired = true;
-            if (c->unwired_prod == 0) c->unwired_prod = prodno;
-            r = make_nop(p);
-            break;
-        }
         /* check_type_is_explicit (strict-only) */
         if (p->cs->opts.strict && td && td->implicit)
             err_undeclared_type(p->cs, id->lineno, pname);
         TypeInfo *ptype = td;
         if (!ptype)
             ptype = type_new_ref(p->cs, p->cs->default_type, id->lineno, true);
+        /* A deprecated sigil ($/%/&/!) overrides the declared param type
+         * (SymbolTable.declare, symboltable.py:102-123), matching the
+         * production parser (parser.c:7401-7441): a$ => string, i% =>
+         * integer, etc. If the param carries a non-implicit explicit type
+         * differing from the sigil, emit the conflict diagnostic against the
+         * ORIGINAL type, then adopt the sigil type (Python does NOT abort).
+         * Resolving it HERE puts the corrected type on the ARGUMENT node
+         * before parser_assign_param_offsets (at function_header_pre, 330)
+         * sizes it. The body-scope symbol is registered under the STRIPPED
+         * name (declare strips the suffix for entry.name); case 330's body-
+         * symbol lookup also strips, so they reconcile. */
+        size_t pnl = strlen(pname);
+        const char *bname = pname;       /* body-scope key (suffix stripped) */
+        char bbuf[256];
+        if (pnl > 0 && pnl < sizeof(bbuf) && is_deprecated_suffix(pname[pnl - 1])) {
+            BasicType sbt = suffix_to_type(pname[pnl - 1]);
+            TypeInfo *sti = p->cs->symbol_table->basic_types[sbt];
+            if (ptype && !ptype->implicit && !type_equal(ptype, sti))
+                zxbc_error(p->cs, id->lineno, "expected type %s for '%s', got %s",
+                           sti->name, pname, ptype->name);
+            ptype = sti;
+            memcpy(bbuf, pname, pnl - 1); bbuf[pnl - 1] = '\0'; bname = bbuf;
+        }
         AstNode *arg = ast_new(p->cs, AST_ARGUMENT, id->lineno);
         arg->u.argument.name = arena_strdup(&p->cs->arena, pname);
         arg->u.argument.is_array = false;
@@ -9159,9 +9183,9 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
             defval = make_typecast(p->cs, ptype, defval, id->lineno);
             if (defval) ast_add_child(p->cs, arg, defval);
         }
-        /* Register the body-scope symbol (declare_param). */
+        /* Register the body-scope symbol (declare_param) under the stripped name. */
         AstNode *bsym = symboltable_declare(p->cs->symbol_table, p->cs,
-                                            pname, id->lineno, CLASS_var);
+                                            bname, id->lineno, CLASS_var);
         if (bsym) {
             bsym->type_ = ptype;
             bsym->u.id.declared = true;
@@ -9922,7 +9946,17 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         break;
     }
     case 319: { /* arguments : argument -> ARGLIST[argument] */
-        if (!rhs[0].value) { r = NULL; break; }
+        if (!rhs[0].value) {
+            /* p_arguments (zxbparser.py:2865-2869): a NULL argument nulls the
+             * whole arglist. The C PRODUCTION parser instead keeps the partial
+             * (non-null) args (a recursive-descent error-recovery divergence
+             * from Python) — so when the engine takes this Python-faithful
+             * None path on an error file, the trees diverge from the old
+             * production. Flag UNWIRED (Phase-E-reconcile: at the swap the
+             * engine is validated against PYTHON, which it matches). */
+            c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
+            r = NULL; break;
+        }
         AstNode *al = ast_new(p->cs, AST_ARGLIST, PD_LINENO(1));
         ast_add_child(p->cs, al, (AstNode *)rhs[0].value);
         r = al;
@@ -9930,7 +9964,13 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
     }
     case 320: { /* arguments : arguments COMMA argument -> append */
         AstNode *al = (AstNode *)rhs[0].value;
-        if (!al || !rhs[2].value) { r = NULL; break; }
+        if (!al || !rhs[2].value) {
+            /* p_arguments_argument (zxbparser.py:2874-2879): any NULL component
+             * nulls the whole arglist (Python-faithful). The old production
+             * keeps partial args, so defer this error file to Phase E. */
+            c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
+            r = NULL; break;
+        }
         ast_add_child(p->cs, al, (AstNode *)rhs[2].value);
         r = al;
         break;
