@@ -8513,6 +8513,31 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         r = decl;
         break;
     }
+    case 325: { /* function_declaration : DECLARE function_header_pre
+                 * (p_funcdeclforward): mark forwarded, leave scope (no
+                 * warnings) + pop FUNCTION_LEVEL. function_def already
+                 * entered the scope. The production builds an is_forward
+                 * FUNCDECL (empty body) and pushes functions (parser.c:
+                 * 7552-7572); Python returns None but the C-vs-C compare is
+                 * against the production, so match it. */
+        PdFuncDef *fd = (PdFuncDef *)rhs[1].value;
+        symboltable_exit_scope(p->cs->symbol_table);
+        if (p->cs->function_level.len > 0)
+            vec_pop(p->cs->function_level);
+        if (fd->rejected) { r = make_nop(p); break; }
+        AstNode *id_node = fd->id_node;
+        id_node->u.id.forwarded = true;
+        AstNode *decl = ast_new(p->cs, AST_FUNCDECL, fd->lineno);
+        decl->u.funcdecl.is_forward = true;
+        AstNode *body = make_block_node(p, fd->lineno);
+        ast_add_child(p->cs, decl, id_node);
+        ast_add_child(p->cs, decl, fd->params);
+        ast_add_child(p->cs, decl, body);
+        decl->type_ = fd->ret_type;
+        vec_push(p->cs->functions, id_node);
+        r = decl;
+        break;
+    }
     case 55: /* statement : function_declaration (p_staement_func_decl) */
         r = PD_NODE(1);
         break;
