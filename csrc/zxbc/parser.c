@@ -9654,25 +9654,61 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
             memcpy(abuf, aname, anl - 1); abuf[anl - 1] = '\0'; alook = abuf;
         }
         AstNode *aentry = symboltable_lookup(p->cs->symbol_table, alook);
-        /* A STRING-typed array assign routes through the substr/strslice
-         * production in the C parser (STRSLICE lvalue, not LETARRAY/
-         * ARRAYACCESS) — sys_letarrsubstr*; defer the whole string-array case
-         * to UNWIRED. */
-        if (aentry && type_is_string(aentry->type_)) {
-            c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
-            r = make_nop(p); break;
+        /* Production 78/79 is `ARRAY_ID arg_list EQ expr` ONLY — the chained /
+         * TO-substr write forms reduce via SEPARATE productions (80-83,
+         * 302-313, p_let_arr_substr*), never here, so there is NEVER a postfix
+         * `(` group and NEVER a `TO`-subscript on this reduce.
+         *
+         * (1) STRING-array `bounds+1 == nargs` substr-in-args sub-case
+         *     (p_arr_assignment string branch, zxbparser.py:1199-1205): a
+         *     string array where the arglist carries exactly one more
+         *     subscript than the declared dim count. Python pops the last
+         *     subscript as the (lower==upper) substring index and routes to
+         *     make_array_substr_assign → the C production builds it via
+         *     parse_call_or_array's single-paren-group substr detection
+         *     (parser.c:2615-2653, build_array_substr_lvalue) yielding the
+         *     Shape-A STRSLICE[ARRAYACCESS, STRSLICE[lo,hi]] lvalue, then
+         *     LETARRAY[lv, RAW expr] (let_array_substr13, sys_letarrsubstr0..2).
+         * (2) Otherwise (numeric full-element write, OR a string full-element
+         *     write `a$(b) = s` where bounds == nargs): make_call_node
+         *     (expr_context=false) → ARRAYACCESS → LETARRAY[arr, RAW expr].
+         *
+         * RAW expr (no typecast) in both cases, matching the production's
+         * LET-statement path (parser.c:5008-5010) — a documented byte-clean
+         * divergence from Python's typecast; C-vs-C is what astcmp validates. */
+        AstNode *arr = NULL;
+        if (aentry && aentry->tag == AST_ID &&
+            aentry->u.id.class_ == CLASS_array &&
+            type_is_string(aentry->type_)) {
+            int ndecl = aentry->u.id.arr_boundlist
+                            ? aentry->u.id.arr_boundlist->child_count : 0;
+            if (ndecl > 0 && ndecl + 1 == arglist->child_count) {
+                /* Pop the last subscript as the substring index. */
+                AstNode *last = arglist->children[arglist->child_count - 1];
+                AstNode *idx = (last && last->tag == AST_ARGUMENT &&
+                                last->child_count > 0) ? last->children[0] : last;
+                arr = build_array_substr_lvalue(p, aname, aln,
+                                                arglist->children,
+                                                arglist->child_count - 1,
+                                                idx, idx);
+                if (!arr) { r = NULL; break; }  /* error already emitted */
+            }
         }
-        AstNode *arr = make_call_node(p, aname, aln, arglist, false, false, false);
-        if (!arr || arr->tag != AST_ARRAYACCESS) {
-            /* string-slice / non-array shapes go through other production
-             * paths in the C parser — defer. */
+        if (!arr)
+            arr = make_call_node(p, aname, aln, arglist, false, false, false);
+        if (arr && arr->tag != AST_ARRAYACCESS && arr->tag != AST_STRSLICE) {
+            /* An unexpected non-array shape goes through other production
+             * paths in the C parser — defer. (arr == NULL is the semantic-
+             * error path; the production STILL builds LETARRAY[expr] with the
+             * NULL lvalue dropped by ast_add_child — match it, do not defer:
+             * let_array_wrong_dims / sn_crash.) */
             c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
             r = make_nop(p); break;
         }
         if (aentry && aentry->u.id.class_ == CLASS_array && aentry->u.id.addr_expr)
             aentry->u.id.accessed = true;
         r = make_sentence_node(p, "LETARRAY", aln);
-        ast_add_child(p->cs, r, arr);
+        ast_add_child(p->cs, r, arr);  /* no-op when NULL (error path) */
         ast_add_child(p->cs, r, aexpr); /* RAW expr, matching the production */
         break;
     }
