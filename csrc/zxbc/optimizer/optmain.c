@@ -503,18 +503,23 @@ char *optimizer_optimize(Optimizer *o, Arena *a, Z80StrList initial_memory,
     for (int i=0;i<basic_blocks.len;i++)
         bb_optimize(basic_blocks.data[i]);
 
-    /* ignored marking (main.py:255-257) */
-    for (int i=0;i<basic_blocks.len;i++) {
-        BasicBlock *x=basic_blocks.data[i];
-        if (x->comes_from.len==0) {
-            bool any=false;
-            for (int li=0; li<o->JUMP_LABELS.len; li++) {
-                LabelInfo *info=ld_get(&o->LABELS,o->JUMP_LABELS.data[li]);
-                if (info && info->basic_block==x){any=true;break;}
-            }
-            if (any) x->ignored=true;
-        }
-    }
+    /* ignored marking (main.py:255-257) — DEAD CODE IN THE ORACLE.
+     *
+     *   for x in basic_blocks:
+     *       if x.comes_from == [] and len([... JUMP_LABELS ... ]):
+     *           x.ignored = True
+     *
+     * `x.comes_from` is a *set* (basicblock.py:60), and in Python a set
+     * is NEVER == to a list, even when both are empty: `set() == []` is
+     * always False. So this guard can never fire and `x.ignored` is
+     * permanently False for every block — Python emits ALL blocks here.
+     *
+     * A literal C port that tested `x->comes_from.len == 0` would make
+     * this dead branch LIVE (an empty C vector is "empty"), removing
+     * blocks Python keeps (e.g. an externally-GOTO'd label inside a dead
+     * WHILE 0 loop: whilefalse1). To stay byte-identical to the oracle we
+     * must reproduce the set!=list mismatch: the condition is always
+     * False, so nothing is ever marked ignored. (Faithful no-op.) */
 
     /* return "\n".join(flatten(x.code for x in basic_blocks if not x.ignored)
      *                   if not RE_PRAGMA.match) */
