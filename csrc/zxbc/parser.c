@@ -3305,6 +3305,12 @@ static AstNode *make_call_node(Parser *p, const char *name, int lineno,
      * errors in check_call_arguments. */
     if (p->cs->current_file)
         n->u.call.filename = arena_strdup(&p->cs->arena, p->cs->current_file);
+    /* Preserve the sigil-bearing original name (Python ID.original_name)
+     * for the undeclared-function diagnostic — `name` here is the call-site
+     * token, which still carries the $/% deprecated suffix that access_call
+     * strips off the resolved entry. */
+    if (name)
+        n->u.call.original_name = arena_strdup(&p->cs->arena, name);
     /* Python call.py:102 inline-vs-deferred dispatch (see zxbc.h
      * call.callee_inline): R3-R10 run in the deferred loop only for
      * calls Python would also defer (callee not a finished
@@ -11614,6 +11620,18 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
                  * emit a wrong tree). */
         const char *name = PD_SVAL(1);
         int ln = PD_LINENO(1);
+        /* Fresh-implicit detection: Python access_id creates a brand-new
+         * implicit entry with TYPE.unknown (== TYPE.auto) regardless of
+         * default_class (symboltable.py:349-350); p_id_expr then promotes it
+         * unknown→DEFAULT_TYPE and warns (zxbparser.py:2649-2651). The C
+         * access_id shortcuts a default_class==CLASS_var fresh entry straight
+         * to DEFAULT_TYPE (compiler.c:1246-1247), so its type is no longer
+         * TYPE_unknown by the time we reach the promotion test below — the
+         * read-side W100 is silently lost (label_decl2's `IF a > 10`). Sense
+         * the fresh case here (the entry did not exist before resolution) and
+         * reproduce the warning, exactly as the oracle emits it. */
+        bool fresh_implicit =
+            (symboltable_lookup(p->cs->symbol_table, name) == NULL);
         AstNode *entry = symboltable_access_id(p->cs->symbol_table, p->cs,
                                                name, ln, NULL, CLASS_var);
         if (!entry) {
@@ -11629,6 +11647,17 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
             TypeInfo *promoted = type_new_ref(p->cs, p->cs->default_type, ln, true);
             entry->type_ = promoted;
             warn_implicit_type(p->cs, ln, name, p->cs->default_type->name);
+        } else if (fresh_implicit && entry->u.id.class_ == CLASS_var &&
+                   entry->type_ && entry->type_->final_type &&
+                   p->cs->default_type->final_type &&
+                   entry->type_->final_type->basic_type ==
+                       p->cs->default_type->final_type->basic_type) {
+            /* Brand-new implicit scalar that the C access_id already typed as
+             * DEFAULT_TYPE — emit the deferred read-side W100. A $/%-sigil id
+             * carries an explicit type and is never fresh-DEFAULT_TYPE here. */
+            size_t nlen = strlen(name);
+            if (!(nlen > 0 && is_deprecated_suffix(name[nlen - 1])))
+                warn_implicit_type(p->cs, ln, name, p->cs->default_type->name);
         }
         if (entry->u.id.class_ == CLASS_array) {
             /* p_id_expr array branch: NOT in a LET assignment -> error +

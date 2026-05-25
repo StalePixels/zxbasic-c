@@ -1577,6 +1577,37 @@ static int na_find(const char **names, int n, const char *name) {
 
 bool check_call_arguments(CompilerState *cs, AstNode *call,
                           AstNode *entry, const char *id_) {
+    /* api/check.py:97-98 — the FIRST thing check_call_arguments does is
+     * `if not SYMBOL_TABLE.check_is_declared(id_, lineno, "function"):
+     *      return False`. check_is_declared (symboltable.py:163-174) does
+     * `result = get_entry(id_)` and rejects when `result is None or not
+     * result.declared`. In Python's FUNCTION_CALLS path id_ is
+     * call.entry.original_name, so get_entry(id_) resolves to the SAME
+     * entry already bound to the call (call.entry) — its `.declared` flag is
+     * the authoritative answer. The C deferred loop already resolved that
+     * entry (global lookup + callee fallback) and passes it here; a nested
+     * SUB/FUNCTION moved to global scope is reachable via the call's
+     * resolved callee even when a bare-name re-lookup at post-parse global
+     * scope is not (the paramstr5 forward-nested-sub case — a re-lookup
+     * here regressed it to a FALSE_POS). So consult the resolved entry's
+     * `declared` flag directly, the faithful analogue of
+     * get_entry(original_name).declared.
+     *
+     * Rejecting fires for an auto-declared (CLASS_unknown, declared=False)
+     * callee — an undeclared `f$(s)` string-FUNCCALL or a bare `MYLABEL`
+     * paren-less call resolving to no function/array/string-var — emitting
+     *   `Undeclared function "<id_>"`  (rc 1),
+     * exactly as the oracle does. Declared/forward-declared functions, subs
+     * (including forward-nested), and builtins all pass (declared==True),
+     * keeping FALSE_POS at 0. The message reports cs->current_file, already
+     * swapped to the call site's file by the deferred loop (so an #include'd
+     * call attributes to the included file, like Python's
+     * fname=entry.filename). */
+    if (entry == NULL || entry->tag != AST_ID || !entry->u.id.declared) {
+        zxbc_error(cs, call->lineno, "Undeclared function \"%s\"", id_);
+        return false;
+    }
+
     /* entry.ref.params — the callee PARAMLIST (api/check.py:106),
      * stamped on the shared function ID at FUNCDECL-build time
      * (parser.c id_node->u.id.params). It is NULL for a builtin /
@@ -1848,7 +1879,12 @@ bool check_pending_calls(CompilerState *cs) {
             char *saved_file = cs->current_file;
             if (call->u.call.filename)
                 cs->current_file = call->u.call.filename;
-            bool ok = check_call_arguments(cs, call, entry, name);
+            /* Python passes call.entry.original_name (api/check.py:194) —
+             * the sigil-bearing name — to check_call_arguments, so the
+             * `Undeclared function "<id>"` message prints `f$` not `f`. */
+            const char *call_id = call->u.call.original_name
+                                      ? call->u.call.original_name : name;
+            bool ok = check_call_arguments(cs, call, entry, call_id);
             cs->current_file = saved_file;
             if (!ok) {
                 result = false;

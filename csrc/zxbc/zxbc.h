@@ -308,6 +308,15 @@ struct AstNode {
              * (funcnoparm). The pre-existing R2/R11 firing is
              * unaffected by this flag. */
             bool callee_inline;
+            /* The callee's ORIGINAL name as written at the call site,
+             * preserving the deprecated sigil ($, %, etc.) — the faithful
+             * analogue of Python ID.original_name (symbols/id_/_id.py:57),
+             * which check_pending_calls passes to check_call_arguments
+             * (api/check.py:194). The resolved callee ID node stores the
+             * sigil-STRIPPED name; the undeclared-function diagnostic must
+             * print the sigil-bearing original (e.g. `f$`, not `f`).
+             * NULL == fall back to the callee ID's stripped name. */
+            char *original_name;
         } call;
         /* AST_VARDECL: child[0] = ID, child[1] = initializer (or NULL) */
         /* AST_ARRAYDECL: child[0] = ID, child[1] = BOUNDLIST */
