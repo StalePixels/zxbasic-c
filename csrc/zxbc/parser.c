@@ -1434,6 +1434,8 @@ static AstNode *parse_call_or_array(Parser *p, const char *name, int lineno, boo
 static AstNode *make_call_node(Parser *p, const char *name, int lineno,
                                AstNode *arglist, bool expr_context,
                                bool addressof_ctx, bool next_is_lp);
+static AstNode *make_builtin_node(Parser *p, AstNode *n, AstNode *arg,
+                                  BTokenType kw, int lineno);
 static AstNode *parse_arglist(Parser *p);
 
 /* Forward decls used by the SymbolARRAYACCESS.offset port (computed at
@@ -1805,6 +1807,19 @@ static AstNode *parse_builtin_func(Parser *p, const char *fname, BTokenType kw) 
         }
     }
 
+    return make_builtin_node(p, n, arg, kw, lineno);
+}
+
+/* Builtin-node build core (extracted from parse_builtin_func so the Phase-D
+ * single-arg builtin-bexpr reduce-actions build the byte-for-byte same node).
+ * Takes the AST_BUILTIN `n` (fname set, arg attached as child[0]) + `arg`
+ * (== n->children[0]) + `kw` + `lineno`. Performs the per-builtin constant
+ * folds (LEN/INT/ABS/STR/VAL/SGN/trig math) and result-type assignment, and
+ * returns the final node (possibly a folded NUMBER/STRING, or `n`). Faithful
+ * to the p_len/p_expr_int/p_abs/p_str/p_val/p_sgn/p_expr_trig/... actions.
+ * Behaviour-preserving extraction. */
+static AstNode *make_builtin_node(Parser *p, AstNode *n, AstNode *arg,
+                                  BTokenType kw, int lineno) {
     /* p_len (zxbparser.py:3381-3394) — full faithful port of the LEN
      * production, in Python's exact branch order:
      *
@@ -8248,6 +8263,18 @@ static AstNode *pd_make_block2(Parser *p, AstNode *a, AstNode *b) {
     return blk;
 }
 
+/* Single-arg parenless builtin (`KW bexpr`): build the AST_BUILTIN(fname) with
+ * the pre-built arg as child[0], then make_builtin_node (the extracted node-
+ * build core does the per-builtin fold/type). */
+static AstNode *pd_builtin1(Parser *p, const char *fname, BTokenType kw,
+                           AstNode *arg, int lineno) {
+    if (!arg) return NULL;
+    AstNode *n = ast_new(p->cs, AST_BUILTIN, lineno);
+    n->u.builtin.fname = arena_strdup(&p->cs->arena, fname);
+    ast_add_child(p->cs, n, arg);
+    return make_builtin_node(p, n, arg, kw, lineno);
+}
+
 /* make_sub_call (SymbolCALL.make_node, symbols/call.py:90-112) — the
  * parenless/with-args statement-level sub call. access_func resolves/auto-
  * declares the callee (child[0]); arglist is child[1]; FUNCCALL->CALL retag;
@@ -9398,6 +9425,42 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
     }
 
     /* ---- leaf expressions ---- */
+    /* ---- single-arg parenless builtins (KW bexpr) via make_builtin_node ---- */
+    case 376: r = pd_builtin1(p, "USR",  BTOK_USR,  PD_NODE(2), PD_LINENO(1)); break;
+    case 379: r = pd_builtin1(p, "PEEK", BTOK_PEEK, PD_NODE(2), PD_LINENO(1)); break;
+    case 381: r = pd_builtin1(p, "IN",   BTOK_IN,   PD_NODE(2), PD_LINENO(1)); break;
+    case 386: r = pd_builtin1(p, "LEN",  BTOK_LEN,  PD_NODE(2), PD_LINENO(1)); break;
+    case 394: r = pd_builtin1(p, "VAL",  BTOK_VAL,  PD_NODE(2), PD_LINENO(1)); break;
+    case 395: r = pd_builtin1(p, "CODE", BTOK_CODE, PD_NODE(2), PD_LINENO(1)); break;
+    case 396: r = pd_builtin1(p, "SGN",  BTOK_SGN,  PD_NODE(2), PD_LINENO(1)); break;
+    case 407: r = pd_builtin1(p, "INT",  BTOK_INT,  PD_NODE(2), PD_LINENO(1)); break;
+    case 408: r = pd_builtin1(p, "ABS",  BTOK_ABS,  PD_NODE(2), PD_LINENO(1)); break;
+    case 397: { /* bexpr : math_fn bexpr (p_expr_trig) — math_fn (398-406)
+                 * carries the fn name; kw mapped from it. */
+        PdId *mf = (PdId *)rhs[0].value;       /* {name, kw} */
+        r = pd_builtin1(p, mf->name, (BTokenType)mf->lineno, PD_NODE(2), PD_LINENO(1));
+        break;
+    }
+    case 398: case 399: case 400: case 401: case 402:
+    case 403: case 404: case 405: case 406: { /* math_fn : SIN|COS|...|SQR */
+        const char *nm; BTokenType k;
+        switch (prodno) {
+            case 398: nm="SIN"; k=BTOK_SIN; break;
+            case 399: nm="COS"; k=BTOK_COS; break;
+            case 400: nm="TAN"; k=BTOK_TAN; break;
+            case 401: nm="ASN"; k=BTOK_ASN; break;
+            case 402: nm="ACS"; k=BTOK_ACS; break;
+            case 403: nm="ATN"; k=BTOK_ATN; break;
+            case 404: nm="LN";  k=BTOK_LN;  break;
+            case 405: nm="EXP"; k=BTOK_EXP; break;
+            default:  nm="SQR"; k=BTOK_SQR; break;
+        }
+        /* carry name + kw (kw stashed in the PdId.lineno field). */
+        PdId *mf = pd_new_id(p, nm, (int)k);
+        *out = mf; *out_lineno = PD_LINENO(1);
+        return true;
+    }
+
     case 280: /* bexpr : NUMBER */
         r = make_number(p, PD_NUM(1), PD_LINENO(1), NULL);
         break;
