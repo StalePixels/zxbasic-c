@@ -1528,6 +1528,53 @@ static AstNode *strslice_fold(Parser *p, AstNode *slice) {
     return slice;
 }
 
+/* make_strslice (zxbparser.py:243-245 -> STRSLICE.make_node, strslice.py:
+ * 59-111): build a string-slice node from a string base `s` and (lower,
+ * upper) bounds. Faithful port of make_node:
+ *   - any of s/lower/upper NULL -> NULL;
+ *   - check_type(string, s): the base must be string, else "Wrong expression
+ *     type '<t>'. Expected 'string'" at lineno + NULL;
+ *   - each bound := TYPECAST(STR_INDEX_TYPE=uinteger,
+ *                            MINUS(bound, NUMBER(OPTIONS.string_base)));
+ *   - then strslice_fold (the constant clamp / empty / const-string / no-op
+ *     full-slice tail).
+ * This is the read-side STRSLICE builder the substr-consuming reduces share;
+ * it produces the SAME [s, lower_cast, upper_cast] (or folded) tree the
+ * production parser's inline `name$(from TO to)` path yields (parser.c:
+ * 2656-2814), so the engine matches the production C-vs-C. `lower`/`upper`
+ * are the substr-tuple bounds (already uinteger-pre-cast by the substr
+ * reduces, mirroring the `substr` non-terminal at zxbparser.py:2600-2638). */
+static AstNode *make_strslice_node(Parser *p, AstNode *s, AstNode *lower,
+                                   AstNode *upper, int lineno) {
+    if (!s || !lower || !upper) return NULL;
+    /* check_type(lineno, Type.string, s) (strslice.py:70). */
+    if (!type_is_string(s->type_)) {
+        const TypeInfo *sft = (s->type_ && s->type_->final_type)
+                                  ? s->type_->final_type : s->type_;
+        const char *stn = (sft && sft->tag == AST_BASICTYPE)
+                              ? basictype_to_string(sft->basic_type) : "unknown";
+        zxbc_error(p->cs, lineno,
+                   "Wrong expression type '%s'. Expected 'string'", stn);
+        return NULL;
+    }
+    TypeInfo *str_idx = p->cs->symbol_table->basic_types[TYPE_uinteger];
+    AstNode *lo_sub = make_binary_node(
+        p->cs, "MINUS", lower,
+        make_number(p, p->cs->opts.string_base, lineno, NULL), lineno, NULL);
+    AstNode *lo = make_typecast(p->cs, str_idx, lo_sub, lineno);
+    AstNode *up_sub = make_binary_node(
+        p->cs, "MINUS", upper,
+        make_number(p, p->cs->opts.string_base, lineno, NULL), lineno, NULL);
+    AstNode *up = make_typecast(p->cs, str_idx, up_sub, lineno);
+    if (!lo || !up) return NULL;  /* make_node:86-87 */
+    AstNode *slice = ast_new(p->cs, AST_STRSLICE, lineno);
+    ast_add_child(p->cs, slice, s);
+    ast_add_child(p->cs, slice, lo);
+    ast_add_child(p->cs, slice, up);
+    slice->type_ = p->cs->symbol_table->basic_types[TYPE_string];
+    return strslice_fold(p, slice);
+}
+
 /* Build the LETARRAYSUBSTR lvalue for a string-ARRAY element substring
  * assignment — the single-paren-group / comma-subscript family that
  * Python parses with its dedicated p_let_arr_substr* productions
@@ -8203,6 +8250,15 @@ typedef struct PdElse {
     int n;
 } PdElse;
 
+/* The substr value (the `substr` non-terminal) — Python carries a tuple
+ * `(lower, upper)` of uinteger-pre-cast bounds (zxbparser.py:2600-2638). The
+ * string-slice-consuming reduces (288/289/etc.) pass these to
+ * make_strslice_node. */
+typedef struct PdSubstr {
+    AstNode *lower;
+    AstNode *upper;
+} PdSubstr;
+
 /* The elseif_expr value — Python carries a tuple `(label_, cond_)`
  * (zxbparser.py:1431-1442). */
 typedef struct PdElseif {
@@ -10200,6 +10256,116 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
     case 285: /* string : STRC */
         r = make_string(p, PD_SVAL(1) ? PD_SVAL(1) : "", PD_LINENO(1));
         break;
+
+    /* ---- substr non-terminal (p_subind_*, zxbparser.py:2600-2638) ----
+     * Carry (lower, upper), each pre-typecast to uinteger. The string-slice
+     * consumers (288/289/290) pass these to make_strslice_node. */
+    case 291: { /* substr : LP expr TO expr RP */
+        PdSubstr *ss = arena_alloc(&p->cs->arena, sizeof(PdSubstr));
+        TypeInfo *ui = st->basic_types[TYPE_uinteger];
+        ss->lower = make_typecast(p->cs, ui, PD_NODE(2), PD_LINENO(1));
+        ss->upper = make_typecast(p->cs, ui, PD_NODE(4), PD_LINENO(3));
+        /* A bound that can't convert to uinteger (e.g. a string-typed bound
+         * via deprecated-suffix sharing, `a$(a TO b)`, fixtures 50/51) nulls
+         * the tuple here — Python-faithful (make_typecast -> None propagates
+         * to make_strslice -> None). The OLD production emits the same error
+         * but KEEPS the raw bound child (a recursive-descent error-recovery
+         * divergence), so the trees diverge on these error files -> flag
+         * UNWIRED (Phase-E-reconcile: the engine matches PYTHON at the swap). */
+        if (!ss->lower || !ss->upper) {
+            c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
+        }
+        *out = ss; *out_lineno = PD_LINENO(1);
+        return true;
+    }
+    case 292: { /* substr : LP TO expr RP -> lower=NUMBER(0), upper=expr */
+        PdSubstr *ss = arena_alloc(&p->cs->arena, sizeof(PdSubstr));
+        TypeInfo *ui = st->basic_types[TYPE_uinteger];
+        ss->lower = make_typecast(p->cs, ui,
+                        make_number(p, 0, PD_LINENO(2), NULL), PD_LINENO(1));
+        ss->upper = make_typecast(p->cs, ui, PD_NODE(3), PD_LINENO(2));
+        if (!ss->lower || !ss->upper) { /* see case 291 — Phase-E-reconcile */
+            c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
+        }
+        *out = ss; *out_lineno = PD_LINENO(1);
+        return true;
+    }
+    case 293: { /* substr : LP expr TO RP -> lower=expr, upper=NUMBER(65534) */
+        PdSubstr *ss = arena_alloc(&p->cs->arena, sizeof(PdSubstr));
+        TypeInfo *ui = st->basic_types[TYPE_uinteger];
+        ss->lower = make_typecast(p->cs, ui, PD_NODE(2), PD_LINENO(1));
+        ss->upper = make_typecast(p->cs, ui,
+                        make_number(p, 65534, PD_LINENO(4), NULL), PD_LINENO(4));
+        if (!ss->lower || !ss->upper) { /* see case 291 — Phase-E-reconcile */
+            c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
+        }
+        *out = ss; *out_lineno = PD_LINENO(1);
+        return true;
+    }
+    case 294: { /* substr : LP TO RP -> lower=NUMBER(0), upper=NUMBER(65534) */
+        PdSubstr *ss = arena_alloc(&p->cs->arena, sizeof(PdSubstr));
+        TypeInfo *ui = st->basic_types[TYPE_uinteger];
+        ss->lower = make_typecast(p->cs, ui,
+                        make_number(p, 0, PD_LINENO(2), NULL), PD_LINENO(1));
+        ss->upper = make_typecast(p->cs, ui,
+                        make_number(p, 65534, PD_LINENO(3), NULL), PD_LINENO(2));
+        *out = ss; *out_lineno = PD_LINENO(1);
+        return true;
+    }
+
+    /* ---- string-slice reads (make_strslice_node) ---- */
+    case 288: { /* string : ID substr (p_expr_id_substr): CONST-string fast
+                 * path (get_entry token==CONST) does NOT mark accessed; else
+                 * access_var(default_type=string) + mark accessed. */
+        const char *name = PD_SVAL(1);
+        int ln = PD_LINENO(1);
+        PdSubstr *ss = (PdSubstr *)rhs[1].value;
+        if (!ss) { r = NULL; break; }
+        AstNode *entry = symboltable_get_entry(p->cs->symbol_table, name);
+        if (entry && entry->tag == AST_ID && type_is_string(entry->type_) &&
+            entry->u.id.class_ == CLASS_const) {
+            r = make_strslice_node(p, entry, ss->lower, ss->upper, ln);
+            break;
+        }
+        entry = symboltable_access_var(p->cs->symbol_table, p->cs, name, ln,
+                                       st->basic_types[TYPE_string]);
+        if (!entry) { r = NULL; break; }  /* p[0] = None */
+        mark_label_accessed(entry);       /* mark_entry_as_accessed */
+        r = make_strslice_node(p, entry, ss->lower, ss->upper, ln);
+        break;
+    }
+    case 289: { /* string : string substr (p_string_substr) */
+        AstNode *base = PD_NODE(1);
+        PdSubstr *ss = (PdSubstr *)rhs[1].value;
+        if (!base || !ss) { r = NULL; break; }
+        r = make_strslice_node(p, base, ss->lower, ss->upper, PD_LINENO(1));
+        break;
+    }
+    case 290: { /* string : LP expr RP substr (p_string_expr_lp): the LP-expr
+                 * base must be string, else "Expected a string type
+                 * expression. Got %s type instead" at the lexer line, p[0]=None.
+                 * (zxbparser.py:2588-2597, uses p.lexer.lineno.) */
+        AstNode *base = PD_NODE(2);
+        PdSubstr *ss = (PdSubstr *)rhs[3].value;
+        if (!base || !ss) { r = NULL; break; }
+        if (!type_is_string(base->type_)) {
+            /* Python errors + None (zxbparser.py:2590-2595). The OLD
+             * production instead builds a malformed NESTED STRSLICE over the
+             * non-string base (a recursive-descent divergence), so the trees
+             * diverge on this error file -> flag UNWIRED (Phase-E-reconcile:
+             * the engine matches PYTHON). substr_expr_err. */
+            const TypeInfo *bft = (base->type_ && base->type_->final_type)
+                                      ? base->type_->final_type : base->type_;
+            const char *btn = (bft && bft->tag == AST_BASICTYPE)
+                                  ? basictype_to_string(bft->basic_type) : "unknown";
+            zxbc_error(p->cs, p->lexer.lineno,
+                       "Expected a string type expression. Got %s type instead", btn);
+            c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
+            r = NULL; break;
+        }
+        r = make_strslice_node(p, base, ss->lower, ss->upper, p->lexer.lineno);
+        break;
+    }
     case 297: /* expr : bexpr */
         r = PD_NODE(1);
         break;
