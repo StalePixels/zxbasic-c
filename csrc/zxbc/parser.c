@@ -9236,6 +9236,22 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         *out_lineno = PD_LINENO(1);
         return true;
     }
+    case 247: case 248: case 249: case 250: case 251:
+    case 252: case 253: case 254: { /* numbertype : <basic numeric type>
+                                     * (p_numbertype) -> make_type. */
+        BasicType bt =
+            (prodno == 247) ? TYPE_byte :
+            (prodno == 248) ? TYPE_ubyte :
+            (prodno == 249) ? TYPE_integer :
+            (prodno == 250) ? TYPE_uinteger :
+            (prodno == 251) ? TYPE_long :
+            (prodno == 252) ? TYPE_ulong :
+            (prodno == 253) ? TYPE_fixed : TYPE_float;
+        TypeInfo *t = type_new_ref(p->cs, st->basic_types[bt], PD_LINENO(1), false);
+        *out = t;
+        *out_lineno = PD_LINENO(1);
+        return true;
+    }
     case 358: /* typedef : <empty> — NULL so dim_build_scalar infers (matches
                * the production parser, where parse_typedef returns NULL for no
                * AS clause). had_as_clause is derived as (typedef != NULL). */
@@ -9520,6 +9536,87 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
     case 396: r = pd_builtin1(p, "SGN",  BTOK_SGN,  PD_NODE(2), PD_LINENO(1)); break;
     case 407: r = pd_builtin1(p, "INT",  BTOK_INT,  PD_NODE(2), PD_LINENO(1)); break;
     case 408: r = pd_builtin1(p, "ABS",  BTOK_ABS,  PD_NODE(2), PD_LINENO(1)); break;
+
+    /* ---- LBOUND/UBOUND (382-385, p_expr_lbound / p_expr_lbound_expr) ---- */
+    case 382: case 383: { /* LBOUND|UBOUND LP ARRAY_ID RP (no dim) */
+        const char *fn = (prodno == 382) ? "LBOUND" : "UBOUND";
+        const char *aname = PD_SVAL(3);
+        int aln = PD_LINENO(3);
+        TypeInfo *uint_t = st->basic_types[TYPE_uinteger];
+        AstNode *entry = symboltable_access_array(p->cs->symbol_table, p->cs, aname, aln, NULL);
+        if (!entry) { r = NULL; break; }
+        mark_label_accessed(entry); /* mark_entry_as_accessed */
+        AstNode *bl = entry->u.id.arr_boundlist;
+        int nbounds = bl ? bl->child_count : 0;
+        if (entry->u.id.scope == SCOPE_parameter) {
+            AstNode *bn = ast_new(p->cs, AST_BUILTIN, PD_LINENO(1));
+            bn->u.builtin.fname = arena_strdup(&p->cs->arena, fn);
+            ast_add_child(p->cs, bn, entry);
+            ast_add_child(p->cs, bn, make_number(p, 0, aln, uint_t));
+            bn->type_ = uint_t;
+            r = bn;
+        } else {
+            r = make_number(p, nbounds, aln, uint_t);
+        }
+        break;
+    }
+    case 384: case 385: { /* LBOUND|UBOUND LP ARRAY_ID COMMA expr RP (with dim) */
+        const char *fn = (prodno == 384) ? "LBOUND" : "UBOUND";
+        const char *aname = PD_SVAL(3);
+        int aln = PD_LINENO(3);
+        AstNode *expr = PD_NODE(5);
+        if (!expr) { r = NULL; break; }
+        TypeInfo *uint_t = st->basic_types[TYPE_uinteger];
+        AstNode *entry = symboltable_access_array(p->cs->symbol_table, p->cs, aname, aln, NULL);
+        if (!entry) { r = NULL; break; }
+        mark_label_accessed(entry);
+        AstNode *num = make_typecast(p->cs, uint_t, expr, PD_LINENO(6));
+        if (!num) { r = NULL; break; }
+        AstNode *bl = entry->u.id.arr_boundlist;
+        int nbounds = bl ? bl->child_count : 0;
+        bool is_lb = (prodno == 384);
+        if (check_is_number(num) &&
+            (entry->u.id.scope == SCOPE_local || entry->u.id.scope == SCOPE_global)) {
+            long val = (long)num->u.number.value;
+            if (val < 0 || val > nbounds) {
+                zxbc_error(p->cs, PD_LINENO(6), "Dimension out of range");
+                r = NULL; break;
+            }
+            if (val == 0) r = make_number(p, nbounds, aln, uint_t);
+            else {
+                AstNode *bd = bl->children[val - 1];
+                long lo = (bd && bd->child_count > 0 && bd->children[0]->tag == AST_NUMBER)
+                              ? (long)bd->children[0]->u.number.value : 0;
+                long hi = (bd && bd->child_count > 1 && bd->children[1]->tag == AST_NUMBER)
+                              ? (long)bd->children[1]->u.number.value : 0;
+                r = make_number(p, is_lb ? lo : hi, aln, uint_t);
+            }
+        } else {
+            if (is_lb) entry->u.id.lbound_used = true;
+            else entry->u.id.ubound_used = true;
+            AstNode *bn = ast_new(p->cs, AST_BUILTIN, PD_LINENO(1));
+            bn->u.builtin.fname = arena_strdup(&p->cs->arena, fn);
+            ast_add_child(p->cs, bn, entry);
+            ast_add_child(p->cs, bn, num);
+            bn->type_ = uint_t;
+            r = bn;
+        }
+        break;
+    }
+    case 380: { /* PEEK LP numbertype COMMA expr RP (p_expr_peektype_):
+                 * make_builtin("PEEK", typecast(uinteger, expr), type_=numbertype) */
+        TypeInfo *ptype = (TypeInfo *)rhs[2].value;  /* numbertype */
+        AstNode *expr = PD_NODE(5);
+        if (!expr) { r = NULL; break; }
+        AstNode *cast = make_typecast(p->cs, st->basic_types[TYPE_uinteger], expr, PD_LINENO(4));
+        AstNode *bn = ast_new(p->cs, AST_BUILTIN, PD_LINENO(1));
+        bn->u.builtin.fname = arena_strdup(&p->cs->arena, "PEEK");
+        if (cast) ast_add_child(p->cs, bn, cast);
+        bn->type_ = ptype;
+        r = bn;
+        break;
+    }
+
     case 397: { /* bexpr : math_fn bexpr (p_expr_trig) — math_fn (398-406)
                  * carries the fn name; kw mapped from it. */
         PdId *mf = (PdId *)rhs[0].value;       /* {name, kw} */
