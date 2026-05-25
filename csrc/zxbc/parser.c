@@ -10490,11 +10490,16 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
          *     LETARRAY[lv, RAW expr] (let_array_substr13, sys_letarrsubstr0..2).
          * (2) Otherwise (numeric full-element write, OR a string full-element
          *     write `a$(b) = s` where bounds == nargs): make_call_node
-         *     (expr_context=false) → ARRAYACCESS → LETARRAY[arr, RAW expr].
+         *     (expr_context=false) → ARRAYACCESS → LETARRAY[arr, typecast expr].
          *
-         * RAW expr (no typecast) in both cases, matching the production's
-         * LET-statement path (parser.c:5008-5010) — a documented byte-clean
-         * divergence from Python's typecast; C-vs-C is what astcmp validates. */
+         * Python p_arr_assignment (zxbparser.py:1207-1211) casts the rvalue to
+         * the array ELEMENT type: `expr = make_typecast(arr.type_, expr)`. The
+         * substring-pop sub-case (1) returns BEFORE that cast (:1204), so only
+         * the ARRAYACCESS path (2) is typecast — applied below after `arr` is
+         * known. (The earlier "RAW expr, byte-clean divergence" assumption held
+         * only while every owned fixture had matching element/rvalue types; it
+         * dropped a real ubyte→byte conversion `push af / pop af` at -O0 —
+         * let_array_local_const0: `dirs() as byte` assigned a ubyte global.) */
         AstNode *arr = NULL;
         if (aentry && aentry->tag == AST_ID &&
             aentry->u.id.class_ == CLASS_array &&
@@ -10526,9 +10531,16 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         }
         if (aentry && aentry->u.id.class_ == CLASS_array && aentry->u.id.addr_expr)
             aentry->u.id.accessed = true;
+        /* p_arr_assignment :1211 — expr = make_typecast(arr.type_, expr).
+         * Cast the rvalue to the array ELEMENT type for the ARRAYACCESS path
+         * (the substr-pop sub-case (1) returned before Python's cast). For a
+         * STRSLICE substr-lvalue, leave the RAW expr (the production's Shape-A
+         * baseline; Python's substr path never reaches the cast). */
+        if (arr && arr->tag == AST_ARRAYACCESS && aexpr)
+            aexpr = make_typecast(p->cs, arr->type_, aexpr, aln);
         r = make_sentence_node(p, "LETARRAY", aln);
         ast_add_child(p->cs, r, arr);  /* no-op when NULL (error path) */
-        ast_add_child(p->cs, r, aexpr); /* RAW expr, matching the production */
+        ast_add_child(p->cs, r, aexpr); /* typecast expr (ARRAYACCESS) / RAW (substr) */
         break;
     }
     case 82: case 83: { /* statement : [LET] ID substr EQ expr (p_str_assign).
