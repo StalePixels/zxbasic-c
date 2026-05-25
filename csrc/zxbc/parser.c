@@ -11198,18 +11198,28 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         r = NULL;
         break;
     }
-    case 161: { /* statement : READ arguments (p_read): per-target validation +
-                 * READ-sentence block via the shared read_build.
-                 * DEFERRED to UNWIRED: p_read returns make_block(*reads), which
-                 * Python flattens at `statements : statement` but the PRODUCTION
-                 * parser keeps NESTED (BLOCK[BLOCK[READ]]) in a loop body — same
-                 * byte-clean nesting divergence class as label-in-body; plus the
-                 * error-target cases (read3/6-9: `READ x(5)` with x undeclared)
-                 * drop/keep the empty READ sentence differently. Wire alongside
-                 * the block-nesting reconciliation (Phase E). */
-        c->unwired = true;
-        if (c->unwired_prod == 0) c->unwired_prod = prodno;
-        r = make_nop(p);
+    case 161: { /* statement : READ arguments (p_read): make_block(*reads),
+                 * each read = SENTENCE("READ", entry). Build via the shared
+                 * read_build (per-target validation: array -> "Cannot read..",
+                 * non-var/non-arrayaccess -> "Can only read..", else the READ).
+                 * Python rebuilds an ARRAYLOAD target as a fresh ARRAYACCESS;
+                 * read_build accepts AST_ARRAYACCESS directly (the engine's
+                 * argument:expr builds the element access as ARRAYACCESS). */
+        AstNode *al = (AstNode *)rhs[1].value;
+        if (!al) { r = NULL; break; }  /* p[2] None -> p[0] None */
+        int n = al->child_count;
+        AstNode **targets = (n > 0)
+            ? arena_alloc(&p->cs->arena, (size_t)n * sizeof(AstNode *)) : NULL;
+        bool err_target = false;
+        for (int i = 0; i < n; i++) {
+            AstNode *a = al->children[i];
+            AstNode *t = (a && a->tag == AST_ARGUMENT && a->child_count > 0)
+                             ? a->children[0] : a;
+            if (!t) { err_target = true; break; }  /* arg.value None -> p[0]=None */
+            targets[i] = t;
+        }
+        if (err_target) { r = NULL; break; }
+        r = read_build(p, targets, n, PD_LINENO(1));
         break;
     }
     case 299: case 301: { /* func_call : ID arg_list | ARRAY_ID arg_list
