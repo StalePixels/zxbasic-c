@@ -8406,21 +8406,55 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         memset(fd, 0, sizeof(*fd));
         fd->name_raw = arena_strdup(&p->cs->arena, name_raw);
         fd->lineno = ln; fd->is_function = is_func; fd->conv = conv;
-        AstNode *pre = symboltable_lookup(p->cs->symbol_table, fname);
-        if (pre) {
-            /* pre-existing/forwarded entry — declare_func reuse branch not yet
-             * ported; defer (UNWIRED). Still enter scope so the parse balances
-             * and the body reduces cleanly. */
+        /* Sigil-typed function names (`test$`) set the return type from the
+         * suffix (production parser.c:7230-7239 fn_suffix_type) — not yet
+         * ported here, so defer (UNWIRED) to avoid a wrong FUNCCALL type
+         * (sigilfunc). Still declare + enter scope so the body reduces and
+         * the parse stays balanced. */
+        bool fn_has_sigil = (fl > 0 && is_deprecated_suffix(name_raw[fl - 1]));
+        if (fn_has_sigil) {
             fd->rejected = true;
-            fd->id_node = pre;
             c->unwired = true;
             if (c->unwired_prod == 0) c->unwired_prod = prodno;
-        } else {
-            AstNode *id = symboltable_declare(p->cs->symbol_table, p->cs, fname, ln, cls);
-            id->u.id.declared = true;
-            id->u.id.convention = conv;
-            fd->id_node = id;
         }
+        AstNode *pre = symboltable_lookup(p->cs->symbol_table, fname);
+        AstNode *id;
+        if (pre) {
+            /* declare_func reuse branch (symboltable.py:728-741 / production
+             * parser.c:7471-7512): reuse the shared object; CLASS_unknown ->
+             * to_function; re-mangle "{current_namespace}_{name}" (literal '_'
+             * join). Then the duplicate / class-mismatch checks. */
+            id = pre;
+            if (id->u.id.class_ == CLASS_unknown)
+                id->u.id.class_ = cls;
+            const char *ns = p->cs->symbol_table->current_scope->namespace_;
+            if (!ns) ns = "";
+            size_t nl = strlen(fname), sl = strlen(ns);
+            char *m = arena_alloc(&p->cs->arena, sl + 1 + nl + 1);
+            memcpy(m, ns, sl); m[sl] = '_'; memcpy(m + sl + 1, fname, nl + 1);
+            id->u.id.mangled = m;
+            /* duplicate definition (a fully-defined, non-forwarded entry). */
+            if (id->u.id.declared && id->lineno != ln &&
+                (id->u.id.class_ == CLASS_function || id->u.id.class_ == CLASS_sub) &&
+                !id->u.id.forwarded) {
+                zxbc_error(p->cs, ln,
+                           "Duplicate function name '%s', previously defined at %d",
+                           fname, id->lineno);
+            }
+            /* class mismatch (e.g. SUB vs FUNCTION reuse). */
+            if (id->u.id.class_ != CLASS_unknown && id->u.id.class_ != cls) {
+                zxbc_error(p->cs, ln, "'%s' is a %s, not a %s", fname,
+                           symbolclass_to_string(id->u.id.class_),
+                           symbolclass_to_string(cls));
+            }
+        } else {
+            id = symboltable_declare(p->cs->symbol_table, p->cs, fname, ln, cls);
+        }
+        id->u.id.class_ = cls;
+        id->u.id.declared = true;
+        id->u.id.convention = conv;
+        id->lineno = ln;
+        fd->id_node = id;
         symboltable_enter_scope(p->cs->symbol_table, p->cs, fd->name_raw);
         vec_push(p->cs->function_level, fd->id_node);
         *out = fd;
@@ -8503,6 +8537,9 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         /* Empty bodies now match: the production body loop skips NOPs
          * (parser.c:7770), so an empty/inline-`:` function body is 0-child in
          * both paths (== Python's make_block()). */
+        /* p_funcdecl (zxbparser.py:2914): entry.ref.forwarded = False — the
+         * definition un-forwards a previously-DECLAREd entry. */
+        id_node->u.id.forwarded = false;
         AstNode *decl = ast_new(p->cs, AST_FUNCDECL, fd->lineno);
         ast_add_child(p->cs, decl, id_node);
         ast_add_child(p->cs, decl, fd->params);
