@@ -9301,15 +9301,13 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
                        * (p_for_sentence): append body make_block(p[2], p[3]);
                        * pop loop_stack. */
         AstNode *forsent = PD_NODE(1);
-        AstNode *body = pd_if_body(p, PD_NODE(2), PD_NODE(3));
+        /* p_for_sentence: body = make_block(p[2], p[3]) (program_co/body +
+         * label_next). make_block recursively flattens + drops nulls — use
+         * pd_make_block2 (the make_block port), NOT pd_if_body's one-level
+         * flatten, so a labelled body line matches PYTHON (the swap gate). */
+        AstNode *body = pd_make_block2(p, PD_NODE(2), PD_NODE(3));
         if (p->cs->loop_stack.len > 0) vec_pop(p->cs->loop_stack);
         if (!forsent || forsent->tag != AST_SENTENCE) { r = forsent; break; }
-        /* Body NOPs now skipped in the production loop too (batch 18); only the
-         * label-compound nesting still diverges — defer that. */
-        if (pd_block_has_label(body)) {
-            c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
-            r = make_nop(p); break;
-        }
         ast_add_child(p->cs, forsent, body);
         r = forsent;
         break;
