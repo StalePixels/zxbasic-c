@@ -9696,7 +9696,10 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
             c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
             r = make_nop(p); break;
         }
-        if (p->cs->opts.strict && td && td->implicit)
+        /* check_type_is_explicit (zxbparser.py:3118, strict-only): an array
+         * param with no explicit AS type (td==NULL == implicit) errors in
+         * strict mode. Array params carry no sigil (guarded above). */
+        if (p->cs->opts.strict && !td)
             err_undeclared_type(p->cs, id->lineno, pname);
         TypeInfo *ptype = td;
         if (!ptype) ptype = type_new_ref(p->cs, p->cs->default_type, id->lineno, true);
@@ -9722,8 +9725,14 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         TypeInfo *td = (TypeInfo *)rhs[1].value;   /* typedef (NULL = implicit) */
         AstNode *defval = (AstNode *)rhs[2].value; /* default_arg_value */
         const char *pname = id->name;
-        /* check_type_is_explicit (strict-only) */
-        if (p->cs->opts.strict && td && td->implicit)
+        /* check_type_is_explicit (zxbparser.py:3125-3126, strict-only): a param
+         * with no explicit AS type (engine's empty typedef 358 is NULL, ==
+         * Python's typedef.implicit) is an error in strict mode UNLESS it
+         * carries a deprecated sigil (which makes the type explicit). Matches
+         * the production parser.c:7366-7368 (strict4). */
+        size_t pn0 = strlen(pname);
+        bool has_sigil = pn0 > 0 && is_deprecated_suffix(pname[pn0 - 1]);
+        if (p->cs->opts.strict && !td && !has_sigil)
             err_undeclared_type(p->cs, id->lineno, pname);
         TypeInfo *ptype = td;
         if (!ptype)
