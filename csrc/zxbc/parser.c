@@ -3763,6 +3763,115 @@ static void apply_pragma_option(Parser *p, const char *opt_name,
     #undef NAME_IS
 }
 
+/* data_build — the DATA per-item static/FUNCPTR split + gl.DATAS append,
+ * extracted from parse_statement so the Phase-D `statement : DATA arguments`
+ * reduce (157) performs the byte-identical side effects. Faithful port of
+ * src/zxbc/zxbparser.py:1747-1772 p_data (the FUNCTION_LEVEL guard already
+ * checked by the caller's :1742-1745). `values` are the parsed value exprs (==
+ * the ARGUMENT.value of each p[2] child). DATA contributes NO AST node (Python
+ * never sets p[0]) — this returns void; the caller returns NULL. */
+static void data_build(Parser *p, AstNode **values, int nvalues,
+                       char *label_name, AstNode *label_entry, int ln) {
+    DataItem *items = arena_alloc(&p->cs->arena,
+        (size_t)nvalues * sizeof(DataItem));
+    int nitems = 0;
+    for (int ci = 0; ci < nvalues; ci++) {
+        AstNode *value = values[ci];
+        if (!value) continue;
+
+        /* :1749-1751  is_static(value) -> keep as a data item. */
+        if (check_is_static(value)) {
+            items[nitems].is_funcdecl = false;
+            items[nitems].node = value;
+            nitems++;
+            continue;
+        }
+
+        /* :1753  new_lbl = f"__DATA__FUNCPTR__{len(DATA_FUNCTIONS)}" */
+        char fnbuf[40];
+        snprintf(fnbuf, sizeof(fnbuf), "__DATA__FUNCPTR__%d",
+                 (int)p->cs->data_functions.len);
+
+        /* :1754-1762  make_func_declaration(new_lbl, lineno, type_=value.type_,
+         * class_=CLASS.function) on a fresh unique name -> new FUNCTION entry;
+         * fastcall, empty local scope. */
+        AstNode *func =
+            symboltable_declare(p->cs->symbol_table, p->cs,
+                                fnbuf, ln, CLASS_function);
+        if (!func)
+            continue;
+        func->u.id.declared = true;
+        func->type_ = value->type_;
+        func->u.id.convention = CONV_fastcall;
+        func->u.id.local_size = 0;
+        func->u.id.param_size = 0;
+        func->u.id.local_entries = NULL;
+        func->u.id.local_entries_count = 0;
+
+        /* :1765-1766  sent = make_sentence("RETURN", func, value);
+         *             func.ref.body = make_block(sent) */
+        AstNode *ret = make_sentence_node(p, "RETURN", ln);
+        ast_add_child(p->cs, ret, func);
+        ast_add_child(p->cs, ret, value);
+        AstNode *body = make_block_node(p, ln);
+        ast_add_child(p->cs, body, ret);
+
+        AstNode *decl = ast_new(p->cs, AST_FUNCDECL, ln);
+        AstNode *params = ast_new(p->cs, AST_PARAMLIST, ln);
+        ast_add_child(p->cs, decl, func);
+        ast_add_child(p->cs, decl, params);
+        ast_add_child(p->cs, decl, body);
+        decl->type_ = value->type_;
+        func->u.id.body = body;
+
+        /* :1764  gl.DATA_FUNCTIONS.append(func) */
+        vec_push(p->cs->data_functions, decl);
+
+        /* :1767  datas_.append(entry) */
+        items[nitems].is_funcdecl = true;
+        items[nitems].node = decl;
+        nitems++;
+    }
+
+    /* :1770  gl.DATAS.append(DataRef(label_, datas_)). */
+    DataRef *dr = arena_alloc(&p->cs->arena, sizeof(DataRef));
+    dr->label_name = label_name;
+    dr->label_entry = label_entry;
+    dr->items = items;
+    dr->item_count = nitems;
+    vec_push(p->cs->datas, dr);
+
+    /* :1771-1772  gl.DATA_PTR_CURRENT = current_data_label(). */
+    p->cs->data_ptr_current = current_data_label(p->cs);
+}
+
+/* read_build — the READ per-target validation + READ-sentence block, extracted
+ * from parse_statement so the Phase-D `statement : READ arguments` reduce (161)
+ * builds the byte-identical tree. Faithful port of zxbparser.py:1788-1835
+ * p_read, matched to the PRODUCTION's target check (the byte-clean baseline):
+ * an array ID -> "Cannot read", a non-ID/non-ARRAYACCESS -> "Can only read a
+ * variable or an array element". Returns the BLOCK of READ sentences. */
+static AstNode *read_build(Parser *p, AstNode **targets, int ntargets, int ln) {
+    p->cs->data_is_used = true;  /* gl.DATA_IS_USED = True */
+    AstNode *block = make_block_node(p, ln);
+    for (int i = 0; i < ntargets; i++) {
+        AstNode *s = make_sentence_node(p, "READ", ln);
+        AstNode *target = targets[i];
+        if (target) {
+            if (target->tag == AST_ID && target->u.id.class_ == CLASS_array) {
+                zxbc_error(p->cs, ln, "Cannot read '%s'. It's an array",
+                           target->u.id.name);
+            } else if (target->tag != AST_ID && target->tag != AST_ARRAYACCESS) {
+                zxbc_error(p->cs, ln,
+                           "Syntax error. Can only read a variable or an array element");
+            }
+            ast_add_child(p->cs, s, target);
+        }
+        ast_add_child(p->cs, block, s);
+    }
+    return block;
+}
+
 /* Parse a single statement */
 static AstNode *parse_statement(Parser *p) {
     int lineno = p->current.lineno;
@@ -4397,122 +4506,28 @@ static AstNode *parse_statement(Parser *p) {
             return NULL;
 
         /* :1742-1745  if gl.FUNCTION_LEVEL: error; p[0]=None; return.
-         * (The error itself matches Python p_data:1743; the C parser
-         * already emitted it pre-S5.8d — keep that behaviour but follow
-         * Python's early return: no DATAS append inside a function.) */
+         * (no DATAS append inside a function/sub). */
         if (p->cs->function_level.len > 0) {
             zxbc_error(p->cs, ln,
                        "DATA not allowed within Functions nor Subs");
             return NULL;
         }
 
-        /* :1747-1768  per-child static/FUNCPTR split. */
-        DataItem *items = arena_alloc(&p->cs->arena,
-            (size_t)s->child_count * sizeof(DataItem));
-        int nitems = 0;
-        for (int ci = 0; ci < s->child_count; ci++) {
-            AstNode *value = s->children[ci];
-
-            /* :1749-1751  is_static(value) -> keep as a data item. */
-            if (check_is_static(value)) {
-                items[nitems].is_funcdecl = false;
-                items[nitems].node = value;
-                nitems++;
-                continue;
-            }
-
-            /* :1753  new_lbl = f"__DATA__FUNCPTR__{len(DATA_FUNCTIONS)}" */
-            char fnbuf[40];
-            snprintf(fnbuf, sizeof(fnbuf), "__DATA__FUNCPTR__%d",
-                     (int)p->cs->data_functions.len);
-
-            /* :1754-1756  make_func_declaration(new_lbl, lineno,
-             *   type_=value.type_, class_=CLASS.function).
-             * declare_func on a fresh unique name -> a new FUNCTION
-             * entry; symboltable_declare is the faithful generic creator
-             * (mangled = "_"+name == "___DATA__FUNCPTR__N", scope global
-             * since DATA is top-level only). */
-            AstNode *func =
-                symboltable_declare(p->cs->symbol_table, p->cs,
-                                    fnbuf, ln, CLASS_function);
-            if (!func)
-                continue;
-            func->u.id.declared = true;          /* FUNCDECL.make_node */
-            func->type_ = value->type_;          /* entry.type_ = value.type_ */
-
-            /* :1759  func.ref.convention = CONVENTION.fastcall */
-            func->u.id.convention = CONV_fastcall;
-            /* :1760-1762  empty local scope -> locals_size 0, no locals. */
-            func->u.id.local_size = 0;
-            func->u.id.param_size = 0;
-            func->u.id.local_entries = NULL;
-            func->u.id.local_entries_count = 0;
-
-            /* :1765-1766  sent = make_sentence("RETURN", func, value);
-             *             func.ref.body = make_block(sent)
-             * tr_visit_return's len==2 path reads child[0]=func ref
-             * (.mangled -> "<mangled>__leave") and child[1]=value. */
-            AstNode *ret = make_sentence_node(p, "RETURN", ln);
-            ast_add_child(p->cs, ret, func);
-            ast_add_child(p->cs, ret, value);
-            AstNode *body = make_block_node(p, ln);
-            ast_add_child(p->cs, body, ret);
-
-            /* The FUNCDECL carrier the C FunctionTranslator drains
-             * (child[0]=ID, child[1]=PARAMLIST, child[2]=body), exactly
-             * the shape parse_sub_or_func_decl produces. */
-            AstNode *decl = ast_new(p->cs, AST_FUNCDECL, ln);
-            AstNode *params = ast_new(p->cs, AST_PARAMLIST, ln);
-            ast_add_child(p->cs, decl, func);
-            ast_add_child(p->cs, decl, params);
-            ast_add_child(p->cs, decl, body);
-            decl->type_ = value->type_;
-            func->u.id.body = body;
-
-            /* :1764  gl.DATA_FUNCTIONS.append(func) — the carrier the
-             * codegen merge feeds to FunctionTranslator. */
-            vec_push(p->cs->data_functions, decl);
-
-            /* :1767  datas_.append(entry) — the FUNCDECL is the item. */
-            items[nitems].is_funcdecl = true;
-            items[nitems].node = decl;
-            nitems++;
-        }
-
-        /* :1770  gl.DATAS.append(DataRef(label_, datas_)). */
-        DataRef *dr = arena_alloc(&p->cs->arena, sizeof(DataRef));
-        dr->label_name = label_name;
-        dr->label_entry = label_entry;
-        dr->items = items;
-        dr->item_count = nitems;
-        vec_push(p->cs->datas, dr);
-
-        /* :1771-1772  gl.DATA_PTR_CURRENT = current_data_label(). */
-        p->cs->data_ptr_current = current_data_label(p->cs);
-
+        data_build(p, s->children, s->child_count, label_name, label_entry, ln);
         return NULL;
     }
 
     /* READ */
     if (match(p, BTOK_READ)) {
         int ln = p->previous.lineno;
-        p->cs->data_is_used = true;  /* Track that READ is used (matches Python) */
-        AstNode *block = make_block_node(p, ln);
+        AstNode *targets[256];
+        int nt = 0;
         do {
-            AstNode *s = make_sentence_node(p, "READ", ln);
             AstNode *target = parse_expression(p, PREC_NONE + 1);
-            if (target) {
-                /* Validate READ target is a variable or array element */
-                if (target->tag == AST_ID && target->u.id.class_ == CLASS_array) {
-                    zxbc_error(p->cs, ln, "Cannot read '%s'. It's an array", target->u.id.name);
-                } else if (target->tag != AST_ID && target->tag != AST_ARRAYACCESS) {
-                    zxbc_error(p->cs, ln, "Syntax error. Can only read a variable or an array element");
-                }
-                ast_add_child(p->cs, s, target);
-            }
-            ast_add_child(p->cs, block, s);
+            if (nt < (int)(sizeof(targets) / sizeof(targets[0])))
+                targets[nt++] = target;  /* may be NULL */
         } while (match(p, BTOK_COMMA));
-        return block;
+        return read_build(p, targets, nt, ln);
     }
 
     /* RESTORE [label] */
@@ -10001,6 +10016,55 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         p->cs->print_is_used = true;
         r = PD_NODE(2);
         break;
+
+    /* ---- DATA / READ (157/161, gl.DATAS subsystem) ---- */
+    case 157: { /* statement : DATA arguments (p_data): side-effect-only (no AST
+                 * node — Python never sets p[0]); the per-item static/FUNCPTR
+                 * split + gl.DATAS append via the shared data_build. */
+        AstNode *al = (AstNode *)rhs[1].value;
+        if (!al || al->child_count == 0) { r = NULL; break; }  /* p[2] None */
+        /* :1742-1745  DATA not allowed within Functions nor Subs. */
+        if (p->cs->function_level.len > 0) {
+            zxbc_error(p->cs, PD_LINENO(1),
+                       "DATA not allowed within Functions nor Subs");
+            r = NULL;
+            break;
+        }
+        int ln = PD_LINENO(1);
+        /* :1734  label_ = make_label(DATA_PTR_CURRENT); record data_labels. */
+        char *label_name = p->cs->data_ptr_current ? p->cs->data_ptr_current
+                                                   : current_data_label(p->cs);
+        AstNode *label_entry =
+            symboltable_access_label(p->cs->symbol_table, p->cs, label_name, ln);
+        if (label_entry)
+            hashmap_set(&p->cs->data_labels, label_name,
+                        p->cs->data_ptr_current ? p->cs->data_ptr_current : "");
+        /* Unwrap each ARGUMENT to its value expr (Python reads d.value). */
+        int n = al->child_count;
+        AstNode **vals = arena_alloc(&p->cs->arena, (size_t)n * sizeof(AstNode *));
+        for (int i = 0; i < n; i++) {
+            AstNode *a = al->children[i];
+            vals[i] = (a && a->tag == AST_ARGUMENT && a->child_count > 0)
+                          ? a->children[0] : a;
+        }
+        data_build(p, vals, n, label_name, label_entry, ln);
+        r = NULL;
+        break;
+    }
+    case 161: { /* statement : READ arguments (p_read): per-target validation +
+                 * READ-sentence block via the shared read_build.
+                 * DEFERRED to UNWIRED: p_read returns make_block(*reads), which
+                 * Python flattens at `statements : statement` but the PRODUCTION
+                 * parser keeps NESTED (BLOCK[BLOCK[READ]]) in a loop body — same
+                 * byte-clean nesting divergence class as label-in-body; plus the
+                 * error-target cases (read3/6-9: `READ x(5)` with x undeclared)
+                 * drop/keep the empty READ sentence differently. Wire alongside
+                 * the block-nesting reconciliation (Phase E). */
+        c->unwired = true;
+        if (c->unwired_prod == 0) c->unwired_prod = prodno;
+        r = make_nop(p);
+        break;
+    }
     case 299: case 301: { /* func_call : ID arg_list | ARRAY_ID arg_list
                            * (p_idcall_expr / p_arr_access_expr) -> make_call.
                            * In the LALR grammar this is a READ (expr context);
