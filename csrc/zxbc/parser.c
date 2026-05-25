@@ -8871,6 +8871,29 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         PdFuncDef *fd = (PdFuncDef *)rhs[0].value;
         AstNode *body = (AstNode *)rhs[1].value;
         if (!body) body = make_block_node(p, fd->lineno);
+        /* leave_scope param-accessed marking (symboltable.py:268-277, the OLD
+         * parser's parser.c:7866-7882): BEFORE exit_scope, force-mark every
+         * unaccessed PARAMETER accessed ("Parameters must always be present
+         * even if not used") and emit W150 ("Parameter '<id>' is never used")
+         * for a non-byref unaccessed param — UNLESS the header was rejected
+         * (Python returned before leave_scope). Without this, an unused string
+         * param is dropped by the O>1 Scope.values(filter_by_opt) filter and
+         * its stdcall MEM_FREE teardown is skipped (paramstr3/4/5, pararray*,
+         * byrefbyref, subparam, …). */
+        {
+            Scope_ *bs = p->cs->symbol_table->current_scope;
+            for (int si = 0; si < bs->ordered_count; si++) {
+                AstNode *e = bs->ordered[si];
+                if (e && e->tag == AST_ID &&
+                    e->u.id.scope == SCOPE_parameter && !e->u.id.accessed) {
+                    if (!fd->rejected && !e->u.id.byref)
+                        warn_not_used(p->cs, e->lineno,
+                                      e->u.id.name ? e->u.id.name : "",
+                                      "Parameter");
+                    e->u.id.accessed = true;
+                }
+            }
+        }
         /* leave scope: snapshot local_entries AFTER exit_scope compaction,
          * then compute_offsets (production parser.c:7841-7869). */
         Scope_ *body_scope = p->cs->symbol_table->current_scope;
