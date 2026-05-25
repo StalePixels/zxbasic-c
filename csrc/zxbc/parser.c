@@ -10878,6 +10878,77 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
     case 65: /* statement : CLS */
         r = make_sentence_node(p, "CLS", PD_LINENO(1));
         break;
+
+    /* ---- attr_list (graphics attrs, p_attr_list 195/196) ----
+     * make_block flatten of the per-attr SENTENCEs: a lone attr stays the
+     * SENTENCE; N>=2 a flat BLOCK (zxbparser.py:2006-2016). The attr
+     * SENTENCEs are built by cases 197-202. */
+    case 195: /* attr_list : attr SC -> the lone attr */
+        r = PD_NODE(1);
+        break;
+    case 196: { /* attr_list : attr_list attr SC -> make_block(p[1], p[2]) */
+        AstNode *al = PD_NODE(1);
+        AstNode *attr = PD_NODE(2);
+        if (al && al->tag != AST_BLOCK) {
+            AstNode *b = make_block_node(p, al->lineno);
+            ast_add_child(p->cs, b, al);
+            al = b;
+        } else if (!al) {
+            al = make_block_node(p, PD_LINENO(1));
+        }
+        if (attr) ast_add_child(p->cs, al, attr);
+        r = al;
+        break;
+    }
+
+    /* ---- PLOT / DRAW / DRAW3 / CIRCLE (+/- attr_list) (57-64) ----
+     * The production typecasts every coordinate at the KEYWORD line (`ln`),
+     * NOT Python's per-expr lineno, and appends the attr_list (if any) as the
+     * LAST child (parser.c:4363-4442). Match C-vs-C. */
+    case 57: case 58: { /* PLOT [attr_list] expr COMMA expr -> ubyte x,y */
+        int a = (prodno == 58) ? 1 : 0;  /* attr offset */
+        int ln = PD_LINENO(1);
+        AstNode *attr = (prodno == 58) ? PD_NODE(2) : NULL;
+        r = make_sentence_node(p, "PLOT", ln);
+        ast_add_child(p->cs, r, make_typecast(p->cs, st->basic_types[TYPE_ubyte], rhs[a+1].value, ln));
+        ast_add_child(p->cs, r, make_typecast(p->cs, st->basic_types[TYPE_ubyte], rhs[a+3].value, ln));
+        if (attr) ast_add_child(p->cs, r, attr);
+        break;
+    }
+    case 61: case 62: { /* DRAW [attr_list] expr COMMA expr -> integer x,y */
+        int a = (prodno == 62) ? 1 : 0;
+        int ln = PD_LINENO(1);
+        AstNode *attr = (prodno == 62) ? PD_NODE(2) : NULL;
+        r = make_sentence_node(p, "DRAW", ln);
+        ast_add_child(p->cs, r, make_typecast(p->cs, st->basic_types[TYPE_integer], rhs[a+1].value, ln));
+        ast_add_child(p->cs, r, make_typecast(p->cs, st->basic_types[TYPE_integer], rhs[a+3].value, ln));
+        if (attr) ast_add_child(p->cs, r, attr);
+        break;
+    }
+    case 59: case 60: { /* DRAW [attr_list] expr COMMA expr COMMA expr -> DRAW3
+                         * integer x,y + float z */
+        int a = (prodno == 60) ? 1 : 0;
+        int ln = PD_LINENO(1);
+        AstNode *attr = (prodno == 60) ? PD_NODE(2) : NULL;
+        r = make_sentence_node(p, "DRAW3", ln);
+        ast_add_child(p->cs, r, make_typecast(p->cs, st->basic_types[TYPE_integer], rhs[a+1].value, ln));
+        ast_add_child(p->cs, r, make_typecast(p->cs, st->basic_types[TYPE_integer], rhs[a+3].value, ln));
+        ast_add_child(p->cs, r, make_typecast(p->cs, st->basic_types[TYPE_float], rhs[a+5].value, ln));
+        if (attr) ast_add_child(p->cs, r, attr);
+        break;
+    }
+    case 63: case 64: { /* CIRCLE [attr_list] expr COMMA expr COMMA expr ->
+                         * byte x,y,r (all signed) */
+        int a = (prodno == 64) ? 1 : 0;
+        int ln = PD_LINENO(1);
+        AstNode *attr = (prodno == 64) ? PD_NODE(2) : NULL;
+        r = make_sentence_node(p, "CIRCLE", ln);
+        ast_add_child(p->cs, r, make_typecast(p->cs, st->basic_types[TYPE_byte], rhs[a+1].value, ln));
+        ast_add_child(p->cs, r, make_typecast(p->cs, st->basic_types[TYPE_byte], rhs[a+3].value, ln));
+        ast_add_child(p->cs, r, make_typecast(p->cs, st->basic_types[TYPE_byte], rhs[a+5].value, ln));
+        if (attr) ast_add_child(p->cs, r, attr);
+        break;
+    }
     case 144: /* statement : END expr (p_end) -> END[expr] (RAW, matching the
                * production parser.c:4180-4187 which adds the expr raw). */
         r = make_sentence_node(p, "END", PD_LINENO(1));
