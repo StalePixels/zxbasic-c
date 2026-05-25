@@ -130,6 +130,17 @@ static bool ast_equal(const AstNode *a, const AstNode *b, char *why, size_t wn,
     return true;
 }
 
+static void dump_ast(const AstNode *n, int depth, const char *which) {
+    if (!n) { printf("%*s%s<NULL>\n", depth * 2, "", which); return; }
+    printf("%*s%s%s", depth * 2, "", which, ast_tag_name(n->tag));
+    if (n->tag == AST_SENTENCE && n->u.sentence.kind) printf(" '%s'", n->u.sentence.kind);
+    else if (n->tag == AST_ID && n->u.id.name) printf(" '%s'", n->u.id.name);
+    else if (n->tag == AST_NUMBER) printf(" %g", n->u.number.value);
+    else if (n->tag == AST_BINARY && n->u.binary.operator) printf(" '%s'", n->u.binary.operator);
+    printf("  (ch=%d)\n", n->child_count);
+    for (int i = 0; i < n->child_count; i++) dump_ast(n->children[i], depth + 1, "");
+}
+
 static char *read_file(const char *path) {
     FILE *f = fopen(path, "rb");
     if (!f) return NULL;
@@ -145,8 +156,12 @@ static char *read_file(const char *path) {
 
 int main(int argc, char **argv) {
     int argi = 1;
-    if (argi < argc && strcmp(argv[argi], "--verbose") == 0) {
-        g_verbose = 1; argi++;
+    int do_dump = 0;
+    while (argi < argc && argv[argi][0] == '-') {
+        if (strcmp(argv[argi], "--verbose") == 0) g_verbose = 1;
+        else if (strcmp(argv[argi], "--dump") == 0) do_dump = 1;
+        else break;
+        argi++;
     }
     if (argi >= argc) { fprintf(stderr, "usage: %s [--verbose] <file.bas>\n", argv[0]); return 3; }
     const char *path = argv[argi];
@@ -171,6 +186,11 @@ int main(int argc, char **argv) {
     bool unwired = false; int unwired_prod = 0;
     AstNode *eng_ast = plyparse_program(&p2, &unwired, &unwired_prod);
 
+    if (do_dump) {
+        printf("=== PRODUCTION AST ===\n"); dump_ast(prod_ast, 0, "");
+        printf("=== ENGINE AST (unwired=%d:%d) ===\n", unwired, unwired_prod);
+        dump_ast(eng_ast, 0, "");
+    }
     if (unwired) {
         printf("UNWIRED:%d\n", unwired_prod);
         return 2;
@@ -180,7 +200,6 @@ int main(int argc, char **argv) {
                (void *)prod_ast, (void *)eng_ast);
         return 2;
     }
-
     char why[512] = "";
     bool eq = ast_equal(prod_ast, eng_ast, why, sizeof(why), "");
     if (eq) {
