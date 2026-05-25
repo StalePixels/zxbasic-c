@@ -8194,6 +8194,23 @@ typedef struct PdParam {
     AstNode *body_sym;     /* body-scope symbol (for offset/byref copy) */
 } PdParam;
 
+/* The else-part value (else_part_inline / else_part nonterminals) — Python
+ * carries a list `[else_, endif]` or `[else_, endif, extra]` that every
+ * consumer flattens via make_block(*list). Carry the elements; the IF/elseif
+ * consumers build the block. (zxbparser.py:1470-1511). */
+typedef struct PdElse {
+    AstNode *e[3];
+    int n;
+} PdElse;
+
+/* The elseif_expr value — Python carries a tuple `(label_, cond_)`
+ * (zxbparser.py:1431-1442). */
+typedef struct PdElseif {
+    AstNode *label;
+    AstNode *cond;
+    int lineno;
+} PdElseif;
+
 /* A growable Id list — the value of the `idlist` nonterminal (Python: a
  * Python list of Id tuples). */
 typedef struct PdIdList {
@@ -8260,6 +8277,18 @@ static AstNode *pd_if_body(Parser *p, AstNode *stat, AstNode *endif) {
     return blk;
 }
 
+/* Does a block carry a top-level NOP child (a leading/internal `:` in a
+ * co_statements_co body)? The PRODUCTION's IF body loop appends raw statements
+ * INCLUDING such NOPs, while make_block (the engine path) filters them — a
+ * byte-clean nesting divergence (Phase-E-reconcile). Used to defer those
+ * else/elseif bodies rather than emit a wrong (NOP-dropped) tree. */
+static bool pd_block_has_nop(const AstNode *n) {
+    if (!n || n->tag != AST_BLOCK) return false;
+    for (int i = 0; i < n->child_count; i++)
+        if (n->children[i] && n->children[i]->tag == AST_NOP) return true;
+    return false;
+}
+
 /* Does a (possibly-block) node contain a LABEL sentence at top level? Used to
  * defer IF/loop bodies whose label_line nesting via program_co differs from
  * the production parser's flat then-block (resolved precisely later). */
@@ -8291,6 +8320,13 @@ static AstNode *pd_make_block2(Parser *p, AstNode *a, AstNode *b) {
     AstNode *blk = make_block_node(p, p->current.lineno);
     pd_block_append(p, blk, a);
     if (b) pd_block_append(p, blk, b);
+    return blk;
+}
+
+/* make_block(*args) over an N-element list (the else_part list flatten). */
+static AstNode *pd_make_block_n(Parser *p, AstNode **args, int n) {
+    AstNode *blk = make_block_node(p, p->current.lineno);
+    for (int i = 0; i < n; i++) pd_block_append(p, blk, args[i]);
     return blk;
 }
 
@@ -8820,6 +8856,191 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
     case 99: /* statement : if_inline (no else) -> the IF SENTENCE */
         r = PD_NODE(1);
         break;
+
+    /* ---- IF else / elseif subsystem ----
+     * Match the PRODUCTION parser's else/elseif tree shapes (parse_if_statement,
+     * parser.c:5572-5658), which coincide with Python's make_block flattening
+     * for the no-label cases. LABEL-bearing else/elseif forms carry the
+     * label_line/program_co nesting divergence (Phase-E-reconcile, byte-clean)
+     * and are deferred -> UNWIRED, like the simple IF body cases.
+     *
+     * else_part_inline / else_part carry a list [else_, endif] (Python:
+     * zxbparser.py:1470-1511). Build it as a PdElse element list; the IF/elseif
+     * consumers flatten it via make_block(*list). */
+    case 113: case 114: { /* ELSE NEWLINE program_co|statements_co endif
+                           * (p[2]=="\n", len==5) -> [p[3], p[4]]. */
+        PdElse *pe = arena_alloc(&p->cs->arena, sizeof(PdElse));
+        pe->e[0] = PD_NODE(3); pe->e[1] = PD_NODE(4); pe->n = 2;
+        *out = pe; *out_lineno = PD_LINENO(1);
+        return true;
+    }
+    case 115: /* ELSE NEWLINE co_statements_co endif: a leading `:` in the
+               * co_statements_co else body is a NOP the PRODUCTION's else loop
+               * KEEPS but the engine's make_block drops (co_statements case 14
+               * filters it before this reduce sees it) — a byte-clean nesting
+               * divergence (Phase-E-reconcile). The engine matches Python here;
+               * defer to hold DIFF 0 (ifthensntcoelsecocoendif). */
+    case 120: case 122: case 123: /* same co_statements_co else-body class */
+        c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
+        *out = NULL; *out_lineno = PD_LINENO(1);
+        return true;
+    case 116: { /* ELSE NEWLINE endif (len==4) -> [make_nop(), p[3]] */
+        PdElse *pe = arena_alloc(&p->cs->arena, sizeof(PdElse));
+        pe->e[0] = make_nop(p); pe->e[1] = PD_NODE(3); pe->n = 2;
+        *out = pe; *out_lineno = PD_LINENO(1);
+        return true;
+    }
+    case 117: case 118: /* ELSE NEWLINE label ... endif -> HAS LABEL, defer */
+        c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
+        *out = NULL; *out_lineno = PD_LINENO(1);
+        return true;
+    case 119: { /* ELSE statements_co endif (p[2] != "\n") -> [p[2], p[3]]. */
+        PdElse *pe = arena_alloc(&p->cs->arena, sizeof(PdElse));
+        pe->e[0] = PD_NODE(2); pe->e[1] = PD_NODE(3); pe->n = 2;
+        *out = pe; *out_lineno = PD_LINENO(1);
+        return true;
+    }
+    case 121: case 124: { /* p_else_part: ELSE statements_co|statements
+                           * -> [p[2], make_nop()]. (co_statements forms
+                           * 122/123 deferred above — leading-`:` NOP class.) */
+        PdElse *pe = arena_alloc(&p->cs->arena, sizeof(PdElse));
+        pe->e[0] = PD_NODE(2); pe->e[1] = make_nop(p); pe->n = 2;
+        *out = pe; *out_lineno = PD_LINENO(1);
+        return true;
+    }
+    case 125: /* else_part : else_part_inline (p_else_part_is_inline) -> pass */
+        *out = rhs[0].value; *out_lineno = PD_LINENO(1);
+        return true;
+    case 126: case 127: case 128: /* else_part : label ELSE ... -> HAS LABEL */
+        c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
+        *out = NULL; *out_lineno = PD_LINENO(1);
+        return true;
+
+    /* elseif_expr : ELSEIF expr then (108) | label ELSEIF expr then (109).
+     * Carry (label_, cond_). The label form (109) is deferred. */
+    case 108: { /* ELSEIF expr then -> (NOP, cond) */
+        PdElseif *pe = arena_alloc(&p->cs->arena, sizeof(PdElseif));
+        pe->label = make_nop(p); pe->cond = PD_NODE(2); pe->lineno = PD_LINENO(1);
+        *out = pe; *out_lineno = PD_LINENO(1);
+        return true;
+    }
+    case 109: /* label ELSEIF expr then -> HAS LABEL, defer */
+        c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
+        *out = NULL; *out_lineno = PD_LINENO(1);
+        return true;
+
+    /* elseiflist : elseif_expr program_co endif (110)
+     *            | elseif_expr program_co else_part (111)
+     *            | elseif_expr program_co elseiflist (112)
+     * (p_elseif_list / p_elseif_elseiflist). Build make_block(label_,
+     * IF(cond_, then_, else_)) — label_ NOP so the block unwraps to the IF. */
+    case 110: case 111: case 112: {
+        PdElseif *pe = (PdElseif *)rhs[0].value;
+        if (!pe) { /* upstream label-elseif deferred */
+            c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
+            r = make_nop(p); break;
+        }
+        AstNode *then_ = PD_NODE(2);    /* program_co */
+        AstNode *else_node = NULL;
+        if (prodno == 110) {            /* ... endif: then_=make_block(then_,endif) */
+            AstNode *endif = PD_NODE(3);
+            then_ = pd_if_body(p, then_, endif);
+            else_node = NULL;
+        } else if (prodno == 111) {     /* ... else_part: else_=make_block(*list) */
+            PdElse *el = (PdElse *)rhs[2].value;
+            if (!el || pd_block_has_nop(el->e[0])) { /* deferred (label / leading-`:` NOP) */
+                c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
+                r = make_nop(p); break;
+            }
+            then_ = pd_if_body(p, then_, NULL);
+            else_node = pd_make_block_n(p, el->e, el->n);
+        } else {                        /* 112: ... elseiflist (nested) */
+            AstNode *nested = PD_NODE(3);
+            if (!nested || nested->tag == AST_NOP) {
+                c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
+                r = make_nop(p); break;
+            }
+            then_ = pd_if_body(p, then_, NULL);
+            else_node = nested;
+        }
+        AstNode *nif = make_sentence_node(p, "IF", pe->lineno);
+        if (pe->cond) ast_add_child(p->cs, nif, pe->cond);
+        ast_add_child(p->cs, nif, then_);
+        if (else_node) ast_add_child(p->cs, nif, else_node);
+        if (pd_block_has_label(then_) || pd_block_has_label(else_node)) {
+            c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
+            r = make_nop(p); break;
+        }
+        r = nif; /* make_block(NOP, IF) unwraps to the IF sentence */
+        break;
+    }
+
+    /* statement : if_then_part NEWLINE program_co elseiflist (106)
+     *           | if_then_part NEWLINE elseiflist (107)  (p_if_elseif)
+     * IF(cond_, stats_, eliflist). */
+    case 106: case 107: {
+        AstNode *cond_ = PD_NODE(1);
+        AstNode *stats_, *eliflist;
+        /* The production always builds a (possibly-empty) BLOCK for the then-
+         * part (parse_if_statement:5575), NOT Python's make_nop — match it. */
+        if (prodno == 106) { stats_ = pd_if_body(p, PD_NODE(3), NULL); eliflist = PD_NODE(4); }
+        else               { stats_ = make_block_node(p, PD_LINENO(2)); eliflist = PD_NODE(3); }
+        if (!eliflist || eliflist->tag == AST_NOP) {
+            c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
+            r = make_nop(p); break;
+        }
+        if (pd_block_has_label(stats_)) {
+            c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
+            r = make_nop(p); break;
+        }
+        r = make_sentence_node(p, "IF", PD_LINENO(2));
+        if (cond_) ast_add_child(p->cs, r, cond_);
+        ast_add_child(p->cs, r, stats_);
+        ast_add_child(p->cs, r, eliflist);
+        break;
+    }
+
+    /* statement : if_then_part NEWLINE program_co else_part (131, p_if_else).
+     * IF(cond_, then_, make_block(else_, endif)) where else_=p[4][0],
+     * endif=p[4][1]. */
+    case 131: {
+        AstNode *cond_ = PD_NODE(1);
+        AstNode *then_ = pd_if_body(p, PD_NODE(3), NULL);
+        PdElse *el = (PdElse *)rhs[3].value;
+        if (!el || pd_block_has_nop(el->e[0])) { /* deferred (label / leading-`:` NOP) */
+            c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
+            r = make_nop(p); break;
+        }
+        AstNode *else_block = pd_make_block2(p, el->e[0], el->n > 1 ? el->e[1] : NULL);
+        if (pd_block_has_label(then_) || pd_block_has_label(else_block)) {
+            c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
+            r = make_nop(p); break;
+        }
+        r = make_sentence_node(p, "IF", PD_LINENO(2));
+        if (cond_) ast_add_child(p->cs, r, cond_);
+        ast_add_child(p->cs, r, then_);
+        ast_add_child(p->cs, r, else_block);
+        break;
+    }
+
+    /* statement : if_inline else_part_inline (130, p_if_inline).
+     * p[1].append_child(make_block(p[2][0], p[2][1])); p[0] = p[1]. */
+    case 130: {
+        AstNode *ifn = PD_NODE(1);
+        PdElse *el = (PdElse *)rhs[1].value;
+        if (!ifn || ifn->tag == AST_NOP || !el || pd_block_has_nop(el->e[0])) {
+            c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
+            r = make_nop(p); break;
+        }
+        AstNode *else_block = pd_make_block2(p, el->e[0], el->n > 1 ? el->e[1] : NULL);
+        if (pd_block_has_label(else_block) || pd_block_has_label(ifn)) {
+            c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
+            r = make_nop(p); break;
+        }
+        ast_add_child(p->cs, ifn, else_block);
+        r = ifn;
+        break;
+    }
 
     /* ---- FOR subsystem ----
      * step : <empty> (142) -> make_number(1); STEP expr (143) -> expr. */
