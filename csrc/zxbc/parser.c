@@ -8621,6 +8621,12 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
     case 324: { /* function_declaration : function_header function_body
                  * (p_funcdecl): leave scope, compute offsets, pop
                  * FUNCTION_LEVEL, build FUNCDECL. */
+        /* If an upstream production already flagged UNWIRED (e.g. the
+         * function_header error-token productions 328/329, which take the
+         * default NOP path), rhs[0].value is a NOP AstNode, NOT a PdFuncDef —
+         * type-punning it would dereference garbage (let_expr_type_crash).
+         * The file is already flagged UNWIRED; bail to NOP without touching it. */
+        if (c->unwired) { r = make_nop(p); break; }
         PdFuncDef *fd = (PdFuncDef *)rhs[0].value;
         AstNode *body = (AstNode *)rhs[1].value;
         if (!body) body = make_block_node(p, fd->lineno);
@@ -8666,6 +8672,7 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
                  * FUNCDECL (empty body) and pushes functions (parser.c:
                  * 7552-7572); Python returns None but the C-vs-C compare is
                  * against the production, so match it. */
+        if (c->unwired) { r = make_nop(p); break; }
         PdFuncDef *fd = (PdFuncDef *)rhs[1].value;
         symboltable_exit_scope(p->cs->symbol_table);
         if (p->cs->function_level.len > 0)
