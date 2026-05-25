@@ -8867,6 +8867,88 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         break;
     }
 
+    /* ---- DO loop subsystem ----
+     * NOTE: the C-vs-C compare is against the PRODUCTION parser, whose DO node
+     * kinds + child order DIFFER from Python's (production: DO_LOOP[body] /
+     * LOOP_UNTIL[body,cond] / LOOP_WHILE[body,cond] / DO_WHILE[cond,body] /
+     * DO_UNTIL[cond,body]; Python uses DO_LOOP/DO_UNTIL/DO_WHILE/WHILE_DO/
+     * UNTIL_DO with cond-first). Match the production (parser.c:6017-6020). */
+    case 173: case 174: { /* do_start : DO CO | DO NEWLINE -> push loop_stack(DO) */
+        LoopInfo li = { LOOP_DO, PD_LINENO(1), NULL };
+        vec_push(p->cs->loop_stack, li);
+        *out = NULL; *out_lineno = PD_LINENO(1);
+        return true;
+    }
+    case 171: case 172: { /* do_while_start: DO WHILE expr | do_until_start:
+                          * DO UNTIL expr -> cond; push loop_stack(DO). */
+        LoopInfo li = { LOOP_DO, PD_LINENO(1), NULL };
+        vec_push(p->cs->loop_stack, li);
+        *out = rhs[2].value; *out_lineno = PD_LINENO(1);
+        return true;
+    }
+    case 149: /* label_loop : label LOOP -> the label */
+        r = PD_NODE(1);
+        break;
+    case 150: /* label_loop : LOOP -> NOP */
+        r = make_nop(p);
+        break;
+    case 151: case 152: case 153: { /* statement : do_start program_co label_loop
+                       * | do_start label_loop | DO label_loop (p_do_loop):
+                       * "DO_LOOP"[body]. For 153 (bare DO) push here. */
+        int doln = PD_LINENO(1);
+        AstNode *body;
+        if (prodno == 151) body = pd_if_body(p, PD_NODE(2), PD_NODE(3));
+        else body = pd_if_body(p, PD_NODE(2), NULL);
+        if (prodno == 153) { LoopInfo li = {LOOP_DO, doln, NULL}; vec_push(p->cs->loop_stack, li); }
+        if (p->cs->loop_stack.len > 0) vec_pop(p->cs->loop_stack);
+        if (pd_block_has_label(body)) {
+            c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
+            r = make_nop(p); break;
+        }
+        r = make_sentence_node(p, "DO_LOOP", doln);
+        ast_add_child(p->cs, r, body);
+        break;
+    }
+    case 154: case 155: case 156: /* do...LOOP UNTIL -> "LOOP_UNTIL"[body,cond] */
+    case 162: case 163: case 164: { /* do...LOOP WHILE -> "LOOP_WHILE"[body,cond] */
+        bool is_until = (prodno <= 156);
+        int doln = PD_LINENO(1);
+        bool bare = (prodno == 156 || prodno == 164);
+        bool has_prog = (prodno == 154 || prodno == 162);
+        AstNode *body, *cond;
+        if (has_prog) { body = pd_if_body(p, PD_NODE(2), PD_NODE(3)); cond = PD_NODE(5); }
+        else { body = pd_if_body(p, PD_NODE(2), NULL); cond = PD_NODE(4); }
+        if (bare) { LoopInfo li = {LOOP_DO, doln, NULL}; vec_push(p->cs->loop_stack, li); }
+        if (p->cs->loop_stack.len > 0) vec_pop(p->cs->loop_stack);
+        /* NULL cond == a semantic error in the post-test expr (do_crash:
+         * `LOOP WHILE A=""`); error-path AST shapes diverge — defer. */
+        if (pd_block_has_label(body) || !cond) {
+            c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
+            r = make_nop(p); break;
+        }
+        r = make_sentence_node(p, is_until ? "LOOP_UNTIL" : "LOOP_WHILE", doln);
+        ast_add_child(p->cs, r, body);
+        ast_add_child(p->cs, r, cond);
+        break;
+    }
+    case 165: case 166: case 167: /* DO WHILE...LOOP -> "DO_WHILE"[cond,body] */
+    case 168: case 169: case 170: { /* DO UNTIL...LOOP -> "DO_UNTIL"[cond,body] */
+        bool is_until = (prodno >= 168);
+        int doln = PD_LINENO(1);
+        AstNode *cond = PD_NODE(1); /* do_while_start/do_until_start value */
+        bool has_body = (prodno == 165 || prodno == 166 || prodno == 168 || prodno == 169);
+        AstNode *body = has_body ? pd_if_body(p, PD_NODE(2), NULL) : make_block_node(p, doln);
+        if (p->cs->loop_stack.len > 0) vec_pop(p->cs->loop_stack);
+        if (pd_block_has_label(body) || !cond) {
+            c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
+            r = make_nop(p); break;
+        }
+        r = make_sentence_node(p, is_until ? "DO_UNTIL" : "DO_WHILE", doln);
+        ast_add_child(p->cs, r, cond);
+        ast_add_child(p->cs, r, body);
+        break;
+    }
+
     /* RETURN (214 p_return) | RETURN expr (215 p_return_expr). Faithful to
      * parser.c:3763-3848 (which itself ports the Python actions). */
     case 214: { /* statement : RETURN */
