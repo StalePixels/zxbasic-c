@@ -10336,11 +10336,83 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         ast_add_child(p->cs, r, rexpr);  /* RAW expr */
         break;
     }
-    /* 304/305 (chained `a$(b)(idx)` → the production builds a chained
-     * ARRAYACCESS-over-ARRAYACCESS, NOT a substr STRSLICE) and 306-313 (the
-     * `LP arguments TO ... RP` forms — production-specific shapes) build deeply
-     * production-specific trees diverging from both Python and 302/303; defer
-     * to a future focused pass (they fall to the default UNWIRED path). */
+    /* [LET] ARRAY_ID LP arguments [COMMA] TO [expr] RP EQ expr (306-313,
+     * p_let_arr_substr_in_args{,2,3,4}): the array-element substring write
+     * where the substr bounds are inside the same paren group. The C PRODUCTION
+     * builds build_array_substr_lvalue (Shape-A STRSLICE[ARRAYACCESS, STRSLICE
+     * [lo,hi]]) with the bounds at their NATURAL type (str_base2..5,
+     * let_array_substr9..12) -> LETARRAY[lv, RAW expr]. `arguments` is the dim
+     * list at rhs[i+1]; forms that take the trailing arg as the lower bound pop
+     * it. Faithful to zxbparser.py:2759-2815. */
+    case 306: case 307: case 308: case 309:
+    case 310: case 311: case 312: case 313: {
+        bool is_let = (prodno % 2 == 0);  /* even = LET form */
+        int i = is_let ? 2 : 1;           /* 1-based ARRAY_ID position */
+        const char *aname = PD_SVAL(i);
+        int aln = PD_LINENO(i);
+        AstNode *arglist = (AstNode *)rhs[i + 1].value;  /* `arguments` after LP */
+        if (!arglist) { r = NULL; break; }
+        AstNode *lower = NULL, *upper = NULL, *rexpr = NULL;
+        AstNode *maxn = make_number(p, 65534, aln, NULL);   /* MAX_STRSLICE_IDX (uinteger nat.) */
+        /* The implicit lower `0` of a `( ... , TO ...)` form is uinteger-typed
+         * by the production's parse-loop TO-handling (make_typecast(uinteger,
+         * NUMBER(0)), parser.c:2525) — NOT the bare ubyte make_number(0). */
+        AstNode *zero = make_number(p, 0, aln, st->basic_types[TYPE_uinteger]);
+        /* Positions are 1-based from the ARRAY_ID at i; PD_NODE(n)==rhs[n-1].
+         * arguments is at i+2. */
+        if (prodno == 306 || prodno == 307) {        /* ...LP arguments TO RP EQ expr */
+            if (arglist->child_count > 0) {          /* pop last as lower */
+                AstNode *last = arglist->children[arglist->child_count - 1];
+                lower = (last && last->tag == AST_ARGUMENT && last->child_count > 0)
+                            ? last->children[0] : last;
+                arglist->child_count--;
+            }
+            upper = maxn;
+            rexpr = PD_NODE(i + 6);
+        } else if (prodno == 308 || prodno == 309) { /* ...LP arguments COMMA TO expr RP EQ expr */
+            /* Implicit-lower TO form: the parse-loop TO-handling uinteger-casts
+             * BOTH bounds (parser.c:2525-2531), so the explicit upper expr is
+             * cast too (str_base3, let_array_substr10). */
+            lower = zero;
+            upper = make_typecast(p->cs, st->basic_types[TYPE_uinteger],
+                                  PD_NODE(i + 5), aln);
+            rexpr = PD_NODE(i + 8);
+        } else if (prodno == 310 || prodno == 311) { /* ...LP arguments COMMA TO RP EQ expr */
+            lower = zero;
+            upper = maxn;
+            rexpr = PD_NODE(i + 7);
+        } else {                                     /* 312/313 ...LP arguments TO expr RP EQ expr */
+            if (arglist->child_count > 0) {          /* pop last as lower */
+                AstNode *last = arglist->children[arglist->child_count - 1];
+                lower = (last && last->tag == AST_ARGUMENT && last->child_count > 0)
+                            ? last->children[0] : last;
+                arglist->child_count--;
+            }
+            upper = PD_NODE(i + 4);                  /* expr after TO */
+            rexpr = PD_NODE(i + 7);
+        }
+        if (!lower || !upper || !rexpr) { r = NULL; break; }
+        /* non-string array -> Python errors+None, old production builds a
+         * chained shape; defer (Phase-E-reconcile), like 302/303. */
+        AstNode *probe = symboltable_get_entry(p->cs->symbol_table, aname);
+        if (!probe || probe->tag != AST_ID || !type_is_string(probe->type_)) {
+            c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
+            r = make_nop(p); break;
+        }
+        AstNode *lv = build_array_substr_lvalue(p, aname, aln,
+                                                arglist->children,
+                                                arglist->child_count, lower, upper);
+        if (!lv) { r = NULL; break; }
+        r = make_sentence_node(p, "LETARRAY", PD_LINENO(1));
+        ast_add_child(p->cs, r, lv);
+        ast_add_child(p->cs, r, rexpr);  /* RAW expr */
+        break;
+    }
+    /* 304/305 (chained `a$(b)(idx)`): the OLD production builds a chained
+     * ARRAYACCESS-over-ARRAYACCESS while Python builds make_array_substr_assign
+     * (a substr) — the engine must match PYTHON at the swap, which DIFFs the
+     * old production now, so this is Phase-E-reconcile, left UNWIRED (default
+     * path). */
 
     /* ---- SAVE / LOAD / VERIFY (p_save_code/p_save_data/p_load_or_verify/
      * p_load_code/p_load_data, 232-246) ----
