@@ -315,10 +315,26 @@ int main(int argc, char *argv[]) {
         zxbc_info(&cs, "Preprocessed source (%zu bytes)", strlen(source));
     }
 
-    /* Parse */
+    /* Parse. The PLY/LALR(1) engine (the faithful port of Python's actual
+     * parser) is the parse path when ZXBC_ENGINE is set; otherwise the legacy
+     * recursive-descent parser. The engine drives the lexer itself
+     * (parser_init_noprime) and emits p_error messages directly
+     * (plyparse_program_emit_errors), exactly as Python's PLY parser. The old
+     * parser is kept in the tree for A/B comparison until the engine swap is
+     * proven byte-identical across the full meter suite. */
     Parser parser;
-    parser_init(&parser, &cs, source);
-    AstNode *ast = parser_parse(&parser);
+    AstNode *ast;
+    if (getenv("ZXBC_ENGINE")) {
+        parser_init_noprime(&parser, &cs, source);
+        bool perr = false;
+        ast = plyparse_program_emit_errors(&parser, &perr);
+        /* parser_parse sets cs->ast (read by codegen's data_ast builder,
+         * codegen.c:439 codegen_find_arraydecl); the engine path must too. */
+        cs.ast = ast;
+    } else {
+        parser_init(&parser, &cs, source);
+        ast = parser_parse(&parser);
+    }
 
     rc = 0;
     if (parser.had_error || !ast) {
