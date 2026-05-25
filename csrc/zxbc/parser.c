@@ -6039,6 +6039,28 @@ static AstNode *parse_do_statement(Parser *p) {
 /* ----------------------------------------------------------------
  * DIM / CONST declaration
  * ---------------------------------------------------------------- */
+/* const_vector_elem — the per-element const-check for a const-vector element,
+ * extracted from parse_array_initializer so the Phase-D PLY const_number_list
+ * reduces (51/52) build the byte-for-byte same element node. Faithful port of
+ * src/zxbc/zxbparser.py p_const_vector_elem_list:891-897 / p_const_vector_elem_
+ * list_list:909-915 (both identical): a non-static element that is a UNARY is
+ * make_constexpr-wrapped (delayed const eval); a non-static non-UNARY element is
+ * rejected ("Initializer expression is not constant") at `err_lineno`. Returns
+ * the (possibly CONSTEXPR-wrapped) element. */
+static AstNode *const_vector_elem(Parser *p, AstNode *expr, int err_lineno) {
+    if (!check_is_static(expr)) {
+        if (expr->tag == AST_UNARY) {
+            AstNode *ce = ast_new(p->cs, AST_CONSTEXPR, expr->lineno);
+            ast_add_child(p->cs, ce, expr);
+            ce->type_ = expr->type_;
+            expr = ce;
+        } else {
+            err_not_constant(p->cs, err_lineno);
+        }
+    }
+    return expr;
+}
+
 /* Parse brace-enclosed initializer: {expr, expr, ...} or {{...}, {...}} */
 static AstNode *parse_array_initializer(Parser *p) {
     int lineno = p->current.lineno;
@@ -6120,22 +6142,12 @@ static AstNode *parse_array_initializer(Parser *p) {
                      * line == init->lineno (the '{'); these fixtures are all
                      * single-line DIMs so init->lineno is the faithful value
                      * (array11/arrlabels11/11b -> line 4, matching .err). */
-                    if (!check_is_static(expr)) {
-                        if (expr->tag == AST_UNARY) {
-                            /* make_constexpr delayed-const-eval wrap: a
-                             * non-static UNARY (e.g. `@label` whose entry is
-                             * SCOPE.local) is wrapped so Translator's
-                             * .default_value CONSTEXPR branch emits the
-                             * `##.LABEL._x` data image (arrlabels4/5/7/8/9). */
-                            AstNode *ce = ast_new(p->cs, AST_CONSTEXPR,
-                                                  expr->lineno);
-                            ast_add_child(p->cs, ce, expr);
-                            ce->type_ = expr->type_;
-                            expr = ce;
-                        } else {
-                            err_not_constant(p->cs, init->lineno);
-                        }
-                    }
+                    /* make_constexpr delayed-const-eval wrap (a non-static
+                     * UNARY, e.g. `@label` whose entry is SCOPE.local) /
+                     * "not constant" reject (non-static non-UNARY) — shared
+                     * with the Phase-D const_number_list reduces. Lineno is
+                     * init->lineno (the '{'; these fixtures are single-line). */
+                    expr = const_vector_elem(p, expr, init->lineno);
                     ast_add_child(p->cs, init, expr);
                 }
             }
@@ -9371,6 +9383,97 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
     case 39: case 40: /* var_decl : var_arr_decl | var_arr_decl_addr */
         r = PD_NODE(1);
         break;
+
+    /* ---- const_vector subsystem (array initialisers `=> {…}` / `= {…}`) ----
+     * Every Python "list" is represented as an AST_ARRAYINIT node, exactly the
+     * structure parse_array_initializer builds, so check_bound_recurse +
+     * dim_build_array (shared with the production) operate identically. */
+    case 51: { /* const_number_list : expr (p_const_vector_elem_list) — start a
+                * flat element list with the per-element const-check. */
+        AstNode *lst = ast_new(p->cs, AST_ARRAYINIT, PD_LINENO(1));
+        AstNode *e = PD_NODE(1);
+        if (e) ast_add_child(p->cs, lst, const_vector_elem(p, e, p->lexer.lineno));
+        r = lst;
+        break;
+    }
+    case 52: { /* const_number_list : const_number_list COMMA expr
+                * (p_const_vector_elem_list_list) — append the next element.
+                * Error lineno is p.lineno(2) = the COMMA. */
+        AstNode *lst = (AstNode *)rhs[0].value;
+        AstNode *e = PD_NODE(3);
+        if (lst && e) ast_add_child(p->cs, lst, const_vector_elem(p, e, PD_LINENO(2)));
+        r = lst;
+        break;
+    }
+    case 49: case 50: /* const_vector : LBRACE const_vector_list|const_number_list
+                       * RBRACE (p_const_vector) -> p[2] (the inner list). */
+        r = (AstNode *)rhs[1].value;
+        break;
+    case 53: { /* const_vector_list : const_vector (p_const_vector_list) ->
+                * [p[1]] — a one-row list whose single child is the row. */
+        AstNode *rows = ast_new(p->cs, AST_ARRAYINIT, PD_LINENO(1));
+        if (rhs[0].value) ast_add_child(p->cs, rows, (AstNode *)rhs[0].value);
+        r = rows;
+        break;
+    }
+    case 54: { /* const_vector_list : const_vector_list COMMA const_vector
+                * (p_const_vector_vector_list): every row must have the same
+                * element count as the first; on mismatch emit at the COMMA and
+                * reduce to None (NULL) — matching parse_array_initializer's
+                * ragged path. */
+        AstNode *rows = (AstNode *)rhs[0].value;
+        AstNode *row = (AstNode *)rhs[2].value;
+        if (!rows || !row) { r = NULL; break; }
+        int first_count = (rows->child_count > 0) ? rows->children[0]->child_count : -1;
+        if (row->child_count != first_count) {
+            zxbc_error(p->cs, PD_LINENO(2),
+                       "All rows must have the same number of elements");
+            r = NULL;  /* p[0] = None */
+            break;
+        }
+        ast_add_child(p->cs, rows, row);
+        r = rows;
+        break;
+    }
+    case 43: case 44: { /* var_decl : DIM idlist LP bound_list RP typedef
+                         * (RIGHTARROW|EQ) const_vector (p_arr_decl_initialized).
+                         * idlist[1] bound_list[3] typedef[5] const_vector[7]. */
+        PdIdList *l = (PdIdList *)rhs[1].value;
+        AstNode *bounds = (AstNode *)rhs[3].value;
+        TypeInfo *type = (TypeInfo *)rhs[5].value;
+        AstNode *init = (AstNode *)rhs[7].value;
+        int ln = PD_LINENO(1);
+        /* p[8] is None (ragged const_vector) -> return without declaring or
+         * check_bound (zxbparser.py:840-842). */
+        if (!init) { r = make_nop(p); break; }
+        if (l->count != 1) {
+            zxbc_error(p->cs, ln,
+                       "Array declaration only allows one variable name at a time");
+            r = make_nop(p);
+            break;
+        }
+        const char *aname = l->ids[0]->name;
+        if (!type) {
+            size_t nl = strlen(aname);
+            if (nl > 0 && is_deprecated_suffix(aname[nl - 1]))
+                type = st->basic_types[suffix_to_type(aname[nl - 1])];
+            else {
+                type = type_new_ref(p->cs, p->cs->default_type, ln, true);
+                if (p->cs->opts.strict)
+                    zxbc_error(p->cs, ln,
+                               "strict mode: missing type declaration for '%s'", aname);
+            }
+        }
+        /* check_bound (zxbparser.py:844-845) on the const-vector image. The
+         * error lineno is p.lineno(8) == the const-vector's line; the
+         * production parser uses init->lineno (the '{'), so match that. */
+        check_bound_recurse(p, bounds, 0, init, init->lineno);
+        /* Cannot initialize array of type string (zxbparser.py:854-856). */
+        if (type && type_is_string(type))
+            zxbc_error(p->cs, ln, "Cannot initialize array of type string");
+        r = dim_build_array(p, aname, bounds, type, NULL, init, ln);
+        break;
+    }
 
     /* ---- assignment family ----
      * lexpr : ID EQ | LET ID EQ  (p_lexpr, zxbparser.py:1119): returns the
