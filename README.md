@@ -187,10 +187,61 @@ Want to see for yourself that C matches Python? You'll need Python 3.11+:
 This runs the original Python tools and the C ports on all test inputs and
 confirms their outputs are identical. 🤝
 
-## 🔧 Using the C Preprocessor Today
+## 🔧 Using the C Toolchain Today
 
-The C `zxbpp` binary accepts the **exact same flags** as the Python original. You can
-drop it into an existing Boriel ZX BASIC workflow right now for the preprocessing step:
+All three C binaries (`zxbpp`, `zxbasm`, `zxbc`) accept the **same flags** as their
+Python originals — drop them into any Boriel ZX BASIC workflow.
+
+### Compiler (`zxbc`) — full pipeline, byte-identical to Python
+
+`zxbc` produces output byte-identical to Python's at every optimization level
+(`-O0`/`-O1`/`-O2`/`-O3`), to every output format. Three fixtures in the upstream
+test corpus (`chr`, `chr1`, `const6`) trigger a known-broken Python `-O2`/`-O3`
+optimizer path documented in the upstream CHANGELOG — C compiles them correctly
+where the pinned Python crashes.
+
+```bash
+# A first program:
+echo 'PRINT "Hello from C!"' > hello.bas
+
+# Compile to a raw binary (the default output format, ORG $8000):
+./csrc/build/zxbc/zxbc -o hello.bin hello.bas
+
+# Compile to a .tap tape image with a BASIC loader and autorun:
+./csrc/build/zxbc/zxbc -f tap -B -a -o hello.tap hello.bas
+
+# Same for .tzx, .sna, .z80:
+./csrc/build/zxbc/zxbc -f tzx -B -a -o hello.tzx hello.bas
+./csrc/build/zxbc/zxbc -f sna -B -a -o hello.sna hello.bas
+./csrc/build/zxbc/zxbc -f z80 -B -a -o hello.z80 hello.bas
+
+# Generate the Stage-1 assembly only (useful for inspection):
+./csrc/build/zxbc/zxbc -f asm -o hello.asm hello.bas
+
+# Different optimization levels — all four produce Python-identical bytes:
+./csrc/build/zxbc/zxbc -O3 -o hello-O3.bin hello.bas
+
+# Pick a target architecture (default zx48k; zxnext enables Z80N opcodes):
+./csrc/build/zxbc/zxbc --arch=zxnext -o hello.bin hello.bas
+
+# Add extra include search paths (multiple -I accepted):
+./csrc/build/zxbc/zxbc -I lib/ -I shared/ -o myapp.bin myapp.bas
+
+# Parse-only (semantic validation without code emission, for editors/CI):
+./csrc/build/zxbc/zxbc --parse-only myfile.bas
+```
+
+**Same flag surface as Python `zxbc` — every flag in the upstream CLI is
+accepted**, including the deprecated short forms (`-t`/`-T`/`--asm`), the
+mutual-exclusivity rules (e.g. `-f tap` vs `-T`), and the warning-on-deprecated
+behaviors. Common ones: `-o`, `-O0`/`-O1`/`-O2`/`-O3`, `-f`/`--output-format`
+(`bin`/`tap`/`tzx`/`sna`/`z80`/`asm`), `-B`/`--BASIC`, `-a`/`--autorun`, `--arch`
+(`zx48k`/`zxnext`), `-I`, `--zxnext`, `-d`/`--debug`, `--emit-backend`,
+`--parse-only`, `--strict`, `-D`, `-F` (config file), `--save-config`,
+`--heap-size`, `--org`, `--mmap`. CLI-parity is exercised by the upstream
+`tests/cmdline/` suite (covered by `test_cmdline` in the C unit tests).
+
+### Preprocessor (`zxbpp`) — drop-in for Python's preprocessing stage
 
 ```bash
 # Instead of:
@@ -200,26 +251,70 @@ python3 zxbpp.py myfile.bas -o myfile.preprocessed.bas
 ./csrc/build/zxbpp/zxbpp myfile.bas -o myfile.preprocessed.bas
 ```
 
-Supported flags: `-o`, `-d`, `-e`, `-D`, `-I`, `--arch`, `--expect-warnings`
+**Same flag surface as Python `zxbpp` — all upstream flags accepted.** 96/96
+upstream functional tests pass (preprocessing of every `.bi` fixture, including
+all `#define`/`#include`/`#if`/`#ifdef`, macro expansion, token pasting,
+stringizing, ASM-mode blocks, `#pragma` / `#require` / `#init` / `#error` /
+`#warning`, architecture-specific includes).
 
-The `zxbasm` assembler is also available as a drop-in replacement:
+### Assembler (`zxbasm`) — drop-in for Python's assembly stage
 
 ```bash
 ./csrc/build/zxbasm/zxbasm myfile.asm -o myfile.bin
 ```
 
-Supported flags: `-d`, `-e`, `-o`, `-O` (output format)
+**Same flag surface as Python `zxbasm` — all upstream flags accepted.** 61/61
+upstream tests pass with **binary-exact** output (every byte of the emitted
+binary matches Python's, on the full Z80 instruction set including Z80N
+extensions). PROC/ENDP scoping, LOCAL labels, PUSH/POP NAMESPACE, `#init`,
+EQU/DEFL, ORG, ALIGN, INCBIN, two-pass with forward refs — all there.
 
-The compiler frontend (`zxbc`) can already parse all BASIC sources:
+### Prove it's a drop-in replacement
+
+Want to confirm against Python directly? Compile the same source with both and
+`cmp`:
 
 ```bash
-./csrc/build/zxbc/zxbc --parse-only myfile.bas
+# Python (needs Python 3.11+ and the upstream src/):
+python3 -c "
+import sys; sys.path.insert(0, '.')
+from src.zxbc.zxbc import main
+sys.exit(main(['-O2', '-f', 'tap', '-B', '-a', '-o', 'py.tap', 'hello.bas']) or 0)
+"
+
+# C:
+./csrc/build/zxbc/zxbc -O2 -f tap -B -a -o c.tap hello.bas
+
+# Byte-compare:
+cmp py.tap c.tap && echo "✅ byte-identical"
 ```
 
-Full compilation works end-to-end and produces binaries byte-identical to
-Python at every optimization level (with the three documented known-Python-bug
-fixtures excepted). Drive `zxbc <foo.bas>` and compare bytes — the C port is
-a drop-in replacement.
+Across the 1,036-file `tests/functional/arch/zx48k` corpus and the 198-file
+`tests/functional/arch/zxnext` corpus, this comparison passes for every file
+except the three documented Python-optimizer-bug fixtures. The custom probe
+series (`csrc/tests/codegen_probes/`, ~94 fixtures across 8 categories) covers
+codepaths the inherited corpus doesn't reach — 84+ probes GREEN, hand-authored
+to enforce no silent drift on subtle semantics (typecast cross-products,
+loop-stack EXIT/CONTINUE checks, `@`-address-of in constant contexts, class
+mismatches with proper "a VAR"/"an ARRAY" article handling, etc.).
+
+### Embed in your build pipeline
+
+The three binaries chain naturally if you want explicit per-stage control,
+or `zxbc` will run the full pipeline in-process:
+
+```bash
+# Explicit chain (preprocess → compile-to-asm → assemble):
+./csrc/build/zxbpp/zxbpp myfile.bas -o myfile.pre.bas
+./csrc/build/zxbc/zxbc -f asm -o myfile.asm myfile.pre.bas
+./csrc/build/zxbasm/zxbasm myfile.asm -o myfile.bin
+
+# Or one shot (zxbc invokes both internally):
+./csrc/build/zxbc/zxbc -f bin -o myfile.bin myfile.bas
+```
+
+Native C binaries — no Python dependency, suitable for embedding in CI, build
+systems, IDEs, or resource-constrained targets like NextPi.
 
 ## 🗺️ The Road to NextPi
 
