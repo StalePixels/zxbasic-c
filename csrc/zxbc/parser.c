@@ -7123,6 +7123,21 @@ static AstNode *dim_build_array(Parser *p, const char *name, AstNode *bounds,
         if (id_node->u.id.class_ == CLASS_unknown)
             id_node->u.id.class_ = CLASS_array;
         id_node->type_ = type;
+        /* Python declare_array (symboltable.py:702):
+         *     if type_.implicit:
+         *         warning_implicit_type(lineno, id_, type_)
+         * DIM <id>(bounds) without an `as <type>` clause has type.implicit
+         * == True (the inferred default-type). Mirror the emit here. */
+        if (type && type->implicit) {
+            BasicType tbt = type->final_type ? type->final_type->basic_type
+                                             : type->basic_type;
+            if (tbt != TYPE_unknown) {
+                const char *tn = type->name ? type->name
+                               : (p->cs->default_type ? p->cs->default_type->name
+                                                      : "float");
+                warn_implicit_type(p->cs, lineno, dim_name, tn);
+            }
+        }
         id_node->u.id.arr_boundlist = bounds;
         ast_add_child(p->cs, decl, id_node);
         ast_add_child(p->cs, decl, bounds);
