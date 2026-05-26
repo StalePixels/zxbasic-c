@@ -10205,10 +10205,25 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         return true;
     }
     case 344: { /* param_definition : BYVAL param_def -> byref = false
-                 * (array-byval rejection deferred -> UNWIRED via the array
-                 * param being UNWIRED already). */
+                 * p_param_byval_definition (zxbparser.py:3084-3094): if the
+                 * param_def is an array (CLASS.array), emit
+                 *   "Array parameter '<name>' must be passed ByRef"
+                 * at the BYVAL token's line (p.lineno(1)) and SET p[0] = None
+                 * so the param is dropped from the PARAMLIST (the call site
+                 * then trips "Too many arguments" via the normal arity check).
+                 * Mirrors errmsg.syntax_error_cannot_pass_array_by_value. */
         PdParam *pp = (PdParam *)rhs[1].value;
-        if (pp && pp->arg) pp->arg->u.argument.byref = false;
+        if (pp && pp->arg) {
+            if (pp->arg->u.argument.is_array) {
+                zxbc_error(p->cs, PD_LINENO(1),
+                           "Array parameter '%s' must be passed ByRef",
+                           pp->arg->u.argument.name);
+                *out = NULL;            /* p[0] = None — drop the param */
+                *out_lineno = PD_LINENO(1);
+                return true;
+            }
+            pp->arg->u.argument.byref = false;
+        }
         *out = pp; *out_lineno = PD_LINENO(1);
         return true;
     }
