@@ -6,7 +6,7 @@
 [![zxbpp tests](https://img.shields.io/badge/zxbpp_tests-96%2F96_passing-brightgreen)](#-phase-1--preprocessor-done)
 [![zxbasm tests](https://img.shields.io/badge/zxbasm_tests-61%2F61_passing-brightgreen)](#-phase-2--assembler-done)
 [![zxbc full pipeline](https://img.shields.io/badge/zxbc_full--O0--O3-byte--identical_to_Python-brightgreen)](#-phase-3--compiler-frontend-byte-identical)
-[![Codegen probes](https://img.shields.io/badge/probes-84%2F84_GREEN-brightgreen)](#probe-enumeration-meter)
+[![Codegen probes](https://img.shields.io/badge/probes-94_GREEN_%2B_1_RED--in--progress-brightgreen)](#probe-enumeration-meter)
 [![C unit tests](https://img.shields.io/badge/C_unit_tests-132_passing-blue)](#c-unit-test-suite)
 
 ZX BASIC — C Port 🚀
@@ -37,7 +37,7 @@ far too heavy for the hardware. Native C binaries sidestep the problem entirely.
 | 0 | Infrastructure (arena, strbuf, vec, hashmap, CMake) | — | ✅ Complete |
 | 1 | **Preprocessor (`zxbpp`)** | **96/96** 🎉 | ✅ Complete |
 | 2 | **Assembler (`zxbasm`)** | **61/61** 🎉 | ✅ Complete |
-| 3 | **Compiler frontend (`zxbc`)** | **1014/1033** parse-only PASS / **0 false-positives** | ✅ Byte-identical except 3 known upstream Python bugs |
+| 3 | **Compiler frontend (`zxbc`)** | **1016/1033** parse-only PASS / **0 false-positives** | ✅ Byte-identical except 3 known upstream Python bugs |
 | 4 | **Optimizer + IR generation (AST → Quads)** | byte-identical -O1/-O2/-O3 to Python | ✅ Complete |
 | 5 | **Z80 backend (Quads → Assembly + peephole)** | zx48k 895/886/886 stages GREEN; zxnext 197/197/197 GREEN | ✅ Complete |
 | 6 | Full integration + all output formats (.tap/.tzx/.sna/.z80) | exercised by stage validation | 🔨 Final polish |
@@ -52,10 +52,10 @@ known-broken in the pinned upstream commit (documented in the upstream
 CHANGELOG; C compiles them correctly).
 
 **Parse meter** (exit-code + cached-Python-baseline stderr comparison):
-- ✅ **1014/1033 PASS** — C and Python produce byte-identical parse-only output
+- ✅ **1016/1033 PASS** — C and Python produce byte-identical parse-only output
 - ✅ **0 false-positives** — C never errors on a file that Python accepts
 - ✅ **0 false-negatives** — C never silently accepts a file Python rejects
-- 🔨 19 stderr-mismatch residuals — warning/error message text fidelity (binaries byte-identical; the diagnostic text still diverges on a small backlog)
+- 🔨 17 stderr-mismatch residuals — warning/error message text fidelity (binaries byte-identical; the diagnostic text still diverges on a small backlog)
 
 **Omatrix meter** (full-compile raw `.bin` comparison at all -O levels):
 - ✅ -O0 EQUAL 888 / BIN-DIFF 0 / C-ERR 0 / CRASH 0
@@ -73,10 +73,14 @@ In addition to the inherited corpus, the C port has its own probe series —
 ~90 hand-authored fixtures (`csrc/tests/codegen_probes/`) that deliberately
 drive codepaths the inherited corpus is silent on. The probe runner compares
 the FULL contract per fixture (exit, stderr, Stage-1 ASM, end-to-end binary)
-against the Python oracle. **84/84 probes GREEN**, 0 RED, across 8 categories
-(typecast, warnings, errors, arithmetic, strings, arrays, controlflow, switches).
-This is the enumeration-completeness check — corpus-pass alone doesn't prove
-the port has every Python check; the probe meter does.
+against the Python oracle. **94 probes GREEN, 1 RED (in-progress)** across 9
+categories (typecast, warnings, errors, arithmetic, strings, arrays, controlflow,
+switches, preprocessor). This is the enumeration-completeness check — corpus-pass
+alone doesn't prove the port has every Python check; the probe meter does.
+The 1 currently-RED probe (`preprocessor/define_line_continuation_via_include`)
+is a real-world finding (multi-line `#DEFINE` with `\`-continuation via
+`#include`) and is being driven GREEN under the project's Red/Green discipline:
+every oversight gets a RED probe first, GREEN fix second.
 
 #### Compiler infrastructure
 - ✅ **Faithful PLY/LALR(1) parser port** — the default `zxbc` parser is a
@@ -336,7 +340,7 @@ Here's how we get there, one step at a time:
     │         zxbpp + zxbasm work without Python!
     │
  Phase 3  ✅  BASIC Frontend — faithful PLY/LALR(1) port
-    │         1014/1033 parse-only PASS, 0 false-positives, 84/84 probes GREEN
+    │         1016/1033 parse-only PASS, 0 false-positives, 94 probes GREEN (+1 RED, in-progress)
     │
  Phase 4  ✅  Optimizer + IR — byte-identical to Python at -O1/-O2/-O3
     │

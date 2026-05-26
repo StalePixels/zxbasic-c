@@ -171,7 +171,7 @@ The Python project has unit and integration tests beyond the functional `.bas`/`
 
 This project has several living documents and CI artefacts that MUST stay in sync with the code. When you add features, fix bugs, or complete phases:
 
-- **README.md** — Update the status table, test counts, and phase progress. The `zxbpp tests` badge is static (`96%2F96` etc.) — update the number when tests are added. The `C Build` badge is live from CI.
+- **README.md — refresh WITH EVERY BANKED PORT COMMIT.** Not "as phases complete" — every time a fix-agent's cluster is banked. The badges (parse-meter count, probe count + RED/in-progress count), the Phase 3 numbers (parse PASS, omatrix EQUAL/BIN-DIFF, stages both archs), the probe meter section, and the road-to-NextPi ASCII map are all status surfaces that go stale fast. If the bank changes any of those numbers — including +1 RED on a newly-authored probe — bump the README in the SAME bank commit (or the very next one). Stale badge numbers are project lying; don't leave them lying.
 - **CLAUDE.md** (this file) — Update test file conventions table, test commands, and any new component patterns as phases are completed.
 - **docs/c-port-plan.md** — Check off completed items as phases progress.
 - **docs/plans/** — WIP progress files for active branches.
