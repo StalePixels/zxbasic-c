@@ -1654,7 +1654,24 @@ bool check_pending_labels(CompilerState *cs, AstNode *ast) {
             /* Look up in symbol table — the label must be declared somewhere */
             AstNode *entry = symboltable_lookup(cs->symbol_table, node->u.id.name);
             if (!entry || entry->u.id.class_ == CLASS_unknown) {
-                zxbc_error(cs, node->lineno, "Undeclared label \"%s\"", node->u.id.name);
+                /* "First reference wins" lineno (Python `check_labels`,
+                 * symboltable.py:759-762, runs from p_start at :529 BEFORE
+                 * check_pending_labels). check_labels iterates self.labels
+                 * and reports via `check_is_declared(name, entry.lineno,
+                 * "label")` — so the error site is entry.lineno (the
+                 * lineno captured on FIRST creation), NOT the lineno of
+                 * the AST_ID node currently being visited. The entry's
+                 * lineno was stamped at first reference (bare-ID via
+                 * access_func, forward `@label` via access_id, or the
+                 * first access_label call itself when GOTO/GOSUB-only)
+                 * and never overwritten by later references. Mirror via
+                 * entry->lineno when an entry exists; fall back to
+                 * node->lineno only when no symbol-table entry was ever
+                 * created (Python's check_pending_labels-style path for a
+                 * bare LABEL ref whose only mention was the GOTO/GOSUB
+                 * — which itself doesn't symbol-table-touch in the C). */
+                int err_lineno = (entry != NULL) ? entry->lineno : node->lineno;
+                zxbc_error(cs, err_lineno, "Undeclared label \"%s\"", node->u.id.name);
                 result = false;
             }
             continue;
