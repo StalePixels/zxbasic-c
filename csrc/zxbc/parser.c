@@ -9058,10 +9058,20 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
                            "Duplicate function name '%s', previously defined at %d",
                            fname, id->lineno);
             }
-            /* class mismatch (e.g. SUB vs FUNCTION reuse). */
+            /* class mismatch (e.g. SUB vs FUNCTION reuse). Python's
+             * declare_func (symboltable.py:724-725) calls check_class which
+             * returns False -> declare_func returns None ->
+             * make_func_declaration returns None -> p_function_def short-
+             * circuits with p[0]=None. The entry's class is NOT reassigned
+             * (so FUNCTION_LEVEL[-1] stays the original class) and the body
+             * never reaches leave_scope (so W150 unused-param warnings are
+             * suppressed). Mark fd->rejected to skip W150 emission in
+             * function_body's leave-scope (case 324), and skip the cls-
+             * reassignment below (see fd->declared_ok gate). */
             if (id->u.id.class_ != CLASS_unknown && id->u.id.class_ != cls) {
                 syntax_error_unexpected_class(p->cs, ln, fname,
                                               id->u.id.class_, cls);
+                fd->rejected = true;
             }
             /* declare_func suffix-vs-existing-type mismatch (symboltable.py:735-
              * 736): when the new id carries a deprecated suffix and the existing
@@ -9084,7 +9094,17 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         } else {
             id = symboltable_declare(p->cs->symbol_table, p->cs, fname, ln, cls);
         }
-        id->u.id.class_ = cls;
+        /* Python declare_func (symboltable.py:724-725): when check_class fails
+         * (kind mismatch — pre-existing FUNCTION vs new SUB or vice-versa),
+         * declare_func returns None and the entry's class is NOT changed.
+         * Downstream `entry = SYMBOL_TABLE.get_entry(name)` at
+         * zxbparser.py:3026 returns the EXISTING (pre-mismatch) entry, so
+         * FUNCTION_LEVEL[-1].class_ keeps the original class. Skip the
+         * unconditional reassignment in the mismatch case so the SUB-ret-type
+         * check (case 330) and the END FUNCTION/SUB class-match check
+         * (function_body cases 350-357) see Python's actual state.
+         * declared_ok was captured above on the ORIGINAL class. */
+        if (fd->declared_ok) id->u.id.class_ = cls;
         id->u.id.declared = true;
         id->u.id.convention = conv;
         /* Only a FRESH declare records the line (symboltable.declare). A reused
@@ -9261,8 +9281,13 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
          * (non-implicit) AS clause -> "SUBs cannot have a return type
          * definition" -> p[0]=None. The engine's empty typedef (358) is NULL,
          * an explicit AS (359) is a non-implicit type, so `not p[3].implicit`
-         * == `td != NULL`. */
-        if (!fd->is_function && td) {
+         * == `td != NULL`. Python reads FUNCTION_LEVEL[-1].class_ (the actual
+         * entry class), not the source-side SUB/FUNCTION keyword. After a
+         * prior kind-mismatch (declare4: DECLARE FUNCTION + SUB body) the
+         * existing entry stays CLASS_function, so the check does NOT fire
+         * here — the END SUB / END FUNCTION mismatch (cases 350-357) takes
+         * over at the END line instead. Gate on the actual entry class. */
+        if (fd->id_node && fd->id_node->u.id.class_ == CLASS_sub && td) {
             zxbc_error(p->cs, PD_LINENO(3),
                        "SUBs cannot have a return type definition");
             r = NULL; break;
@@ -10324,12 +10349,19 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
     case 350: case 351: case 352: case 353:
     case 354: case 355: case 356: case 357: {
         bool end_func = (prodno % 2 == 0); /* 350/352/354/356 END FUNCTION */
-        /* class-match: FUNCTION_LEVEL[-1].class_ vs END FUNCTION/SUB */
+        /* class-match: FUNCTION_LEVEL[-1].class_ vs END FUNCTION/SUB.
+         * Python p_end_function (zxbparser.py:3169-3175) reads the top entry's
+         * class_; if it is not CLASS.sub / CLASS.function (e.g. a name-collision
+         * with a VAR — funccall4: `Function z` where z was already used as a
+         * VAR — leaves the entry at CLASS_var) the check returns silently.
+         * Only emit the END-keyword-mismatch when the class is a real
+         * function/sub. */
         if (p->cs->function_level.len > 0) {
             AstNode *top = p->cs->function_level.data[p->cs->function_level.len - 1];
             bool is_func_class = (top->u.id.class_ == CLASS_function);
+            bool is_sub_class  = (top->u.id.class_ == CLASS_sub);
             int end_ln = PD_LINENO(len); /* END's line ~ last token */
-            if (is_func_class != end_func) {
+            if ((is_func_class || is_sub_class) && is_func_class != end_func) {
                 zxbc_error(p->cs, end_ln,
                            "Unexpected token 'END %s'. Should be 'END %s'",
                            end_func ? "FUNCTION" : "SUB",
