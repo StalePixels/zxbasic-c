@@ -9803,6 +9803,46 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         break;
     }
 
+    /* ---- EXIT / CONTINUE statements ----
+     * p_exit (zxbparser.py:1948-1960) / p_continue (:1963-1975): build the
+     * SENTENCE("EXIT_<q>" / "CONTINUE_<q>") then scan gl.LOOPS for a matching
+     * loop type; if none is found, emit "Syntax Error: EXIT|CONTINUE <q> out
+     * of loop" (regular error, exit 1). The legacy recursive-descent path
+     * has the same shape (parser.c:4479-4530) but is no longer the default
+     * parser; the PLY engine never dispatched these prods and the EXIT/
+     * CONTINUE sentence node was dropped as unwired -> NOP, which both lost
+     * the out-of-loop error (err_exit_out_of_loop / err_continue_out_of_loop)
+     * AND made `If ... Then Exit Do/Continue Do/Exit For` look like an empty
+     * IF body, triggering a spurious W140 (cf_do_while_exit, cf_nested_for).
+     * 182=EXIT WHILE, 183=EXIT DO, 184=EXIT FOR, 185=CONTINUE WHILE,
+     * 186=CONTINUE DO, 187=CONTINUE FOR (productions.tsv:184-189). */
+    case 182: case 183: case 184:
+    case 185: case 186: case 187: {
+        bool is_continue = (prodno >= 185);
+        const char *q;
+        LoopType lt;
+        switch (prodno) {
+            case 182: q = "WHILE"; lt = LOOP_WHILE; break;
+            case 183: q = "DO";    lt = LOOP_DO;    break;
+            case 184: q = "FOR";   lt = LOOP_FOR;   break;
+            case 185: q = "WHILE"; lt = LOOP_WHILE; break;
+            case 186: q = "DO";    lt = LOOP_DO;    break;
+            default:  q = "FOR";   lt = LOOP_FOR;   break;
+        }
+        char kind[24];
+        snprintf(kind, sizeof(kind), "%s_%s", is_continue ? "CONTINUE" : "EXIT", q);
+        int ln = PD_LINENO(1);
+        r = make_sentence_node(p, kind, ln);
+        bool in_loop = false;
+        for (int i = 0; i < p->cs->loop_stack.len; i++)
+            if (p->cs->loop_stack.data[i].type == lt) { in_loop = true; break; }
+        if (!in_loop)
+            zxbc_error(p->cs, ln,
+                       "Syntax Error: %s %s out of loop",
+                       is_continue ? "CONTINUE" : "EXIT", q);
+        break;
+    }
+
     /* ---- WHILE subsystem ----
      * while_start : WHILE expr (181) -> the cond; push loop_stack(WHILE).
      * Carry the WHILE-keyword line as the result lineno (p_while_sentence uses
