@@ -1450,22 +1450,79 @@ static void handle_include(PreprocState *pp, const char *rest)
     pp->current_line = 1;
     preproc_emit_line(pp, 1, pp->current_file);
 
-    /* Process the included content line by line */
+    /* Process the included content line by line — applying backslash
+     * line-continuation merging so a multi-line `#DEFINE FOO(x) \\\n
+     * ...` reaches process_line as a single joined line. Without this
+     * the include path errors `illegal preprocessor character '\'` on
+     * the body lines, even though the same content processed at the
+     * top level (preproc_file) joins them correctly.
+     *
+     * Python's PLY lexer (src/zxbpp/zxbpplex.py:100/128/152/192/204)
+     * has CONTINUE rules in multiple states. We intentionally do NOT
+     * do underscore continuation here even though the INITIAL rule
+     * covers `[\\_]\r?\n`: Python's `singlecomment` state has only the
+     * backslash rule (zxbpplex.py:192), so a `;`-comment ending in
+     * `_` is NOT a continuation. The C pre-tokenisation loop has no
+     * lexer-state tracking, so applying `_` continuation
+     * unconditionally over-fires inside `;`-comments (e.g.
+     * print64.bas's font table has lines ending ` _`). Backslash is
+     * safe because `singlecomment_CONTINUE` also fires on `\<NL>`. */
     char *line_start = content;
+    StrBuf inc_linebuf;
+    strbuf_init(&inc_linebuf);
+
     while (*line_start) {
         char *line_end = strchr(line_start, '\n');
+        size_t line_len;
         if (line_end) {
-            size_t line_len = (size_t)(line_end - line_start);
-            char *line = arena_strndup(&pp->arena, line_start, line_len);
-            process_line(pp, line);
-            pp->current_line++;
-            line_start = line_end + 1;
+            line_len = (size_t)(line_end - line_start);
         } else {
-            /* Last line without newline */
-            process_line(pp, line_start);
-            break;
+            line_len = strlen(line_start);
         }
+
+        strbuf_append_n(&inc_linebuf, line_start, line_len);
+
+        const char *cur = strbuf_cstr(&inc_linebuf);
+        int curlen = (int)strlen(cur);
+        bool continued = false;
+
+        if (curlen > 0 && cur[curlen - 1] == '\\') {
+            continued = true;
+            if (pp->in_asm) {
+                inc_linebuf.len--;
+                inc_linebuf.data[inc_linebuf.len] = '\0';
+            } else {
+                inc_linebuf.data[inc_linebuf.len - 1] = '\n';
+            }
+        }
+
+        if (!continued) {
+            char *complete_line = arena_strdup(&pp->arena, strbuf_cstr(&inc_linebuf));
+            int clen = (int)strlen(complete_line);
+            if (clen > 0 && complete_line[clen-1] == '\r')
+                complete_line[clen-1] = '\0';
+            process_line(pp, complete_line);
+            strbuf_clear(&inc_linebuf);
+            pp->current_line++;
+        } else {
+            pp->current_line++;
+        }
+
+        if (line_end)
+            line_start = line_end + 1;
+        else
+            break;
     }
+
+    /* Flush any trailing buffered line (no terminating newline). */
+    if (inc_linebuf.len > 0) {
+        char *complete_line = arena_strdup(&pp->arena, strbuf_cstr(&inc_linebuf));
+        int clen = (int)strlen(complete_line);
+        if (clen > 0 && complete_line[clen-1] == '\r')
+            complete_line[clen-1] = '\0';
+        process_line(pp, complete_line);
+    }
+    strbuf_free(&inc_linebuf);
 
     free(content);
 
