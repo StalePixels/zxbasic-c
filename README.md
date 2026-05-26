@@ -37,7 +37,7 @@ far too heavy for the hardware. Native C binaries sidestep the problem entirely.
 | 0 | Infrastructure (arena, strbuf, vec, hashmap, CMake) | — | ✅ Complete |
 | 1 | **Preprocessor (`zxbpp`)** | **96/96** 🎉 | ✅ Complete |
 | 2 | **Assembler (`zxbasm`)** | **61/61** 🎉 | ✅ Complete |
-| 3 | **Compiler frontend (`zxbc`)** | **1023/1033** parse-only PASS / **0 false-positives** | ✅ Byte-identical except 3 known upstream Python bugs |
+| 3 | **Compiler frontend (`zxbc`)** | **1024/1033** parse-only PASS / **0 false-positives** | ✅ Byte-identical except 3 known upstream Python bugs |
 | 4 | **Optimizer + IR generation (AST → Quads)** | byte-identical -O1/-O2/-O3 to Python | ✅ Complete |
 | 5 | **Z80 backend (Quads → Assembly + peephole)** | zx48k 895/886/886 stages GREEN; zxnext 197/197/197 GREEN | ✅ Complete |
 | 6 | Full integration + all output formats (.tap/.tzx/.sna/.z80) | exercised by stage validation | 🔨 Final polish |
@@ -52,7 +52,7 @@ known-broken in the pinned upstream commit (documented in the upstream
 CHANGELOG; C compiles them correctly).
 
 **Parse meter** (exit-code + cached-Python-baseline stderr comparison):
-- ✅ **1023/1033 PASS** — C and Python produce byte-identical parse-only output
+- ✅ **1024/1033 PASS** — C and Python produce byte-identical parse-only output
 - ✅ **0 false-positives** — C never errors on a file that Python accepts
 - ✅ **0 false-negatives** — C never silently accepts a file Python rejects
 - 🔨 14 stderr-mismatch residuals — warning/error message text fidelity (binaries byte-identical; the diagnostic text still diverges on a small backlog)
@@ -338,7 +338,7 @@ Here's how we get there, one step at a time:
     │         zxbpp + zxbasm work without Python!
     │
  Phase 3  ✅  BASIC Frontend — faithful PLY/LALR(1) port
-    │         1023/1033 parse-only PASS, 0 false-positives, 101 probes GREEN
+    │         1024/1033 parse-only PASS, 0 false-positives, 101 probes GREEN
     │
  Phase 4  ✅  Optimizer + IR — byte-identical to Python at -O1/-O2/-O3
     │

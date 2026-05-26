@@ -7123,12 +7123,12 @@ static AstNode *dim_build_array(Parser *p, const char *name, AstNode *bounds,
         if (id_node->u.id.class_ == CLASS_unknown)
             id_node->u.id.class_ = CLASS_array;
         id_node->type_ = type;
-        /* Python declare_array (symboltable.py:702):
-         *     if type_.implicit:
-         *         warning_implicit_type(lineno, id_, type_)
-         * DIM <id>(bounds) without an `as <type>` clause has type.implicit
-         * == True (the inferred default-type). Mirror the emit here. */
-        if (type && type->implicit) {
+        /* Python declare_array (symboltable.py:689-702): when an `=> {...}`
+         * initializer is present and its element type differs, Python's
+         * typecast sets type_.implicit = False before the W100 check, so
+         * the W100 is suppressed. Mirror that: suppress when an initializer
+         * is present (the initializer determines the type), emit otherwise. */
+        if (type && type->implicit && !init) {
             BasicType tbt = type->final_type ? type->final_type->basic_type
                                              : type->basic_type;
             if (tbt != TYPE_unknown) {
