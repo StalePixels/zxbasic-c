@@ -164,6 +164,16 @@ struct AstNode {
                                   * S5.3: used by VarTranslator for the data
                                   * label. Equals .t for globals. NULL until
                                   * symboltable_declare* sets it. */
+            /* Python ID.filename (_id.py:58) — gl.FILENAME captured at
+             * FIRST USE (the lineno/filename pair stamped on creation,
+             * never overwritten). Used by api/check.py:179 for the
+             * R11 "sub/function declared but not implemented" diagnostic
+             * (fname=entry.filename), so the error attributes to the
+             * #line-active filename when the SUB was DECLARED — not the
+             * filename active at error-emit time. NULL == not stamped
+             * (legacy callers pre-S5.x); zxbc_error falls back to
+             * cs->current_file in that case. */
+            char *filename;
             SymbolClass class_;
             Scope scope;
             Convention convention;

@@ -333,6 +333,16 @@ AstNode *symboltable_declare(SymbolTable *st, CompilerState *cs,
      * mangle rule (opt2_labelinfunc4/5, paramstr5). */
     node->u.id.mangled =
         make_child_namespace(cs, st->current_scope->namespace_, name);
+    /* Python ID.filename (_id.py:58): self.filename = global_.FILENAME at
+     * first creation. Stamp cs->current_file here so the R11 emit
+     * (compiler.c:2063) — and any other entry.filename-attributed Python
+     * diagnostic ported later — reports the file that was #line-active
+     * when the symbol was FIRST seen, not the file active at error-emit
+     * time. arena_strdup snapshots the value (cs->current_file is mutated
+     * mid-parse by #line directives). */
+    node->u.id.filename = (cs->current_file)
+                              ? arena_strdup(&cs->arena, cs->current_file)
+                              : NULL;
     node->u.id.class_ = class_;
     node->u.id.scope = (st->current_scope->level == 0) ? SCOPE_global : SCOPE_local;
     node->u.id.convention = CONV_unknown;
@@ -2057,13 +2067,23 @@ bool check_pending_calls(CompilerState *cs) {
         }
 
         /* R11 — forward-declared but never implemented (api/check.py
-         * :175-181). Python reports fname=entry.filename; the existing
-         * call->lineno + cs->current_file behaviour predates S5.10a and
-         * is retained unchanged. */
+         * :175-181). Python reports fname=entry.filename — the
+         * #line-active filename when the SUB was DECLARED (stamped on
+         * the ID node at first creation in symboltable_declare, mirroring
+         * _id.py:58). Swap cs->current_file to entry.filename for the
+         * duration of the emit (the faithful analogue of the fname=
+         * kwarg), then restore — same shape as the R3-R10 fname= swap
+         * above. lineno stays call->lineno (Python passes lineno through
+         * check_call_arguments). bad_fname_err4 / probe
+         * err_sub_decl_filename_via_line_pragma. */
         if (entry->u.id.forwarded) {
             const char *kind = (cls == CLASS_sub) ? "sub" : "function";
+            char *saved_file = cs->current_file;
+            if (entry->u.id.filename)
+                cs->current_file = entry->u.id.filename;
             zxbc_error(cs, call->lineno, "%s '%s' declared but not implemented",
                        kind, name);
+            cs->current_file = saved_file;
             result = false;
         }
 
