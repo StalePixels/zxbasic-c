@@ -2214,6 +2214,109 @@ static void process_line(PreprocState *pp, const char *line)
         return;
     }
 
+    /* BASIC mode: scan for chars that trip the Python prepro INITIAL-state
+     * catch-all in src/zxbpp/zxbpplex.py:399-401:
+     *
+     *   def t_INITIAL_..._ANY(self, t):
+     *       r"."
+     *       self.error("illegal preprocessor character '%s'" % t.value[0])
+     *
+     * Empirically (Python 3.13) the chars that reach the catch-all in
+     * INITIAL state — i.e. not matched by t_INITIAL_ID, t_INITIAL_STRING,
+     * t_INITIAL_NUMBER, t_INITIAL_TOKEN's `[][}{:,()=]` class,
+     * t_INITIAL_SEPARATOR (whitespace), t_INITIAL_NEWLINE, or
+     * t_INITIAL_CONTINUE (`[\\_]\r?\n`) — are: backtick, '?', and a lone
+     * backslash NOT immediately followed by a line-terminator.  All other
+     * "looks weird" chars (`~`, `^`, `!`, `@`, `&`, `%` etc) match
+     * t_INITIAL_TOKEN's class and become normal tokens.
+     *
+     * Behaviour mirror: the lex catch-all returns NO token and consumes a
+     * single char, so the bad char never reaches the BASIC compiler lexer
+     * and the surrounding good text continues to lex.  We emit one error
+     * per bad char position and splice the bad chars out, so the rest of
+     * the line proceeds as if the bad char had never been there.  Strings
+     * (`"..."`) span their content verbatim and never cross a newline
+     * (zxbpplex.py:327 t_INITIAL_..._STRING = `"([^"\n]|"")*"`), and
+     * `'`-comments are already stripped above (strip_comment / find_comment
+     * track strings the same way).  Continuation-joined lines contain
+     * embedded `\n`s which terminate any in-flight string.
+     *
+     * pp->in_asm is handled by the strchr above; this scan is BASIC-only. */
+    if (!pp->in_asm) {
+        bool has_bad = false;
+        bool in_str = false;
+        for (const char *p = to_expand; *p; p++) {
+            char c = *p;
+            if (c == '\n') {
+                in_str = false;
+                continue;
+            }
+            if (in_str) {
+                if (c == '"') in_str = false;
+                continue;
+            }
+            if (c == '"') { in_str = true; continue; }
+            if (c == '`' || c == '?') {
+                preproc_error(pp, "illegal preprocessor character '%c'", c);
+                has_bad = true;
+            } else if (c == '\\') {
+                /* `[\\_]\r?\n` (zxbpplex.py:128) — a backslash directly
+                 * before a line-terminator is the CONTINUE rule, not a
+                 * bad char.  Continuation joining at the line-read layer
+                 * has already turned the trailing `\<NL>` into a `\n`
+                 * inside the joined line (preproc.c continuation-merge
+                 * at the include / top-level loops), so a `\` we see here
+                 * is followed by either non-EOL or by `\r?\n` that was
+                 * NOT line-joined (i.e. an embedded `\n` from a joined
+                 * line still leaves `\<NL>` un-stripped only at the
+                 * tail of the very last physical line of the join).
+                 * Treat `\<\r?\n>` as CONTINUE-equivalent (no error); any
+                 * other `\` is the catch-all bad-char. */
+                const char *q = p + 1;
+                if (*q == '\r') q++;
+                if (*q == '\n' || *q == '\0') {
+                    /* CONTINUE-like; not an error */
+                } else {
+                    preproc_error(pp, "illegal preprocessor character '\\'");
+                    has_bad = true;
+                }
+            }
+        }
+        if (has_bad) {
+            /* Splice bad chars out and continue processing the rest of
+             * the line — matches Python's "consume-without-token" effect:
+             * the catch-all only swallows the offending byte, the good
+             * surrounding text still reaches the parser. */
+            size_t n = strlen(to_expand);
+            char *clean = arena_alloc(&pp->arena, n + 1);
+            size_t j = 0;
+            in_str = false;
+            for (const char *p = to_expand; *p; p++) {
+                char c = *p;
+                if (c == '\n') { in_str = false; clean[j++] = c; continue; }
+                if (in_str) {
+                    if (c == '"') in_str = false;
+                    clean[j++] = c;
+                    continue;
+                }
+                if (c == '"') { in_str = true; clean[j++] = c; continue; }
+                if (c == '`' || c == '?') continue;
+                if (c == '\\') {
+                    const char *q = p + 1;
+                    if (*q == '\r') q++;
+                    if (*q == '\n' || *q == '\0') {
+                        clean[j++] = c;
+                    }
+                    /* else: drop this backslash */
+                    continue;
+                }
+                clean[j++] = c;
+            }
+            clean[j] = '\0';
+            to_expand = clean;
+        }
+    }
+
     /* Regular content line — expand macros and emit */
     char *expanded = expand_macros_in_text(pp, to_expand);
     strbuf_append(&pp->output, expanded);
