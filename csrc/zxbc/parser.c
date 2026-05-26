@@ -2394,12 +2394,18 @@ AstNode *parse_primary(Parser *p) {
          * production (`bexpr : ADDRESSOF ID arg_list`, p_addr_of_array_id)
          * handled by parse_call_or_array; keep the bare UNARY ADDRESS. */
         if (check(p, BTOK_LP)) {
-            AstNode *n = ast_new(p->cs, AST_UNARY, lineno);
-            n->u.unary.operator = arena_strdup(&p->cs->arena, "ADDRESS");
             /* addressof_ctx=true selects the "Undeclared array"
              * diagnostic for an undeclared <name>. */
             AstNode *operand = parse_call_or_array(p, name, lineno,
                                                    true, true);
+            /* Python p_addr_of_array_element / p_err_undefined_arr_access
+             * (zxbparser.py:2818-2836): if the inner operand is None the
+             * whole bexpr reduces to None (no UNARY ADDRESS wrap). Mirror
+             * here so callers (const_vector elements, etc.) see NULL and
+             * can propagate the None upstream. */
+            if (!operand) return NULL;
+            AstNode *n = ast_new(p->cs, AST_UNARY, lineno);
+            n->u.unary.operator = arena_strdup(&p->cs->arena, "ADDRESS");
             ast_add_child(p->cs, n, operand);
             n->type_ = p->cs->symbol_table->basic_types[TYPE_uinteger];
             return n;
@@ -6162,6 +6168,18 @@ static AstNode *parse_array_initializer(Parser *p) {
      * vector size" message) is skipped and no array is declared. */
     int first_row_count = -1;
     bool ragged = false;
+    /* Mirror Python's const_vector None-propagation: if any element (or any
+     * nested-row sub-init) reduces to None, the whole const_vector reduces
+     * to None and p_arr_decl_initialized early-returns without check_bound.
+     * In C: any NULL element/sub-init -> we return NULL at the end, same
+     * path as `ragged` above. This prevents the cascading "Mismatched
+     * vector size" diagnostic when an element parse already errored
+     * (e.g. `@a(1)` against an undeclared array).
+     * See zxbparser.py p_const_vector_elem_list:891-897 /
+     * p_const_vector_elem_list_list:909-915 (each `if p[1] is None: return`
+     * without setting p[0] yields None up the const_number_list reduce
+     * chain at line 906: `if p[1] is None or p[3] is None: return`). */
+    bool elem_was_null = false;
 
     if (!check(p, BTOK_RBRACE)) {
         do {
@@ -6178,9 +6196,19 @@ static AstNode *parse_array_initializer(Parser *p) {
                         ragged = true;
                     }
                     ast_add_child(p->cs, init, sub);
+                } else {
+                    /* A sub-init that reduced to None (or ragged) poisons
+                     * the parent too — propagate the None upward. */
+                    elem_was_null = true;
                 }
             } else {
                 AstNode *expr = parse_expression(p, PREC_NONE + 1);
+                if (!expr) {
+                    /* Element parse returned None (e.g. `@a(1)` undeclared).
+                     * Mirror Python's None-propagation: the whole vector
+                     * reduces to None and check_bound is skipped. */
+                    elem_was_null = true;
+                }
                 if (expr) {
                     /* Faithful port of the const-vector element handling in
                      * src/zxbc/zxbparser.py p_const_vector_elem_list:891-897
@@ -6243,6 +6271,10 @@ static AstNode *parse_array_initializer(Parser *p) {
      * NULL so the caller skips check_bound and the array declaration,
      * exactly as p_arr_decl_initialized's `if ... p[8] is None: return`. */
     if (ragged) return NULL;
+    /* Any NULL element/sub-init reduces the whole const_vector to None
+     * upstream (Python const_number_list None-propagation). Same NULL
+     * return path as `ragged` — caller skips check_bound, no cascade. */
+    if (elem_was_null) return NULL;
     return init;
 }
 
@@ -10560,19 +10592,28 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
      * structure parse_array_initializer builds, so check_bound_recurse +
      * dim_build_array (shared with the production) operate identically. */
     case 51: { /* const_number_list : expr (p_const_vector_elem_list) — start a
-                * flat element list with the per-element const-check. */
-        AstNode *lst = ast_new(p->cs, AST_ARRAYINIT, PD_LINENO(1));
+                * flat element list with the per-element const-check.
+                * Python (zxbparser.py:891-897): `if p[1] is None: return` —
+                * the production yields None when the element is None, which
+                * cascades up to const_vector being None, which makes
+                * p_arr_decl_initialized early-return without check_bound. */
         AstNode *e = PD_NODE(1);
-        if (e) ast_add_child(p->cs, lst, const_vector_elem(p, e, p->lexer.lineno));
+        if (!e) { r = NULL; break; }
+        AstNode *lst = ast_new(p->cs, AST_ARRAYINIT, PD_LINENO(1));
+        ast_add_child(p->cs, lst, const_vector_elem(p, e, p->lexer.lineno));
         r = lst;
         break;
     }
     case 52: { /* const_number_list : const_number_list COMMA expr
                 * (p_const_vector_elem_list_list) — append the next element.
-                * Error lineno is p.lineno(2) = the COMMA. */
+                * Error lineno is p.lineno(2) = the COMMA.
+                * Python (zxbparser.py:906-915): `if p[1] is None or p[3] is
+                * None: return` — None-propagation: if EITHER the prior list
+                * OR this element is None, the whole list reduces to None. */
         AstNode *lst = (AstNode *)rhs[0].value;
         AstNode *e = PD_NODE(3);
-        if (lst && e) ast_add_child(p->cs, lst, const_vector_elem(p, e, PD_LINENO(2)));
+        if (!lst || !e) { r = NULL; break; }
+        ast_add_child(p->cs, lst, const_vector_elem(p, e, PD_LINENO(2)));
         r = lst;
         break;
     }
@@ -10581,9 +10622,13 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         r = (AstNode *)rhs[1].value;
         break;
     case 53: { /* const_vector_list : const_vector (p_const_vector_list) ->
-                * [p[1]] — a one-row list whose single child is the row. */
+                * [p[1]] — a one-row list whose single child is the row.
+                * Python propagation: if the row is None, the rows list is
+                * None too. */
+        AstNode *row = (AstNode *)rhs[0].value;
+        if (!row) { r = NULL; break; }
         AstNode *rows = ast_new(p->cs, AST_ARRAYINIT, PD_LINENO(1));
-        if (rhs[0].value) ast_add_child(p->cs, rows, (AstNode *)rhs[0].value);
+        ast_add_child(p->cs, rows, row);
         r = rows;
         break;
     }
