@@ -797,6 +797,33 @@ static bool is_enabled(PreprocState *pp)
     return true;
 }
 
+/* Helper: emit the Python-style two-error pattern for "directive expected an
+ * identifier as its first token but got something else".
+ *
+ * Python anchor: zxbpplex.py:399-401 — the `prepro_define` (and sister) lexer
+ * states have a catch-all `r"."` rule that emits `illegal preprocessor
+ * character '<c>'` and returns no token; the parser then sees DEFINE NEWLINE
+ * (or UNDEF NEWLINE / IFDEF NEWLINE / etc.) and PLY's `p_error`
+ * (zxbpp.py:885-892) emits `Syntax error. Unexpected end of line`.
+ *
+ * Pre-condition: `p` already skipped leading whitespace.  `*p` is the first
+ * non-whitespace byte after the directive name (possibly NUL, '\n', or '\r'
+ * for an empty/whitespace-only directive body).
+ *
+ * Behaviour:
+ *   - if *p is end-of-line (NUL / '\n' / '\r'): emit ONLY the EOL error
+ *     (the lex catch-all has nothing to fire on).
+ *   - otherwise: emit illegal-char with *p as the offending byte, THEN
+ *     the EOL error — exactly mirroring Python's lex-then-parse sequence. */
+static void preproc_emit_id_or_eol_error(PreprocState *pp, const char *p)
+{
+    char c = *p;
+    if (c != '\0' && c != '\n' && c != '\r') {
+        preproc_error(pp, "illegal preprocessor character '%c'", c);
+    }
+    preproc_error(pp, "Syntax error. Unexpected end of line");
+}
+
 /* Handle: #define NAME [BODY] or #define NAME(params) BODY */
 static void handle_define(PreprocState *pp, const char *rest)
 {
@@ -805,7 +832,7 @@ static void handle_define(PreprocState *pp, const char *rest)
     /* Parse macro name */
     int name_len = scan_id(p);
     if (name_len == 0) {
-        preproc_error(pp, "expected identifier after #define");
+        preproc_emit_id_or_eol_error(pp, p);
         return;
     }
     char *name = arena_strndup(&pp->arena, p, (size_t)name_len);
@@ -947,7 +974,7 @@ static void handle_undef(PreprocState *pp, const char *rest)
     const char *p = skip_ws(rest);
     int name_len = scan_id(p);
     if (name_len == 0) {
-        preproc_error(pp, "expected identifier after #undef");
+        preproc_emit_id_or_eol_error(pp, p);
         return;
     }
     char *name = arena_strndup(&pp->arena, p, (size_t)name_len);
@@ -960,7 +987,7 @@ static void handle_ifdef(PreprocState *pp, const char *rest, bool is_ifndef)
     const char *p = skip_ws(rest);
     int name_len = scan_id(p);
     if (name_len == 0) {
-        preproc_error(pp, "expected identifier after #ifdef/#ifndef");
+        preproc_emit_id_or_eol_error(pp, p);
         return;
     }
     char *name = arena_strndup(&pp->arena, p, (size_t)name_len);
