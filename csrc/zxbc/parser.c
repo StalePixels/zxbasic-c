@@ -9439,14 +9439,24 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
      * if_then_part : IF expr then (129) -> the condition expr. (The
      * always-true/false warning is stderr-only and the production parser does
      * not emit it, so omit it here to match the C-vs-C baseline; Phase C.) */
-    case 129: /* if_then_part : IF expr then -> the condition. The consumers
+    case 129: { /* if_then_part : IF expr then -> the condition. The consumers
                * (p_if_sentence etc.) use p.lineno(1) == the IF keyword line for
                * the IF SENTENCE; carry that as the nonterminal's lineno (NOT the
                * cond's, which for `IF a ...` is `a`'s DECLARATION line — the
-               * func_call_IC `#line` off-by-one). */
+               * func_call_IC `#line` off-by-one).
+               * p_if_then_part (zxbparser.py:1514-1524): if expr is a NUMBER /
+               * numeric CONST, emit W110 "Condition is always True/False" at
+               * the IF-keyword line. is_number == check_is_number. */
+        AstNode *cond = (AstNode *)rhs[1].value;
+        if (cond && check_is_number(cond)) {
+            double cv = 0;
+            zxbc_eval_to_num(cond, &cv);
+            warn_condition_always(p->cs, PD_LINENO(1), cv != 0.0);
+        }
         *out = rhs[1].value;          /* the cond expr (p[2]) */
         *out_lineno = PD_LINENO(1);   /* IF keyword line */
         return true;
+    }
     case 132: case 133: /* then : <empty> | THEN -> no value */
         *out = NULL;
         *out_lineno = (len > 0) ? PD_LINENO(1) : p->lexer.lineno;
