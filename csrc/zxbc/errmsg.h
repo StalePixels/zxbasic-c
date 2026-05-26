@@ -58,8 +58,17 @@ void err_cannot_pass_array_by_value(CompilerState *cs, int lineno, const char *i
 void err_no_data_defined(CompilerState *cs, int lineno);
 void err_cannot_init_array_of_type(CompilerState *cs, int lineno, const char *type_name);
 void err_cannot_define_default_array_arg(CompilerState *cs, int lineno);
+/* Faithful port of src/api/errmsg.py:320-323
+ * syntax_error_unexpected_class(lineno, id_name, wrong_class, good_class):
+ *   n1 = "n" if wrong_class[0] in "aeiou" else ""
+ *   n2 = "n" if good_class[0] in "aeiou" else ""
+ *   "<id> is a<n1> <WRONG_CLASS>, not a<n2> <GOOD_CLASS>"
+ * Takes the CLASS enum values directly (matches Python's CLASS StrEnum). */
+void syntax_error_unexpected_class(CompilerState *cs, int lineno, const char *id_name,
+                                   int wrong_class, int good_class);
+/* Back-compat alias for the helper above (was the prior C API name). */
 void err_unexpected_class(CompilerState *cs, int lineno, const char *name,
-                          const char *wrong_class, const char *good_class);
+                          int wrong_class, int good_class);
 void err_already_declared(CompilerState *cs, int lineno, const char *name,
                           const char *as_class, int at_lineno);
 void err_mandatory_after_optional(CompilerState *cs, int lineno, const char *param1, const char *param2);

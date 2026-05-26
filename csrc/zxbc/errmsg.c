@@ -206,11 +206,65 @@ void err_cannot_define_default_array_arg(CompilerState *cs, int lineno) {
     zxbc_error(cs, lineno, "Cannot define default array argument");
 }
 
+/* CLASS-enum -> lowercase name (Python CLASS StrEnum values), used for the
+ * vowel-aware "a"/"an" article test (errmsg.py:321-322). */
+static const char *class_lowname(int cls) {
+    switch (cls) {
+        case CLASS_unknown:  return "unknown";
+        case CLASS_var:      return "var";
+        case CLASS_array:    return "array";
+        case CLASS_function: return "function";
+        case CLASS_label:    return "label";
+        case CLASS_const:    return "const";
+        case CLASS_sub:      return "sub";
+        case CLASS_type:     return "type";
+        default:             return "unknown";
+    }
+}
+
+/* CLASS-enum -> UPPERCASE name (matches Python's wrong_class.upper() /
+ * good_class.upper() interpolation at errmsg.py:323). */
+static const char *class_upname(int cls) {
+    switch (cls) {
+        case CLASS_unknown:  return "UNKNOWN";
+        case CLASS_var:      return "VAR";
+        case CLASS_array:    return "ARRAY";
+        case CLASS_function: return "FUNCTION";
+        case CLASS_label:    return "LABEL";
+        case CLASS_const:    return "CONST";
+        case CLASS_sub:      return "SUB";
+        case CLASS_type:     return "TYPE";
+        default:             return "UNKNOWN";
+    }
+}
+
+/* Faithful port of src/api/errmsg.py:320-323 syntax_error_unexpected_class.
+ * The vowel test uses the LOWERCASE class name (Python tests the StrEnum
+ * VALUE, which is lowercase) — so "array"/"unknown" -> "an ARRAY"/"an
+ * UNKNOWN" while "var"/"function"/"sub"/"const"/"label" -> "a VAR" etc. */
+void syntax_error_unexpected_class(CompilerState *cs, int lineno, const char *id_name,
+                                   int wrong_class, int good_class) {
+    const char *wl = class_lowname(wrong_class);
+    const char *gl = class_lowname(good_class);
+    const char *n1 = "";
+    const char *n2 = "";
+    switch (wl[0]) {
+        case 'a': case 'e': case 'i': case 'o': case 'u': n1 = "n"; break;
+        default: break;
+    }
+    switch (gl[0]) {
+        case 'a': case 'e': case 'i': case 'o': case 'u': n2 = "n"; break;
+        default: break;
+    }
+    zxbc_error(cs, lineno, "'%s' is a%s %s, not a%s %s", id_name,
+               n1, class_upname(wrong_class), n2, class_upname(good_class));
+}
+
+/* Back-compat alias — every former call site now routes through the
+ * faithful helper. */
 void err_unexpected_class(CompilerState *cs, int lineno, const char *name,
-                          const char *wrong_class, const char *good_class) {
-    const char *n1 = (wrong_class[0] == 'a' || wrong_class[0] == 'A') ? "n" : "";
-    const char *n2 = (good_class[0] == 'a' || good_class[0] == 'A') ? "n" : "";
-    zxbc_error(cs, lineno, "'%s' is a%s %s, not a%s %s", name, n1, wrong_class, n2, good_class);
+                          int wrong_class, int good_class) {
+    syntax_error_unexpected_class(cs, lineno, name, wrong_class, good_class);
 }
 
 void err_already_declared(CompilerState *cs, int lineno, const char *name,

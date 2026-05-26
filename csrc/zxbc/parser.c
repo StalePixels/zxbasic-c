@@ -5351,14 +5351,14 @@ static AstNode *parse_statement(Parser *p) {
             }
         }
 
-        {
-            AstNode *entry = symboltable_lookup(p->cs->symbol_table, name);
-            if (entry && entry->u.id.class_ == CLASS_var) {
-                zxbc_error(p->cs, ln, "'%s' is a VAR, not a FUNCTION", name);
-            } else if (entry && entry->u.id.class_ == CLASS_const) {
-                zxbc_error(p->cs, ln, "'%s' is a CONST, not a FUNCTION", name);
-            }
-        }
+        /* S3.x-class-unify: the VAR/CONST pre-flight emit that lived here
+         * (uppercase, hardcoded VAR/CONST→FUNCTION pair) was redundant with
+         * the access_func check below (compiler.c::symboltable_access_func,
+         * which now routes through syntax_error_unexpected_class). Removing
+         * it eliminates the funccall3 duplicate emission and lets the
+         * helper own the single faithful message — matching Python, where
+         * check_class emits exactly once per class-mismatched resolution
+         * (src/api/check.py:471-479, src/api/errmsg.py:320-323). */
         /* make_sub_call -> SymbolCALL.make_node -> access_func(id_): the
          * resolved/auto-declared FUNCTION/SUB symbol-table entry IS
          * child[0] (call.py:33-67). Python's p_statement_call returns the
@@ -5772,9 +5772,11 @@ static AstNode *parse_for_statement(Parser *p) {
                                           var_name, var_lineno, id_type, CLASS_var);
     if (var) {
         if (var->u.id.class_ == CLASS_const)
-            zxbc_error(p->cs, var_lineno, "'%s' is a CONST, not a VAR", var_name);
+            syntax_error_unexpected_class(p->cs, var_lineno, var_name,
+                                          CLASS_const, CLASS_var);
         else if (var->u.id.class_ == CLASS_function)
-            zxbc_error(p->cs, var_lineno, "'%s' is a FUNCTION, not a VAR", var_name);
+            syntax_error_unexpected_class(p->cs, var_lineno, var_name,
+                                          CLASS_function, CLASS_var);
         else if (var->u.id.class_ == CLASS_sub)
             zxbc_error(p->cs, var_lineno, "Cannot assign a value to '%s'. It's not a variable", var_name);
         if (var->u.id.class_ == CLASS_unknown)
@@ -7670,9 +7672,8 @@ static AstNode *parse_sub_or_func_decl(Parser *p, bool is_function, bool is_decl
         }
     }
     if (id_node->u.id.class_ != CLASS_unknown && id_node->u.id.class_ != cls) {
-        zxbc_error(p->cs, lineno, "'%s' is a %s, not a %s", func_name,
-                   symbolclass_to_string(id_node->u.id.class_),
-                   symbolclass_to_string(cls));
+        syntax_error_unexpected_class(p->cs, lineno, func_name,
+                                      id_node->u.id.class_, cls);
     }
 
     /* Check type mismatch between forward declaration and full definition.
@@ -8706,11 +8707,12 @@ static AstNode *pd_builtin0(Parser *p, const char *fname, BasicType bt,
  * which matches Python's reduce order (args reduce before statement:ID). */
 static AstNode *pd_sub_call(Parser *p, const char *name, int lineno,
                            AstNode *arglist) {
-    AstNode *entry = symboltable_lookup(p->cs->symbol_table, name);
-    if (entry && entry->u.id.class_ == CLASS_var)
-        zxbc_error(p->cs, lineno, "'%s' is a VAR, not a FUNCTION", name);
-    else if (entry && entry->u.id.class_ == CLASS_const)
-        zxbc_error(p->cs, lineno, "'%s' is a CONST, not a FUNCTION", name);
+    /* S3.x-class-unify: the VAR/CONST pre-flight emit that previously
+     * lived here (uppercase, hardcoded VAR/CONST→FUNCTION pair) was
+     * redundant with symboltable_access_func's own class-mismatch check
+     * (compiler.c, now routed through syntax_error_unexpected_class).
+     * Removing the duplicate matches Python (one emit per resolution via
+     * check_class — src/api/check.py:471-479). */
 
     AstNode *s = ast_new(p->cs, AST_FUNCCALL, lineno);
     AstNode *id_node =
@@ -8997,9 +8999,8 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
             }
             /* class mismatch (e.g. SUB vs FUNCTION reuse). */
             if (id->u.id.class_ != CLASS_unknown && id->u.id.class_ != cls) {
-                zxbc_error(p->cs, ln, "'%s' is a %s, not a %s", fname,
-                           symbolclass_to_string(id->u.id.class_),
-                           symbolclass_to_string(cls));
+                syntax_error_unexpected_class(p->cs, ln, fname,
+                                              id->u.id.class_, cls);
             }
             /* declare_func suffix-vs-existing-type mismatch (symboltable.py:735-
              * 736): when the new id carries a deprecated suffix and the existing
@@ -9747,9 +9748,11 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
                                              var_name, var_lineno, id_type, CLASS_var);
         if (var) {
             if (var->u.id.class_ == CLASS_const)
-                zxbc_error(p->cs, var_lineno, "'%s' is a CONST, not a VAR", var_name);
+                syntax_error_unexpected_class(p->cs, var_lineno, var_name,
+                                              CLASS_const, CLASS_var);
             else if (var->u.id.class_ == CLASS_function)
-                zxbc_error(p->cs, var_lineno, "'%s' is a FUNCTION, not a VAR", var_name);
+                syntax_error_unexpected_class(p->cs, var_lineno, var_name,
+                                              CLASS_function, CLASS_var);
             else if (var->u.id.class_ == CLASS_sub)
                 zxbc_error(p->cs, var_lineno, "Cannot assign a value to '%s'. It's not a variable", var_name);
             if (var->u.id.class_ == CLASS_unknown) var->u.id.class_ = CLASS_var;

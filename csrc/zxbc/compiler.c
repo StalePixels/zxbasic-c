@@ -1316,9 +1316,8 @@ AstNode *symboltable_access_var(SymbolTable *st, CompilerState *cs,
     if (result->u.id.class_ != CLASS_unknown && result->u.id.class_ != CLASS_var &&
         result->u.id.class_ != CLASS_const && result->u.id.class_ != CLASS_array &&
         result->u.id.class_ != CLASS_function && result->u.id.class_ != CLASS_sub) {
-        err_unexpected_class(cs, lineno, name,
-                             symbolclass_to_string(result->u.id.class_),
-                             symbolclass_to_string(CLASS_var));
+        syntax_error_unexpected_class(cs, lineno, name,
+                                      result->u.id.class_, CLASS_var);
         return NULL;
     }
 
@@ -1344,9 +1343,8 @@ AstNode *symboltable_access_func(SymbolTable *st, CompilerState *cs,
 
     if (result->u.id.class_ != CLASS_function && result->u.id.class_ != CLASS_sub &&
         result->u.id.class_ != CLASS_unknown) {
-        err_unexpected_class(cs, lineno, name,
-                             symbolclass_to_string(result->u.id.class_),
-                             symbolclass_to_string(CLASS_function));
+        syntax_error_unexpected_class(cs, lineno, name,
+                                      result->u.id.class_, CLASS_function);
         return NULL;
     }
 
@@ -1392,9 +1390,8 @@ AstNode *symboltable_access_array(SymbolTable *st, CompilerState *cs,
     if (!result) return NULL;
 
     if (result->u.id.class_ != CLASS_array && result->u.id.class_ != CLASS_unknown) {
-        err_unexpected_class(cs, lineno, name,
-                             symbolclass_to_string(result->u.id.class_),
-                             symbolclass_to_string(CLASS_array));
+        syntax_error_unexpected_class(cs, lineno, name,
+                                      result->u.id.class_, CLASS_array);
         return NULL;
     }
 
