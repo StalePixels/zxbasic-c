@@ -9001,6 +9001,24 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
                            symbolclass_to_string(id->u.id.class_),
                            symbolclass_to_string(cls));
             }
+            /* declare_func suffix-vs-existing-type mismatch (symboltable.py:735-
+             * 736): when the new id carries a deprecated suffix and the existing
+             * (forward-declared) entry's type differs from the suffix's implied
+             * type -> syntax_error_func_type_mismatch(lineno, entry) at the
+             * function_def lineno (Python p.lineno(3) = the ID line). param3:
+             * `declare function test(s$) as float` then `function test$(s$)`
+             * emits ":5: Function 'test' (previously declared at 3) type
+             * mismatch". The check uses the SAME entry.lineno that Python's
+             * errmsg helper reads (entry was reused so its lineno is the
+             * DECLARE line). Does NOT change entry.type_ — Python only emits
+             * here; the type stays at the forward-declared value (float for
+             * param3), which is what lets the later RETURN expr-type check fire
+             * "Function must return a numeric value, not a string". */
+            if (fd->suffix_type && id->type_ && id->type_->final_type &&
+                id->type_->final_type->basic_type !=
+                    fd->suffix_type->final_type->basic_type) {
+                err_func_type_mismatch(p->cs, ln, id->u.id.name, id->lineno);
+            }
         } else {
             id = symboltable_declare(p->cs->symbol_table, p->cs, fname, ln, cls);
         }
@@ -9014,6 +9032,19 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
          * declare_func (it never re-stamps entry.lineno on reuse) and the
          * production parse_sub_or_func_decl. */
         if (!pre) id->lineno = ln;
+        /* Python FuncRef.__init__ (funcref.py:27) stamps entry.ref.params with
+         * an empty SymbolPARAMLIST at function_def time, BEFORE the param_decl
+         * and typedef reduces. If a syntax error inside param_decl/typedef
+         * triggers function_header error-recovery (cases 328/329), case 330
+         * never runs and never sets id->u.id.params — leaving the C entry's
+         * params NULL. Python keeps the [] PARAMLIST, so a downstream call
+         * (let_expr_type_crash:8 -> editStringFN(3-args)) sees nparams=0 and
+         * R5 fires "Too many arguments". Initialize params here to that empty
+         * PARAMLIST (only when not already populated by a forward DECLARE) so
+         * the inline check_call_arguments path matches Python after recovery. */
+        if (!id->u.id.params) {
+            id->u.id.params = ast_new(p->cs, AST_PARAMLIST, ln);
+        }
         fd->id_node = id;
         symboltable_enter_scope(p->cs->symbol_table, p->cs, fd->name_raw);
         vec_push(p->cs->function_level, fd->id_node);
@@ -9059,12 +9090,20 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
             bool forwarded = e->u.id.forwarded;       /* zxbparser.py:2953 */
             TypeInfo *previoustype_ = e->type_;        /* zxbparser.py:2960 */
             AstNode *old_params = e->u.id.params;       /* DECLARE's PARAMLIST */
-            bool ret_is_explicit = (td && !td->implicit) ||
-                                   (fd->is_function && fd->suffix_type && !td);
+            bool typedef_is_explicit = (td && !td->implicit);
             bool entry_type_set = e->type_ &&
                 !(e->type_->final_type &&
                   e->type_->final_type->basic_type == TYPE_unknown);
-            if (e->u.id.forwarded && entry_type_set && !ret_is_explicit) {
+            /* Python p_function_header_pre (zxbparser.py:2961): the type-assign
+             * branch enters iff `not p[3].implicit or entry.type_ is None or
+             * entry.type_ == TYPE.unknown`. p[3] is the typedef (AS-clause)
+             * exclusively — the function-name suffix is NOT part of this
+             * condition. A FORWARDED entry with a known type and an implicit
+             * typedef stays at its declared type (param2/param3); the C path
+             * that mapped the suffix into `ret_is_explicit` was incorrect for
+             * forwarded entries (the suffix mismatch fires its own diagnostic
+             * via declare_func / case 332/333). Gate strictly on typedef. */
+            if (e->u.id.forwarded && entry_type_set && !typedef_is_explicit) {
                 fd->ret_type = e->type_;       /* keep forwarded type */
             } else {
                 e->type_ = fd->ret_type;
@@ -9929,18 +9968,32 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
             r = NULL; break;
         }
         if (func->type_ == NULL) { r = NULL; break; }
+        /* p_return_expr type-checks (zxbparser.py:2133-2147). Python uses
+         * is_numeric(p[2]) which returns False on ANY exception (e.g. p[2]
+         * is None after a sub-expression error). So an errored return expr
+         * (expr==NULL) is treated as "not numeric": if the function returns a
+         * numeric type the "must return a numeric value, not a string" branch
+         * still fires (funccall6: `return SNETopen(SNETcurrMPoint(), ...)`
+         * where the inner call errored -> outer expr None, function returns
+         * Byte -> Python emits the numeric-vs-string error at p.lineno(2)).
+         * Mirror that: treat NULL expr as non-numeric for this rule. */
+        int expr_ln = expr ? expr->lineno : PD_LINENO(2);
+        bool es, fs = type_is_string(func->type_);
         if (expr) {
-            bool es = type_is_string(expr->type_), fs = type_is_string(func->type_);
-            if (!es && fs) {
-                zxbc_error(p->cs, expr->lineno,
-                           "Type Error: Function must return a string, not a numeric value");
-                r = NULL; break;
-            }
-            if (es && !fs) {
-                zxbc_error(p->cs, expr->lineno,
-                           "Type Error: Function must return a numeric value, not a string");
-                r = NULL; break;
-            }
+            es = type_is_string(expr->type_);
+        } else {
+            /* errored sub-expr: is_numeric(None) is False, so "not numeric" */
+            es = true;
+        }
+        if (!es && fs) {
+            zxbc_error(p->cs, expr_ln,
+                       "Type Error: Function must return a string, not a numeric value");
+            r = NULL; break;
+        }
+        if (es && !fs) {
+            zxbc_error(p->cs, expr_ln,
+                       "Type Error: Function must return a numeric value, not a string");
+            r = NULL; break;
         }
         AstNode *cast = make_typecast(p->cs, func->type_, expr, ln);
         r = make_sentence_node(p, "RETURN", ln);
@@ -10827,13 +10880,19 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         AstNode *entry = symboltable_access_call(p->cs->symbol_table, p->cs,
                                                  name, ln, NULL);
         if (!entry) { r = NULL; break; }
-        /* The not-a-var / non-string-target cases are error paths where the
-         * OLD production builds a FUNCCALL-based LETARRAY recovery shape
-         * (e.g. explicit-mode undeclared `LET a(5) = "5"`, explicit5) while
-         * Python p_substr_assignment errors + None. The engine matches PYTHON;
-         * defer those to Phase-E-reconcile (do not contort to the old
-         * production's error-recovery tree). Only the genuine string-var substr
-         * write is wired. */
+        /* Python access_call (symboltable.py:450-453): if entry.callable is
+         * False (freshly auto-declared CLASS_unknown entries default to that)
+         * and type != string -> syntax_error_not_array_nor_func + return None.
+         * The fresh-CLASS_unknown branch of C access_call returns the entry
+         * unconditionally, so reproduce that check here for the LET ID
+         * arg_list EQ expr path (explicit5: `LET a(5) = "5"` with undeclared
+         * `a`). Faithful to Python's p_substr_assignment flow where the
+         * error and abort happen inside access_call. */
+        if (entry->u.id.class_ == CLASS_unknown &&
+            !type_is_string(entry->type_)) {
+            err_not_array_nor_func(p->cs, ln, name);
+            r = NULL; break;
+        }
         if (entry->u.id.class_ != CLASS_var &&
             entry->u.id.class_ != CLASS_unknown) {
             c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
