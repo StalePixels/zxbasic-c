@@ -172,6 +172,15 @@ struct AstNode {
             bool forwarded;      /* forward-declared function */
             bool declared;       /* has been defined (not just referenced) */
             bool default_value;  /* parameter has default value */
+            /* Python ID.caseins (_id.py:37,63 / type_.py:27).
+             * Stamped at declare time from OPTIONS.case_insensitive
+             * (symboltable.py:115). When TRUE, this entry is ALSO
+             * indexed in its scope's caseins HashMap keyed by
+             * lower(name) so lookup_lower can resolve a mixed-case
+             * reference to a mixed-case-declared symbol when the
+             * pragma was in force. Default FALSE preserves the
+             * default case-sensitive behaviour bit-for-bit. */
+            bool caseins;
             /* S5.3: the initializer expr for `DIM v AS t = expr` (Python
              * VarRef.default_value). NULL == no initializer. Faithful to
              * zxbparser.py:711 declare_variable(default_value=defval). */
@@ -458,6 +467,13 @@ int type_size(const TypeInfo *t);
  * ---------------------------------------------------------------- */
 typedef struct Scope_ {
     HashMap symbols;         /* name -> AstNode* (ID nodes) */
+    /* Python Scope.caseins (scope.py:44). Mirror of `symbols` keyed
+     * by name.lower(), populated ONLY when an entry's .caseins flag
+     * is true at insertion time (scope.py:56-57). Lookup falls back
+     * to this map when the exact-case lookup misses (scope.py:51).
+     * Empty by default — pure passthrough under the default
+     * case-sensitive option. */
+    HashMap caseins;
     struct Scope_ *parent;
     int level;               /* 0 = global */
     /* Python Scope.namespace (scope.py:45) — the mangling prefix. The

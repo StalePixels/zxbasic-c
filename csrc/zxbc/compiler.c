@@ -5,9 +5,67 @@
  */
 #include "zxbc.h"
 #include "errmsg.h"
+#include <ctype.h>
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
+
+/* Helper: ASCII-lowercase a string into the arena. Python uses
+ * str.lower() which on the names actually produced by the lexer
+ * (BASIC identifiers) is ASCII-only — tolower() is faithful. */
+static char *arena_strlower(Arena *a, const char *s) {
+    size_t n = strlen(s);
+    char *out = arena_alloc(a, n + 1);
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)s[i];
+        out[i] = (char)tolower(c);
+    }
+    out[n] = '\0';
+    return out;
+}
+
+/* Python Scope.__setitem__ (scope.py:53-57). Also mirrors the
+ * entry into the scope's caseins map keyed by lower(name) when
+ * the entry was declared case-insensitive. */
+static void scope_set_symbol(SymbolTable *st, Scope_ *scope,
+                             const char *name, AstNode *node) {
+    hashmap_set(&scope->symbols, name, node);
+    if (node->tag == AST_ID && node->u.id.caseins) {
+        char *lower = arena_strlower(st->arena, name);
+        hashmap_set(&scope->caseins, lower, node);
+    }
+}
+
+/* Python Scope.__getitem__ (scope.py:50-51): exact-case lookup,
+ * falling back to caseins[name.lower()]. Pure passthrough when no
+ * caseins entries exist in the scope. */
+static AstNode *scope_get_symbol(Scope_ *scope, const char *name) {
+    AstNode *n = hashmap_get(&scope->symbols, name);
+    if (n) return n;
+    if (scope->caseins.count == 0) return NULL;
+    /* Stack buffer for the lowercase key — names are bounded by
+     * the lexer's identifier length. */
+    char buf[256];
+    size_t len = strlen(name);
+    if (len + 1 > sizeof(buf)) return NULL;
+    for (size_t i = 0; i < len; i++)
+        buf[i] = (char)tolower((unsigned char)name[i]);
+    buf[len] = '\0';
+    return hashmap_get(&scope->caseins, buf);
+}
+
+/* Python Scope.__delitem__ (scope.py:59-61). */
+static void scope_del_symbol(Scope_ *scope, const char *name) {
+    hashmap_remove(&scope->symbols, name);
+    if (scope->caseins.count == 0) return;
+    char buf[256];
+    size_t len = strlen(name);
+    if (len + 1 > sizeof(buf)) return;
+    for (size_t i = 0; i < len; i++)
+        buf[i] = (char)tolower((unsigned char)name[i]);
+    buf[len] = '\0';
+    hashmap_remove(&scope->caseins, buf);
+}
 
 /* ----------------------------------------------------------------
  * Symbol table
@@ -20,6 +78,7 @@ SymbolTable *symboltable_new(CompilerState *cs) {
     /* Create global scope */
     st->global_scope = arena_calloc(&cs->arena, 1, sizeof(Scope_));
     hashmap_init(&st->global_scope->symbols);
+    hashmap_init(&st->global_scope->caseins);
     st->global_scope->parent = NULL;
     st->global_scope->level = 0;
     st->global_scope->namespace_ = ""; /* Python current_namespace="" (symboltable.py:54) */
@@ -62,6 +121,7 @@ void symboltable_enter_scope(SymbolTable *st, CompilerState *cs,
                              const char *namespace_name) {
     Scope_ *scope = arena_calloc(st->arena, 1, sizeof(Scope_));
     hashmap_init(&scope->symbols);
+    hashmap_init(&scope->caseins);
     scope->parent = st->current_scope;
     scope->level = st->current_scope->level + 1;
     /* Python enter_scope: current_namespace = make_child_namespace(
@@ -135,8 +195,8 @@ void symboltable_exit_scope(SymbolTable *st) {
                 memcpy(m + 1, nm, nl + 1);
                 e->u.id.mangled = m;
             }
-            hashmap_set(&st->global_scope->symbols, nm, e);
-            hashmap_remove(&leaving->symbols, nm);
+            scope_set_symbol(st, st->global_scope, nm, e);
+            scope_del_symbol(leaving, nm);
             /* Python `del self.current_scope[id_]` (symboltable.py:304)
              * removes the entry from the leaving scope's OrderedDict — and
              * since func.ref.local_symbol_table IS that same Scope object
@@ -280,8 +340,12 @@ AstNode *symboltable_declare(SymbolTable *st, CompilerState *cs,
     node->u.id.accessed = false;
     node->u.id.forwarded = false;
     node->u.id.declared = true;
+    /* Python symboltable.py:115 — stamp the current pragma value
+     * onto the entry at declare time. The scope insertion below
+     * mirrors it into the caseins map when TRUE. */
+    node->u.id.caseins = cs->opts.case_insensitive;
 
-    hashmap_set(&st->current_scope->symbols, name, node);
+    scope_set_symbol(st, st->current_scope, name, node);
     /* N1: the single symbol-table insertion point (mirrors Python
      * symboltable.py:116 self.current_scope[id2] = entry). Record every
      * entry once, in first-textual-appearance order, regardless of class
@@ -292,9 +356,12 @@ AstNode *symboltable_declare(SymbolTable *st, CompilerState *cs,
 }
 
 AstNode *symboltable_lookup(SymbolTable *st, const char *name) {
-    /* Search from current scope up to global */
+    /* Search from current scope up to global. Python Scope.__getitem__
+     * (scope.py:50-51) falls back to the caseins map keyed by
+     * lower(name) when the exact-case key misses — handled by
+     * scope_get_symbol. */
     for (Scope_ *s = st->current_scope; s != NULL; s = s->parent) {
-        AstNode *node = hashmap_get(&s->symbols, name);
+        AstNode *node = scope_get_symbol(s, name);
         if (node) return node;
     }
     return NULL;
@@ -398,6 +465,7 @@ AstNode *symboltable_declare_variable(SymbolTable *st, CompilerState *cs,
     node->u.id.accessed = false;
     node->u.id.forwarded = false;
     node->u.id.declared = true;
+    node->u.id.caseins = cs->opts.case_insensitive;  /* symboltable.py:115 */
     node->type_ = typeref;
 
     /* Generate temp label: string params get "$" prefix */
@@ -411,7 +479,7 @@ AstNode *symboltable_declare_variable(SymbolTable *st, CompilerState *cs,
         node->t = arena_strdup(&cs->arena, tbuf);
     }
 
-    hashmap_set(&st->current_scope->symbols, base_name, node);
+    scope_set_symbol(st, st->current_scope, base_name, node);
     vec_push(cs->sym_entries_ordered, node);  /* N1 (symboltable.py:116) */
     scope_push_ordered(st, st->current_scope, node);  /* S5.7d per-scope */
     return node;
@@ -445,6 +513,7 @@ AstNode *symboltable_declare_param(SymbolTable *st, CompilerState *cs,
     node->u.id.accessed = false;
     node->u.id.forwarded = false;
     node->u.id.declared = true;
+    node->u.id.caseins = cs->opts.case_insensitive;  /* symboltable.py:115 */
     node->type_ = typeref;
 
     /* String params get "$" prefix in t */
@@ -458,7 +527,7 @@ AstNode *symboltable_declare_param(SymbolTable *st, CompilerState *cs,
         node->t = arena_strdup(&cs->arena, tbuf);
     }
 
-    hashmap_set(&st->current_scope->symbols, name, node);
+    scope_set_symbol(st, st->current_scope, name, node);
     vec_push(cs->sym_entries_ordered, node);  /* N1 (symboltable.py:116) */
     scope_push_ordered(st, st->current_scope, node);  /* S5.7d per-scope */
     return node;
@@ -493,9 +562,10 @@ AstNode *symboltable_declare_array(SymbolTable *st, CompilerState *cs,
     node->u.id.accessed = false;
     node->u.id.forwarded = false;
     node->u.id.declared = true;
+    node->u.id.caseins = cs->opts.case_insensitive;  /* symboltable.py:115 */
     node->type_ = typeref;
 
-    hashmap_set(&st->current_scope->symbols, name, node);
+    scope_set_symbol(st, st->current_scope, name, node);
     vec_push(cs->sym_entries_ordered, node);  /* N1 (symboltable.py:116) */
     scope_push_ordered(st, st->current_scope, node);  /* S5.7d per-scope */
     return node;
@@ -1459,13 +1529,13 @@ AstNode *symboltable_access_label(SymbolTable *st, CompilerState *cs,
         for (Scope_ *s = st->current_scope; s && s != st->global_scope;
              s = s->parent) {
             if (hashmap_get(&s->symbols, name) == result) {
-                hashmap_remove(&s->symbols, name);
+                scope_del_symbol(s, name);
                 break;
             }
         }
         result->u.id.scope = SCOPE_global;
         if (hashmap_get(&st->global_scope->symbols, name) == NULL) {
-            hashmap_set(&st->global_scope->symbols, name, result);
+            scope_set_symbol(st, st->global_scope, name, result);
             if (st->global_scope->ordered_count >=
                 st->global_scope->ordered_cap) {
                 int nc = st->global_scope->ordered_cap
