@@ -9360,20 +9360,24 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
     case 324: { /* function_declaration : function_header function_body
                  * (p_funcdecl): leave scope, compute offsets, pop
                  * FUNCTION_LEVEL, build FUNCDECL. */
-        /* If an upstream production already flagged UNWIRED (e.g. the
-         * function_header error-token productions 328/329, which take the
-         * default NOP path), rhs[0].value is a NOP AstNode, NOT a PdFuncDef —
-         * type-punning it would dereference garbage (let_expr_type_crash).
-         * The file is already flagged UNWIRED; bail to NOP without touching it.
-         * In emit_errors (swap) mode pd_label_gate does NOT set c->unwired, so
-         * also guard on a NULL header value: that is exactly p_funcdecl's
+        /* If the function_header reduce returned NULL (productions 328/329
+         * `function_header : function_def error CO|NEWLINE`), there is no
+         * PdFuncDef — bail to NOP. This matches p_funcdecl's
          * `if p[1] is None: p[0] = None; return` (zxbparser.py:2905) — return
          * None WITHOUT leaving the scope or popping FUNCTION_LEVEL (Python
-         * recovers via the error mechanism; gl.has_errors aborts compilation). */
-        if (c->unwired || !rhs[0].value) { r = NULL; break; }
+         * recovers via the error mechanism; gl.has_errors aborts compilation).
+         *
+         * Note: c->unwired may have been set DURING body parse (e.g. a NULL
+         * arg-list element from an undecl()-call propagating up via case
+         * 319/320 — err_w150_param_after_undecl_call probe). In that case
+         * rhs[0].value is still a valid PdFuncDef (the header reduced cleanly
+         * before the body bled NULLs upward), and Python's leave_scope still
+         * runs at function-end emitting W150 unconditionally. We must do the
+         * same — so the leave_scope param-walk MUST happen before honouring
+         * c->unwired, otherwise W150 for an unused param goes missing whenever
+         * the body contains any unwiring construct. */
+        if (!rhs[0].value) { r = NULL; break; }
         PdFuncDef *fd = (PdFuncDef *)rhs[0].value;
-        AstNode *body = (AstNode *)rhs[1].value;
-        if (!body) body = make_block_node(p, fd->lineno);
         /* leave_scope param-accessed marking (symboltable.py:268-277, the OLD
          * parser's parser.c:7866-7882): BEFORE exit_scope, force-mark every
          * unaccessed PARAMETER accessed ("Parameters must always be present
@@ -9382,7 +9386,11 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
          * (Python returned before leave_scope). Without this, an unused string
          * param is dropped by the O>1 Scope.values(filter_by_opt) filter and
          * its stdcall MEM_FREE teardown is skipped (paramstr3/4/5, pararray*,
-         * byrefbyref, subparam, …). */
+         * byrefbyref, subparam, …).
+         *
+         * Python's leave_scope runs irrespective of body parse status, so this
+         * loop runs even when c->unwired was set during body parse — the
+         * fd PdFuncDef is still valid (header reduced cleanly). */
         {
             Scope_ *bs = p->cs->symbol_table->current_scope;
             for (int si = 0; si < bs->ordered_count; si++) {
@@ -9445,6 +9453,16 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         symboltable_exit_scope(p->cs->symbol_table);
         if (p->cs->function_level.len > 0)
             vec_pop(p->cs->function_level);
+        /* If the body parse flagged UNWIRED (e.g. err_w150_param_after_undecl_call
+         * — undecl()-call propagating NULL up through arguments/arglist
+         * setting c->unwired in cases 319/320), we've now done the Python-
+         * faithful leave_scope (param-walk + W150 + scope exit + function_level
+         * pop). Bail to NOP instead of building a FUNCDECL on a body that
+         * carries holes — gl.has_errors aborts compilation anyway, so the
+         * unwired tree never reaches codegen. */
+        if (c->unwired) { r = NULL; break; }
+        AstNode *body = (AstNode *)rhs[1].value;
+        if (!body) body = make_block_node(p, fd->lineno);
         AstNode *id_node = fd->id_node;
         if (id_node) {
             int oc = body_scope->ordered_count;
