@@ -150,6 +150,23 @@ The Python project has unit and integration tests beyond the functional `.bas`/`
 | Peephole | `tests/arch/zx48k/peephole/` | Pattern matching, evaluation, templates | 4 test files |
 | Compiler | `tests/zxbc/` | Parser table generation | 1 test file |
 
+### Codegen Probes — the enumeration meter (`csrc/tests/codegen_probes/`)
+
+**Use this, not just the corpus.** The inherited `tests/functional/` corpus is byte-truth ONLY for codepaths it happens to exercise. "All corpus tests pass" does NOT prove the port has every Python check. The 2026-05-21 probe-batch-2 finding documented this structurally: "C's post-parse SEMANTIC-VALIDATION layer is largely ABSENT — a missing subsystem, not edge bugs." Driving work fixture-by-fixture from the corpus misses the gaps the corpus is silent about. The probe series is the enumeration tool that catches them.
+
+- **Layout:** `csrc/tests/codegen_probes/<category>/<fixture>.bas`. Eight categories: `arithmetic`, `arrays`, `controlflow`, `errors`, `strings`, `switches`, `typecast`, `warnings`. ~90 hand-authored fixtures targeting codepaths the corpus skips.
+- **Harness:** `./csrc/tests/codegen_probes/run_probes.sh <category>` (one category at a time; absolute paths also accepted).
+- **Contract:** per fixture, compares C vs the Python oracle on FOUR parts (in this precedence order — bucket localises the first divergence):
+  1. exit code → `PROBE-DIFF-EXIT`
+  2. stderr (path-normalised) → `PROBE-DIFF-STDERR`
+  3. Stage-1 ASM (`--output-format=asm`, path-normalised) → `PROBE-DIFF-ASM`
+  4. End-to-end binary (default `-o out.bin`, RAW cmp — never normalise binary) → `PROBE-DIFF-BIN`
+
+  All four match → `PROBE-EQUAL`. Python traceback / internal error → `SKIP-PY-ERROR`. Stderr surfaces W-warnings and typecast/semantic errors that the staged meters do NOT check — a divergence here is invisible to those meters.
+- **Coverage harness:** `csrc/tests/codegen_probes/_coverage/cov_driver.py` — in-process coverage driver authored alongside the probes. Use as guidance for where to add new probes (not as gospel).
+- **When you fix a class of divergence, write a probe for it.** Probes are additive — every new C codepath that diverges (or did diverge) earns a probe so the gap can't silently regress.
+- **Don't loosen the probe runner.** It's deliberately strict on byte-cmp; failures classify by the EARLIEST divergence so the bucket is diagnostic. Adding skip switches or tolerance to make a probe pass is the wrong fix — the probe is right; the C is wrong.
+
 ## Keeping Things Up To Date
 
 This project has several living documents and CI artefacts that MUST stay in sync with the code. When you add features, fix bugs, or complete phases:
