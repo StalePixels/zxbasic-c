@@ -373,10 +373,16 @@ int main(int argc, char *argv[]) {
         if (labels_ok)
             check_pending_calls(&cs);
 
-        /* Check READ without DATA (matches Python translator check) */
-        if (cs.data_is_used && cs.datas.len == 0) {
-            zxbc_error(&cs, 0, "No DATA defined");
-        }
+        /* No DATA defined: emitted per-statement by the translator visitors
+         * tr_visit_read / tr_visit_restore (translator.c:2448, :2497) — the
+         * faithful analogue of Python's syntax_error_no_data_defined calls
+         * in src/arch/z80/visitor/translator.py:485 (visit_RESTORE) and :500
+         * (visit_READ). Both the full-compile path (codegen_emit at :432) and
+         * the --parse-only path (codegen_emit_ex(semantic_only=true) at :425)
+         * run the translator visitor pass, so each READ/RESTORE statement
+         * reports its own lineno. No fallback is required here — a previous
+         * lineno-0 catch-all at this site duplicated the per-statement emit
+         * and shadowed the Python-faithful per-statement linenos. */
 
         /* Faithful post-parse error gate (src/zxbc/zxbc.py:108).
          * Python returns 1 IMMEDIATELY after parser.parse() if
