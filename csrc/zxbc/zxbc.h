@@ -548,6 +548,13 @@ AstNode *symboltable_declare(SymbolTable *st, CompilerState *cs,
                               const char *name, int lineno, SymbolClass class_);
 AstNode *symboltable_lookup(SymbolTable *st, const char *name);
 AstNode *symboltable_get_entry(SymbolTable *st, const char *name);
+/* Remove an entry from the current scope (rollback for failed declarations).
+ * Used by p_var_decl_ini's CONST branch (zxbparser.py:712-720) when the
+ * initializer turns out to be non-static: Python's flow RETURNS without
+ * calling declare_const, so the identifier is never registered. The C port
+ * registers eagerly via symboltable_declare; this function undoes the
+ * registration so the next reference triggers fresh auto-declare paths. */
+void symboltable_undeclare(SymbolTable *st, CompilerState *cs, const char *name);
 
 /* Higher-level declaration functions (matching Python's SymbolTable API) */
 AstNode *symboltable_declare_variable(SymbolTable *st, CompilerState *cs,

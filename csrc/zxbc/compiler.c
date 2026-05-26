@@ -397,6 +397,50 @@ AstNode *symboltable_get_entry(SymbolTable *st, const char *name) {
     return symboltable_lookup(st, name);
 }
 
+/* Roll back a freshly-registered entry in the current scope. Mirrors the
+ * Python flow at zxbparser.py:712-720 where p_var_decl_ini's CONST branch
+ * RETURNS without ever calling declare_const when the initializer is
+ * non-static and non-string — the identifier is never inserted in the
+ * symbol table. The C port registers eagerly via symboltable_declare;
+ * this undoes that registration so the subsequent reference (e.g. the
+ * DIM upper bound) hits access_var's auto-implicit-float path (with the
+ * accompanying W100 warning) instead of seeing a half-formed CLASS_const
+ * entry. Removes from the scope hashmap (both case-sensitive and
+ * case-insensitive maps), the per-scope ordered list, and the
+ * cs->sym_entries_ordered tail (the entry was just appended). */
+void symboltable_undeclare(SymbolTable *st, CompilerState *cs, const char *name) {
+    if (!st || !name) return;
+    Scope_ *scope = st->current_scope;
+    if (!scope) return;
+    AstNode *node = hashmap_get(&scope->symbols, name);
+    if (!node) return;
+    /* Drop from scope's hashmaps. */
+    scope_del_symbol(scope, name);
+    /* Compact out of the per-scope ordered list. */
+    for (int i = 0; i < scope->ordered_count; i++) {
+        if (scope->ordered[i] == node) {
+            for (int j = i; j < scope->ordered_count - 1; j++)
+                scope->ordered[j] = scope->ordered[j + 1];
+            scope->ordered_count--;
+            break;
+        }
+    }
+    /* Drop from cs->sym_entries_ordered (the global insertion-ordered list).
+     * The entry was just pushed (tail), but defensively scan in case
+     * anything else has been appended since. */
+    if (cs) {
+        for (int i = cs->sym_entries_ordered.len - 1; i >= 0; i--) {
+            if (cs->sym_entries_ordered.data[i] == node) {
+                for (int j = i; j < cs->sym_entries_ordered.len - 1; j++)
+                    cs->sym_entries_ordered.data[j] =
+                        cs->sym_entries_ordered.data[j + 1];
+                cs->sym_entries_ordered.len--;
+                break;
+            }
+        }
+    }
+}
+
 TypeInfo *symboltable_get_type(SymbolTable *st, const char *name) {
     return hashmap_get(&st->type_registry, name);
 }

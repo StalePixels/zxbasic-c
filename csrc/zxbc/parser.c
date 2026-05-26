@@ -6917,6 +6917,13 @@ static AstNode *dim_build_scalar(Parser *p, const char **names, int name_count,
          * through it). The accessed/has_address flags set by the prior
          * @name access are already on this entry; we only need the class
          * promotion + declared=true. (Faithful to declare_variable:529.) */
+        /* Snapshot the pre-promotion class so the CONST-init-failure path
+         * (zxbparser.py:712-720 — `err_not_constant; return`) can roll
+         * back. Python never calls declare_const on that path, so the
+         * entry either never appears in the table (fresh) or remains in
+         * its prior CLASS_unknown / forward-`@name` state. */
+        SymbolClass prev_class = id_node->u.id.class_;
+        bool prev_declared = id_node->u.id.declared;
         if (id_node->u.id.class_ == CLASS_unknown)
             id_node->u.id.class_ = cls;
         id_node->u.id.declared = true;
@@ -7013,7 +7020,28 @@ static AstNode *dim_build_scalar(Parser *p, const char **names, int name_count,
                 if (value && value->tag == AST_STRING) {
                     id_node->u.id.default_value_expr = value;
                 } else {
+                    /* Mirror Python p_var_decl_ini's CONST branch
+                     * (zxbparser.py:712-720): on `err_not_constant`, RETURN
+                     * without calling declare_const — the identifier is
+                     * never registered. Without rollback, the C entry stays
+                     * as CLASS_const and the downstream DIM upper-bound
+                     * (`MAXMOBS` in dim_const_crash / err_failed_const_decl…
+                     * probe) is mis-classified as a constant, swallowing
+                     * the W100 implicit-type warning at the reference and
+                     * surfacing the wrong "Unknown upper bound for array
+                     * dimension" instead of "Array bounds must be
+                     * constants". Restore the entry to its pre-promotion
+                     * shape: fully removed if it was fresh, reverted to
+                     * its previous (CLASS_unknown / undeclared) state if
+                     * a prior forward `@name` had seeded it. */
                     err_not_constant(p->cs, lineno);
+                    if (!entry_preexisted) {
+                        symboltable_undeclare(p->cs->symbol_table, p->cs,
+                                              decl_name);
+                    } else {
+                        id_node->u.id.class_ = prev_class;
+                        id_node->u.id.declared = prev_declared;
+                    }
                     return NULL;
                 }
             } else if (value) {
