@@ -449,12 +449,25 @@ AstNode *symboltable_declare_variable(SymbolTable *st, CompilerState *cs,
         }
     }
 
-    /* Check if already declared in current scope */
+    /* Check if already declared in current scope. Python declare_variable
+     * (symboltable.py:487-495) chooses between two messages: if the
+     * existing entry is a parameter, "already declared as a parameter at
+     * <file>:<line>"; else the generic "already declared at <file>:<line>".
+     * The filename used is the entry's stored filename (set at declare
+     * time, the #line-active filename then). */
     AstNode *existing = hashmap_get(&st->current_scope->symbols, base_name);
     if (existing && existing->u.id.declared) {
-        zxbc_error(cs, lineno, "Variable '%s' already declared at %s:%d",
-                   name, cs->current_file ? cs->current_file : "(stdin)",
-                   existing->lineno);
+        const char *fn = existing->u.id.filename
+                             ? existing->u.id.filename
+                             : (cs->current_file ? cs->current_file : "(stdin)");
+        if (existing->u.id.scope == SCOPE_parameter) {
+            zxbc_error(cs, lineno,
+                       "Variable '%s' already declared as a parameter at %s:%d",
+                       name, fn, existing->lineno);
+        } else {
+            zxbc_error(cs, lineno, "Variable '%s' already declared at %s:%d",
+                       name, fn, existing->lineno);
+        }
         return NULL;
     }
 

@@ -6854,8 +6854,22 @@ static AstNode *dim_build_scalar(Parser *p, const char **names, int name_count,
         /* Check for duplicate declaration */
         bool dup_error = false;
         if (id_node->u.id.declared && id_node->lineno != lineno) {
-            zxbc_error(p->cs, lineno, "Variable '%s' already declared at %s:%d",
-                       name, p->cs->current_file, id_node->lineno);
+            /* Python declare_variable (symboltable.py:487-495) two-branch
+             * emission: if the existing entry is a parameter, "already
+             * declared as a parameter at"; else the generic. Filename from
+             * the entry's stored filename. */
+            const char *fn = id_node->u.id.filename
+                                 ? id_node->u.id.filename
+                                 : p->cs->current_file;
+            if (id_node->u.id.scope == SCOPE_parameter) {
+                zxbc_error(p->cs, lineno,
+                           "Variable '%s' already declared as a parameter at %s:%d",
+                           name, fn, id_node->lineno);
+            } else {
+                zxbc_error(p->cs, lineno,
+                           "Variable '%s' already declared at %s:%d",
+                           name, fn, id_node->lineno);
+            }
             dup_error = true;
         }
         /* Python declare_variable (symboltable.py:501-510): if a prior
