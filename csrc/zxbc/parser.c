@@ -11037,8 +11037,16 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         }
         if (entry->u.id.class_ != CLASS_var &&
             entry->u.id.class_ != CLASS_unknown) {
-            c->unwired = true; if (c->unwired_prod == 0) c->unwired_prod = prodno;
-            r = make_nop(p); break;
+            /* p_substr_assignment (zxbparser.py:1261-1263): after the
+             * unknown->var promotion, any non-var class (function, sub,
+             * array) emits syntax_error_cannot_assign_not_a_var (errmsg.py
+             * :283) "Cannot assign a value to '%s'. It's not a variable",
+             * NOT a silent fallback. The CLASS_function case fires when an
+             * earlier expression-context `id$(a,b)` flipped the entry via
+             * p_idcall_expr's convert_to_function (case 299 above) —
+             * err_letsubstr_class_check_order probe. */
+            err_cannot_assign(p->cs, ln, name);
+            r = NULL; break;
         }
         if (entry->u.id.class_ == CLASS_unknown) entry->u.id.class_ = CLASS_var;
         if (!type_is_string(entry->type_)) {
@@ -11984,7 +11992,35 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         const char *name = PD_SVAL(1);
         AstNode *al = (AstNode *)rhs[1].value;
         if (!al) { r = NULL; break; }
-        r = make_call_node(p, name, PD_LINENO(1), al, true, false, false);
+        int ln1 = PD_LINENO(1);
+        r = make_call_node(p, name, ln1, al, true, false, false);
+        /* p_idcall_expr (zxbparser.py:2713): after make_call returns, if the
+         * node is NOT one of STRSLICE/ID/STRING/CONST-string (i.e. it is a
+         * FUNCCALL — the make_func_call fall-through path at make_call line
+         * 418), call convert_to_function(entry, CLASS.function, lineno).
+         * That flips a CLASS_unknown entry to CLASS_function via to_function,
+         * so a later p_substr_assignment (`LET id$(args) = rhs`) sees the
+         * resolved class as function and emits "Cannot assign a value ...
+         * not a variable" — BEFORE the index-count check fires. Without this,
+         * a 2-arg `id$(a,b)` first used in an expression leaves the entry
+         * CLASS_unknown, and the LET path's index-count gate wrongly emits
+         * "too many indexes" first (err_letsubstr_class_check_order probe).
+         * Gated to AST_FUNCCALL — the array/string-slice/const-id returns
+         * from make_call_node are exactly the Python early-return tokens. */
+        if (r && r->tag == AST_FUNCCALL && r->child_count > 0) {
+            AstNode *callee = r->children[0];
+            if (callee && callee->tag == AST_ID &&
+                callee->u.id.class_ == CLASS_unknown) {
+                /* check_class (api/check.py:471): unknown -> ok, flip via
+                 * to_function (_id.py:154). Python's to_function sets the
+                 * ref to FuncRef which makes .class_ return CLASS.function;
+                 * the C equivalent is the direct class_ flip (mirrors the
+                 * pre-existing CLASS_unknown -> function flip in declare_func
+                 * at parser.c:7704). */
+                callee->u.id.class_ = CLASS_function;
+            }
+            (void)ln1;
+        }
         break;
     }
     case 298: /* bexpr : func_call (p_expr_funccall) -> p[1] */
