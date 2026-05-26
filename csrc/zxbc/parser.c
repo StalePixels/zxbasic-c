@@ -8350,6 +8350,16 @@ typedef struct PdFuncDef {
     TypeInfo *suffix_type; /* sigil-derived return type (test$ -> string), or NULL */
     AstNode *params;       /* PARAMLIST */
     bool rejected;         /* unported sub-form hit */
+    bool declared_ok;      /* declare_func succeeded (check_class passed):
+                            * the entry was None / CLASS_unknown / same class.
+                            * Python's FUNCDECL.make_node returns None when
+                            * check_class fails (symboltable.py:724,
+                            * funcdecl.py:75-76), which makes p_function_def
+                            * yield None and p_function_header_pre short-circuit
+                            * (zxbparser.py:2949) BEFORE the W100 implicit-type
+                            * warning. Mirror that gate for the W100 emission so
+                            * a name that collides with a pre-existing VAR
+                            * (funccall4 `z`) does not spuriously warn. */
 } PdFuncDef;
 
 /* A single parameter carried by param_def/param_definition: the ARGUMENT node
@@ -8956,6 +8966,13 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         }
         AstNode *pre = symboltable_lookup(p->cs->symbol_table, fname);
         AstNode *id;
+        /* check_class (symboltable.py:209-217): declare_func succeeds iff the
+         * pre-existing entry is None, CLASS_unknown, or already the same class.
+         * Captured on the ORIGINAL class before the reuse branch forces it to
+         * cls (line below), so the W100 gate in case 330 sees Python's
+         * make_node-returns-None condition. */
+        fd->declared_ok = (pre == NULL || pre->u.id.class_ == CLASS_unknown ||
+                           pre->u.id.class_ == cls);
         if (pre) {
             /* declare_func reuse branch (symboltable.py:728-741 / production
              * parser.c:7471-7512): reuse the shared object; CLASS_unknown ->
@@ -9047,10 +9064,50 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
             bool entry_type_set = e->type_ &&
                 !(e->type_->final_type &&
                   e->type_->final_type->basic_type == TYPE_unknown);
-            if (e->u.id.forwarded && entry_type_set && !ret_is_explicit)
+            if (e->u.id.forwarded && entry_type_set && !ret_is_explicit) {
                 fd->ret_type = e->type_;       /* keep forwarded type */
-            else
+            } else {
                 e->type_ = fd->ret_type;
+                /* p_function_header_pre W100 (zxbparser.py:2963-2964): inside
+                 * the type-assignment branch, `if p[3].implicit and
+                 * entry.class_ == CLASS.function:
+                 *     warning_implicit_type(p[3].lineno, entry.name,
+                 *                           p[0].type_)`. p[3].implicit is the
+                 * engine's empty typedef (td == NULL); SUBs are excluded
+                 * (is_function). p[3].lineno is the empty typedef's lineno =
+                 * p.lexer.lineno (case 358 *out_lineno), surfaced here as
+                 * PD_LINENO(3). Fires for a fresh implicit-typed FUNCTION
+                 * (declare6 DECLARE, lvalue02/03, funccall7) at the line
+                 * following the header, NOT the FUNCTION line. fd->declared_ok
+                 * mirrors Python's make_node-returns-None short-circuit: a name
+                 * colliding with a pre-existing VAR (funccall4 `z`) fails
+                 * check_class, so p_function_header_pre never reaches the W100.
+                 *
+                 * !entry_type_set is Python's assignment-branch gate: the W100
+                 * lives inside `if not p[3].implicit or entry.type_ is None or
+                 * entry.type_ == unknown:` and only fires when p[3].implicit
+                 * (td NULL) — so the branch was entered via `entry.type_ is
+                 * None or unknown`. A FORWARDED entry that ALREADY has a known
+                 * type (param3: `declare function test(s$) as float` then a
+                 * sigil-typed `function test$` redefinition) does NOT re-warn,
+                 * because Python skips the whole block (the C reaches this else
+                 * via ret_is_explicit from the suffix, but entry_type_set is
+                 * true there, so the gate suppresses the spurious W100).
+                 *
+                 * !fd->suffix_type mirrors Python's declare (symboltable.py:
+                 * 105-107): a sigil-named function (`test$`) has its entry.type_
+                 * set to a NON-implicit TYPEREF of the suffix type at declare
+                 * time — so `entry.type_ is None or unknown` is false and the
+                 * W100 block is skipped (param0/param2 are NOT warned by the
+                 * oracle). The C applies the suffix type later (case 330
+                 * ret_type), leaving e->type_ NULL at the test above, so gate
+                 * on the suffix explicitly to reproduce Python's suppression. */
+                if (!td && fd->is_function && fd->declared_ok &&
+                    !entry_type_set && !fd->suffix_type)
+                    warn_implicit_type(p->cs, PD_LINENO(3), e->u.id.name,
+                                       fd->ret_type ? fd->ret_type->name
+                                                    : NULL);
+            }
             /* forwarded type-mismatch (zxbparser.py:2966): a predeclared entry
              * whose previous type differs from the now-resolved type is a
              * "type mismatch" -> p[0]=None (declare6, funccall7, param3).
@@ -9785,10 +9842,34 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         bool bare = (prodno == 156 || prodno == 164);
         bool has_prog = (prodno == 154 || prodno == 162);
         AstNode *body, *cond;
-        if (has_prog) { body = pd_make_block2(p, PD_NODE(2), PD_NODE(3)); cond = PD_NODE(5); }
-        else { body = pd_make_block2(p, PD_NODE(2), NULL); cond = PD_NODE(4); }
+        /* p_do_loop_until / p_do_loop_while (zxbparser.py:1708-1730 / 1838-
+         * 1859): q is the loop body, r the post-test cond. For the non-prog
+         * forms (`do_start label_loop ... expr` / `DO label_loop ... expr`,
+         * len(p)==5) q = p[2] = label_loop, which is None for a bare LOOP
+         * (p_loop :1681-1682). The W130 "Empty loop" fires `if q is None`
+         * at p.lineno(3) — the UNTIL/WHILE keyword (token 3 in the non-prog
+         * forms). The prog form (len 6) has q = make_block(body, label_loop)
+         * (never None) so it never warns. */
+        bool body_is_none;   /* Python q is None */
+        int loop_warn_line;  /* Python p.lineno(3): UNTIL/WHILE keyword */
+        if (has_prog) { body = pd_make_block2(p, PD_NODE(2), PD_NODE(3)); cond = PD_NODE(5);
+            body_is_none = false; loop_warn_line = PD_LINENO(4); }
+        else { body = pd_make_block2(p, PD_NODE(2), NULL); cond = PD_NODE(4);
+            /* q = p[2] = label_loop; None for a bare LOOP (engine: a NOP, so
+             * pd_is_null), a LABEL node otherwise (not null, matching Python's
+             * non-None label). */
+            body_is_none = pd_is_null(PD_NODE(2)); loop_warn_line = PD_LINENO(3); }
         if (bare) { LoopInfo li = {LOOP_DO, doln, NULL}; vec_push(p->cs->loop_stack, li); }
         if (p->cs->loop_stack.len > 0) vec_pop(p->cs->loop_stack);
+        /* W130 (zxbparser.py:1729/1859) is gated ONLY on `q is None`, NOT on
+         * the cond — so an empty-body loop whose post-test cond raised a
+         * semantic error (do_crash: `DO LOOP WHILE A=""`, cond NULL) STILL
+         * warns. Emit it before the cond-NULL defer below so do_crash matches
+         * Python. (W110 is_number(r) is intentionally not ported here — it is
+         * out of scope and would change non-W130 stderr; it requires a valid
+         * constant cond, which the cond-NULL path never has anyway.) */
+        if (body_is_none)
+            warn_empty_loop(p->cs, loop_warn_line);
         /* NULL cond == a semantic error in the post-test expr (do_crash:
          * `LOOP WHILE A=""`); error-path AST shapes diverge — defer. */
         if (!cond) {
