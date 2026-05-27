@@ -1682,7 +1682,17 @@ static void parse_asm(Parser *p)
 
     if (t.type == TOK_PROC) {
         parser_advance(p);
-        mem_enter_proc(p->as, lineno);
+        /* PLY grammar is `asm : PROC` — the rule needs the next token to
+         * be a valid `asm` terminator (NEWLINE / EOF / COLON). With LOOKAHEAD
+         * = ID (e.g. `proc foo`) PLY refuses to reduce, calls p_error on the
+         * ID, and the recovery discards the half-formed asm — so enter_proc
+         * is NEVER invoked and the trailing "Missing ENDP" cascade does
+         * not fire. Mirror that by deferring enter_proc until we confirm
+         * the lookahead is acceptable. */
+        if (p->cur.type == TOK_NEWLINE || p->cur.type == TOK_EOF ||
+            p->cur.type == TOK_COLON) {
+            mem_enter_proc(p->as, lineno);
+        }
         return;
     }
 
