@@ -99,7 +99,7 @@ int asm_defs_resolve(AsmState *as, AsmInstr *instr, uint8_t *fill_out)
     }
 
     if (fill_val > 255 && !instr->pending) {
-        asm_warning(as, instr->lineno, "value will be truncated");
+        asm_warning(as, instr->lineno, "[W200] Value will be truncated");
     }
 
     int n = (int)count_val;
@@ -128,7 +128,7 @@ int asm_instr_bytes(AsmState *as, AsmInstr *instr, uint8_t *out, int out_size)
                 int64_t val = 0;
                 expr_eval(as, instr->data_exprs[i], &val, false);
                 if (val > 255 && !as->error_count) {
-                    asm_warning(as, instr->lineno, "value will be truncated");
+                    asm_warning(as, instr->lineno, "[W200] Value will be truncated");
                 }
                 out[n++] = (uint8_t)(val & 0xFF);
             }
