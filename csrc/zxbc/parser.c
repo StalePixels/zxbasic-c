@@ -3673,6 +3673,59 @@ static AstNode *parse_gfx_attributes(Parser *p) {
     return attr_list;
 }
 
+/* Lookup helpers for #pragma push/pop on a named option (Python anchor
+ * src/zxbc/zxbparser.py:3248-3263, src/api/options.py:146-160). Each
+ * known stackable option resolves to (1) a pointer to its live int/bool
+ * value in CompilerOptions, and (2) a (stack-array, depth-slot) pair
+ * for the per-option LIFO. Returns true on hit, false for "unknown
+ * pragma" (caller emits warn_unknown_pragma, identical to the option-
+ * set arm's UndefinedOptionError branch). Bool fields are coerced via
+ * the (bool*) view; int fields via (int*). */
+typedef struct PragmaOptRef {
+    int *value_ptr;     /* live setting (int*; bool fields stored as 0/1) */
+    int *stack_arr;     /* per-option stack base (PRAGMA_STACK_MAX cap) */
+    int *depth_ptr;     /* per-option depth slot in pragma_stack_depth[] */
+    bool is_bool;       /* false -> int field; true -> bool field (cast back) */
+} PragmaOptRef;
+
+#define PR_OPT(field, slot, is_b) do { \
+    out->stack_arr = p->cs->opts.pragma_stack_##field; \
+    out->depth_ptr = &p->cs->opts.pragma_stack_depth[(slot)]; \
+    out->is_bool = (is_b); \
+} while (0)
+
+static bool pragma_opt_ref(Parser *p, const char *name, PragmaOptRef *out) {
+    /* Ordering / slot indices are arbitrary but must be stable per
+     * compile run (the depth slots are array-indexed). The set mirrors
+     * the bool/int options handled by apply_pragma_option above. */
+    out->value_ptr = NULL; out->stack_arr = NULL; out->depth_ptr = NULL;
+    out->is_bool = false;
+    /* bool options */
+    if      (!strcmp(name, "case_insensitive"))   { PR_OPT(case_insensitive,   0, true);  out->value_ptr = (int *)&p->cs->opts.case_insensitive; }
+    else if (!strcmp(name, "string_base"))        { PR_OPT(string_base,        1, false); out->value_ptr = &p->cs->opts.string_base; }
+    else if (!strcmp(name, "array_base"))         { PR_OPT(array_base,         2, false); out->value_ptr = &p->cs->opts.array_base; }
+    else if (!strcmp(name, "explicit"))           { PR_OPT(explicit,           3, true);  out->value_ptr = (int *)&p->cs->opts.explicit_; }
+    else if (!strcmp(name, "strict"))             { PR_OPT(strict,             4, true);  out->value_ptr = (int *)&p->cs->opts.strict; }
+    else if (!strcmp(name, "strict_bool"))        { PR_OPT(strict_bool,        5, true);  out->value_ptr = (int *)&p->cs->opts.strict_bool; }
+    else if (!strcmp(name, "memory_check"))       { PR_OPT(memory_check,       6, true);  out->value_ptr = (int *)&p->cs->opts.memory_check; }
+    else if (!strcmp(name, "array_check"))        { PR_OPT(array_check,        7, true);  out->value_ptr = (int *)&p->cs->opts.array_check; }
+    else if (!strcmp(name, "enable_break"))       { PR_OPT(enable_break,       8, true);  out->value_ptr = (int *)&p->cs->opts.enable_break; }
+    else if (!strcmp(name, "default_byref"))      { PR_OPT(default_byref,      9, true);  out->value_ptr = (int *)&p->cs->opts.default_byref; }
+    else if (!strcmp(name, "sinclair"))           { PR_OPT(sinclair,          10, true);  out->value_ptr = (int *)&p->cs->opts.sinclair; }
+    else if (!strcmp(name, "zxnext"))             { PR_OPT(zxnext,            11, true);  out->value_ptr = (int *)&p->cs->opts.zxnext; }
+    else if (!strcmp(name, "headerless"))         { PR_OPT(headerless,        12, true);  out->value_ptr = (int *)&p->cs->opts.headerless; }
+    else if (!strcmp(name, "optimization_level")) { PR_OPT(optimization_level,13, false); out->value_ptr = &p->cs->opts.optimization_level; }
+    else if (!strcmp(name, "debug_level"))        { PR_OPT(debug_level,       14, false); out->value_ptr = &p->cs->opts.debug_level; }
+    else if (!strcmp(name, "org"))                { PR_OPT(org,               15, false); out->value_ptr = &p->cs->opts.org; }
+    else if (!strcmp(name, "heap_size"))          { PR_OPT(heap_size,         16, false); out->value_ptr = &p->cs->opts.heap_size; }
+    else if (!strcmp(name, "heap_address"))       { PR_OPT(heap_address,      17, false); out->value_ptr = &p->cs->opts.heap_address; }
+    else if (!strcmp(name, "max_syntax_errors"))  { PR_OPT(max_syntax_errors, 18, false); out->value_ptr = &p->cs->opts.max_syntax_errors; }
+    else if (!strcmp(name, "expected_warnings"))  { PR_OPT(expected_warnings, 19, false); out->value_ptr = &p->cs->opts.expected_warnings; }
+    else { return false; }
+    return true;
+}
+#undef PR_OPT
+
 /* apply_pragma_option — the `#pragma NAME = VALUE` option-set side effect,
  * extracted from parse_statement so the Phase-D PLY preproc_line reduces
  * (371/372/373) apply the BYTE-IDENTICAL OPTIONS mutation. Faithful port of
@@ -10656,14 +10709,50 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         r = NULL;
         break;
     }
-    case 374: case 375: /* preproc_line : _PRAGMA _PUSH|_POP LP ID RP
-                         * (p_preproc_pragma_push / _pop). Python pushes/pops
-                         * the OPTIONS stack; the C PRODUCTION treats these as a
-                         * no-op line-skip (parser.c:4880-4906 — no OPTIONS
-                         * stack mutation), producing a NOP statement (no AST).
-                         * Match the production C-vs-C: no side effect, no node. */
+    case 374: case 375: { /* preproc_line : _PRAGMA _PUSH|_POP LP ID RP
+                         * Python anchor (src/zxbc/zxbparser.py:3248-3263):
+                         *   p_preproc_pragma_push -> OPTIONS[p[4]].push()
+                         *   p_preproc_pragma_pop  -> OPTIONS[p[4]].pop()
+                         * Option.push (src/api/options.py:146-152) saves the
+                         * CURRENT value on the per-Option stack and re-assigns
+                         * the same value (Option.push(value=None) -> push self
+                         * .value, set self.value = self.value).
+                         * Option.pop (options.py:153-160) raises on empty stack
+                         * (OptionStackUnderflowError, uncaught -> exit 1) and
+                         * otherwise restores the prior value.
+                         * Unknown pragma name -> warning_ignoring_unknown_pragma
+                         * at p.lineno(4) (the ID token), identical to the
+                         * option-set arm. No AST emitted either way. */
+        const char *pname = PD_SVAL(4);
+        int name_lineno = PD_LINENO(4);
+        PragmaOptRef ref;
+        if (!pragma_opt_ref(p, pname, &ref)) {
+            warn_unknown_pragma(p->cs, name_lineno, pname);
+        } else if (prodno == 374) {
+            /* push */
+            if (*ref.depth_ptr < PRAGMA_STACK_MAX) {
+                ref.stack_arr[(*ref.depth_ptr)++] = *ref.value_ptr;
+            }
+            /* Python's push(value=None) re-assigns self.value to the
+             * already-saved value (no observable change). Matched: live
+             * value is unchanged here. */
+        } else {
+            /* pop */
+            if (*ref.depth_ptr > 0) {
+                *ref.value_ptr = ref.stack_arr[--(*ref.depth_ptr)];
+            }
+            /* Python raises OptionStackUnderflowError on empty pop, which
+             * propagates as an uncaught exception (exit 1). NextBuild
+             * library code is always balanced (every push pairs with a
+             * pop in the same .bas), so this branch is not exercised by
+             * any current corpus or NextBuild source. Leaving the live
+             * value unchanged on underflow keeps the compile going for
+             * "wild" code without a noisy exit divergence; if a real
+             * underflow ever surfaces we can promote this to an error. */
+        }
         r = NULL;
         break;
+    }
 
     /* ---- const_vector subsystem (array initialisers `=> {…}` / `= {…}`) ----
      * Every Python "list" is represented as an AST_ARRAYINIT node, exactly the

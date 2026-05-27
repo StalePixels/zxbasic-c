@@ -152,6 +152,42 @@ typedef struct CompilerOptions {
      * Used to implement Python's "ignore None" semantics: config file values
      * are only applied for fields NOT set on the cmdline. */
     uint32_t cmdline_set;
+
+    /* #pragma push/pop stacks (Python anchor: src/api/options.py:146-160
+     * Option.push/.pop on a per-Option `stack: list[Any]`). Each known
+     * stackable option keeps a tiny fixed-depth LIFO of int values
+     * (bool stores 0/1; int stores the value verbatim). Top is at
+     * pragma_stack_depth[i]-1. Library code in the wild only pushes
+     * case_insensitive and string_base, but any bool/int option that
+     * apply_pragma_option recognises is also stackable in Python via
+     * the same generic OPTIONS[name].push()/pop() — see Python anchor
+     * src/zxbc/zxbparser.py:3248-3263. Depth 16 is plenty for
+     * realistic include trees (each lib pushes once at top, pops at
+     * bottom; deepest observed is ~4 nested through nextlib + sublib). */
+#define PRAGMA_STACK_MAX 16
+    int pragma_stack_case_insensitive[PRAGMA_STACK_MAX];
+    int pragma_stack_string_base[PRAGMA_STACK_MAX];
+    int pragma_stack_array_base[PRAGMA_STACK_MAX];
+    int pragma_stack_explicit[PRAGMA_STACK_MAX];
+    int pragma_stack_strict[PRAGMA_STACK_MAX];
+    int pragma_stack_strict_bool[PRAGMA_STACK_MAX];
+    int pragma_stack_memory_check[PRAGMA_STACK_MAX];
+    int pragma_stack_array_check[PRAGMA_STACK_MAX];
+    int pragma_stack_enable_break[PRAGMA_STACK_MAX];
+    int pragma_stack_default_byref[PRAGMA_STACK_MAX];
+    int pragma_stack_sinclair[PRAGMA_STACK_MAX];
+    int pragma_stack_zxnext[PRAGMA_STACK_MAX];
+    int pragma_stack_headerless[PRAGMA_STACK_MAX];
+    int pragma_stack_optimization_level[PRAGMA_STACK_MAX];
+    int pragma_stack_debug_level[PRAGMA_STACK_MAX];
+    int pragma_stack_org[PRAGMA_STACK_MAX];
+    int pragma_stack_heap_size[PRAGMA_STACK_MAX];
+    int pragma_stack_heap_address[PRAGMA_STACK_MAX];
+    int pragma_stack_max_syntax_errors[PRAGMA_STACK_MAX];
+    int pragma_stack_expected_warnings[PRAGMA_STACK_MAX];
+    /* depth tracker per stack — keyed by the same enum-like ordinal as the
+     * arrays above (use option_pragma_stack_ptr to dispatch). 0 = empty. */
+    int pragma_stack_depth[20];
 } CompilerOptions;
 
 /* Bitmask flags for cmdline_set — tracks which options were explicitly given */
