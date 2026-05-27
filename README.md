@@ -6,7 +6,7 @@
 [![zxbpp tests](https://img.shields.io/badge/zxbpp_tests-96%2F96_passing-brightgreen)](#-phase-1--preprocessor-done)
 [![zxbasm tests](https://img.shields.io/badge/zxbasm_tests-61%2F61_passing-brightgreen)](#-phase-2--assembler-done)
 [![zxbc full pipeline](https://img.shields.io/badge/zxbc_full--O0--O3-byte--identical_to_Python-brightgreen)](#-phase-3--compiler-frontend-byte-identical)
-[![Codegen probes](https://img.shields.io/badge/probes-115_GREEN_3_RED-yellow)](#probe-enumeration-meter)
+[![Codegen probes](https://img.shields.io/badge/probes-118_GREEN_0_RED-brightgreen)](#probe-enumeration-meter)
 [![C unit tests](https://img.shields.io/badge/C_unit_tests-132_passing-blue)](#c-unit-test-suite)
 
 ZX BASIC — C Port 🚀
@@ -73,16 +73,18 @@ In addition to the inherited corpus, the C port has its own probe series —
 ~90 hand-authored fixtures (`csrc/tests/codegen_probes/`) that deliberately
 drive codepaths the inherited corpus is silent on. The probe runner compares
 the FULL contract per fixture (exit, stderr, Stage-1 ASM, end-to-end binary)
-against the Python oracle. **115 probes GREEN, 3 RED** across 10
+against the Python oracle. **118 probes GREEN, 0 RED** across 10
 categories (typecast, warnings, errors, arithmetic, strings, arrays, controlflow,
-switches, preprocessor, zxbasm). The 3 remaining RED probes are stage-05
-zxbasm error-path divergences that need the full PLY parse-recovery port
-(missing-ENDP cascade, pragma-namespace cascade, illegal-preproc-char text).
-Wave-2 closed div-by-zero, [W200] truncation tag, unknown-char token-render,
-and bad-operand uppercase casing. This is the enumeration-completeness check — corpus-pass
-alone doesn't prove the port has every Python check; the probe meter does.
-Every new oversight surfaced from real-world compilation gets a RED probe first,
-GREEN fix second.
+switches, preprocessor, zxbasm). Wave-3 closed the final three zxbasm
+divergences: illegal-preproc-char wording (asm-mode INITIAL catch-all
+ported), missing-ENDP cascade (defer enter_proc until PROC's terminator
+confirmed), and pragma-namespace cascade (column-1 `#` gate + malformed-
+pragma passthrough + ID-ID PLY-style error recovery). Wave-2 closed
+div-by-zero, [W200] truncation tag, unknown-char token-render, and
+bad-operand uppercase casing. This is the enumeration-completeness check —
+corpus-pass alone doesn't prove the port has every Python check; the probe
+meter does. Every new oversight surfaced from real-world compilation gets
+a RED probe first, GREEN fix second.
 
 #### Compiler infrastructure
 - ✅ **Faithful PLY/LALR(1) parser port** — the default `zxbc` parser is a
@@ -342,7 +344,7 @@ Here's how we get there, one step at a time:
     │         zxbpp + zxbasm work without Python!
     │
  Phase 3  ✅  BASIC Frontend — faithful PLY/LALR(1) port
-    │         1033/1033 parse-only PASS, 0 false-positives, 110 probes GREEN
+    │         1033/1033 parse-only PASS, 0 false-positives, 118 probes GREEN
     │
  Phase 4  ✅  Optimizer + IR — byte-identical to Python at -O1/-O2/-O3
     │
