@@ -208,6 +208,16 @@ int main(int argc, char *argv[])
     preproc_init(&pp);
     pp.debug_level = debug_level;
     pp.in_asm = true;  /* ASM mode: zxbpp.setMode("asm") in Python */
+    /* zxbasm drives Python's setMode(PreprocMode.ASM) (zxbpp.py:1044-1045),
+     * which selects zxbasmpplex whose t_INIIAL_sharp regex is `\#` —
+     * strictly column-1. Distinct from the in_asm tracker (which is ALSO
+     * set true inside a BASIC file's `asm…end asm` block but with the
+     * BASIC lexer, zxbpplex, whose t_INITIAL_asm_sharp regex `[ \t]*\#`
+     * accepts leading whitespace). Without this flag, an indented `#`
+     * in a `.asm` file would be silently treated as a directive instead
+     * of triggering the "illegal preprocessor character '#'" the Python
+     * catch-all emits. */
+    pp.asm_strict_directives = true;
 
     /* Redirect preprocessor errors to same error file */
     if (as.err_file != stderr) {

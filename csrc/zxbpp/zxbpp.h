@@ -118,6 +118,18 @@ typedef struct PreprocState {
      * first-pass asm..end asm tracker). */
     bool asm_filter_mode;
 
+    /* true when zxbasm is driving the preprocessor on a `.asm` source —
+     * Python equivalent is `setMode(PreprocMode.ASM)` (zxbpp.py:1044-1045),
+     * which selects src/zxbpp/zxbasmpplex.Lexer. That lexer's t_INIIAL_sharp
+     * (zxbasmpplex.py:320) regex is `\#` — strictly column-1: an indented
+     * `#` falls through to the catch-all ANY rule (`r"."`) and emits one
+     * "illegal preprocessor character '#'" per occurrence. Distinct from
+     * the in_asm tracker (which can be true ALSO inside a BASIC file's
+     * `asm…end asm` block, where the BASIC zxbpplex lexer is still in
+     * use and its t_INITIAL_asm_sharp rule `[ \t]*\#` accepts leading
+     * whitespace). */
+    bool asm_strict_directives;
+
     /* Block comment nesting depth: /' increments, '/ decrements */
     int block_comment_level;
 
