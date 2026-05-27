@@ -46,19 +46,40 @@ from shutil import copyfile
 # (the `'!org=` / `'!heap=` / `'!opt=` directive parsing, the .NEX wrapper
 # generation, the post-build emulator launch, etc.) is unchanged.
 import os as _osc
-ZXBC_C = _osc.path.abspath(_osc.path.join(_osc.path.dirname(__file__),
-                                         '..', 'build', 'zxbc', 'zxbc'))
 
-class _ZxbcShim:
-    """Drop-in for `zxbc.main(argv)` that invokes the C zxbc binary instead."""
-    @staticmethod
-    def main(argv):
-        import subprocess
-        rc = subprocess.run([ZXBC_C] + argv).returncode
-        return rc if rc != 0 else None
-zxbc = _ZxbcShim()
-class _VersionShim: VERSION = "C-port"
-version = _VersionShim()
+# NEXTBUILD_BACKEND selects which compiler to drive:
+#   "c"      (default) — invoke the C zxbc binary at csrc/build/zxbc/zxbc.
+#   "oracle"           — invoke the project's pinned upstream Python at
+#                        zxbasic-c/src/ (the read-only ground-truth oracle).
+# This is the BYTE-FOR-BYTE comparator the port is held against. Do NOT use
+# NextBuild's bundled zxbasic/ (v1.17.1, ~4 years stale) as the oracle —
+# it has missing peephole passes and other drift versus current upstream.
+_BACKEND = _osc.environ.get('NEXTBUILD_BACKEND', 'c').lower()
+
+if _BACKEND == 'c':
+    ZXBC_C = _osc.path.abspath(_osc.path.join(_osc.path.dirname(__file__),
+                                             '..', 'build', 'zxbc', 'zxbc'))
+    class _ZxbcShim:
+        """Drop-in for `zxbc.main(argv)` that invokes the C zxbc binary."""
+        @staticmethod
+        def main(argv):
+            import subprocess
+            rc = subprocess.run([ZXBC_C] + argv).returncode
+            return rc if rc != 0 else None
+    zxbc = _ZxbcShim()
+    class _VersionShim: VERSION = "C-port"
+    version = _VersionShim()
+elif _BACKEND == 'oracle':
+    # Pinned upstream Python lives at zxbasic-c/src/, two parents up from
+    # this script. Prepend so its `src.zxbc` wins over any other `src` on
+    # sys.path (NextBuild's bundled zxbasic/src appended above).
+    _ORACLE_ROOT = _osc.path.abspath(_osc.path.join(_osc.path.dirname(__file__),
+                                                    '..', '..'))
+    sys.path.insert(0, _ORACLE_ROOT)
+    from src.zxbc import zxbc  # noqa: E402,F401
+    from src.zxbc import version  # noqa: E402,F401
+else:
+    raise SystemExit("NEXTBUILD_BACKEND must be 'c' or 'oracle' (got %r)" % _BACKEND)
 
 # nextbuild-c: post-compile chrome (NEX wrapping, emulator launch) is not
 # needed to validate compiler output. Tolerate missing deps by stubbing them.
