@@ -51,11 +51,11 @@ if [ ! -f "$PROJECT_ROOT/src/zxbpp/zxbpp.py" ]; then
     exit 1
 fi
 
-# Build include paths for C binary
-INCLUDE_ARGS=""
-if [ -d "$PROJECT_ROOT/src/lib/arch/zx48k/stdlib" ]; then
-    INCLUDE_ARGS="-I $PROJECT_ROOT/src/lib/arch/zx48k/stdlib"
-fi
+# Note: neither C zxbpp nor Python zxbpp accepts -I (zxbpp predates the
+# zxbc compiler frontend's include flag plumbing). Both resolve include
+# paths via internal defaults / configuration. The C invocation below
+# passes only -e to silence stderr file output, mirroring the Python
+# entry_point's default behaviour.
 
 PASS=0
 FAIL=0
@@ -98,7 +98,7 @@ sys.exit(result)
 " > "$py_out" 2> "$py_err" || py_rc=$?
 
     # Run C port
-    "$ZXBPP_C" "$bi_file" -e /dev/null $INCLUDE_ARGS > "$c_out" 2> "$c_err" || c_rc=$?
+    "$ZXBPP_C" "$bi_file" -e /dev/null > "$c_out" 2> "$c_err" || c_rc=$?
 
     # Compare exit codes
     if [ "$py_rc" -ne "$c_rc" ]; then
