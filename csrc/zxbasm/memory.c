@@ -524,8 +524,22 @@ void mem_add_instruction(AsmState *as, AsmInstr *instr)
         return;
     }
 
-    uint8_t buf[256];
-    int n = asm_instr_bytes(as, instr, buf, sizeof(buf));
+    /* DEFB/DEFW expression lists can also exceed the 256-byte scratch
+     * (e.g. a single `db` of 272 array-literal items in
+     * XMASmodplay/XMAS2020intro2.bas). Size the buffer to the directive's
+     * actual width (DEFW = 2 bytes/expr, DEFB = 1) — Python's
+     * Memory.add_instruction() (src/zxbasm/memory.py:160-161) iterates
+     * instr.bytes() with no upper bound, so we must not impose one
+     * either. Z80 opcodes are <=4 bytes, so the fallback covers them. */
+    int bufsize = 256;
+    if (instr->type == ASM_DEFB && instr->data_count > bufsize)
+        bufsize = instr->data_count;
+    else if (instr->type == ASM_DEFW && instr->data_count * 2 > bufsize)
+        bufsize = instr->data_count * 2;
+    uint8_t stackbuf[256];
+    uint8_t *buf = (bufsize <= 256) ? stackbuf
+                                    : arena_alloc(&as->arena, (size_t)bufsize);
+    int n = asm_instr_bytes(as, instr, buf, bufsize);
 
     for (int i = 0; i < n; i++) {
         if (m->index + i >= MAX_MEM) {
@@ -798,8 +812,17 @@ int mem_dump(AsmState *as, int *org_out, uint8_t **data_out, int *data_len)
             continue;
         }
 
-        uint8_t buf[256];
-        int n = asm_instr_bytes(as, instr, buf, sizeof(buf));
+        /* DEFB/DEFW expression lists may exceed 256 bytes (see the emit
+         * pass above) — size the buffer to the directive's actual width. */
+        int bufsize = 256;
+        if (instr->type == ASM_DEFB && instr->data_count > bufsize)
+            bufsize = instr->data_count;
+        else if (instr->type == ASM_DEFW && instr->data_count * 2 > bufsize)
+            bufsize = instr->data_count * 2;
+        uint8_t stackbuf[256];
+        uint8_t *buf = (bufsize <= 256) ? stackbuf
+                                        : arena_alloc(&as->arena, (size_t)bufsize);
+        int n = asm_instr_bytes(as, instr, buf, bufsize);
 
         /* Overwrite memory at the instruction's start address */
         for (int j = 0; j < n && (i + j) < MAX_MEM; j++) {
