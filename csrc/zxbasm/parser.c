@@ -680,6 +680,24 @@ static bool parse_idx_addr(Parser *p, const char **reg, Expr **offset, bool brac
     if (p->cur.type == close) {
         /* (IX) or [IX] → offset 0 */
         *offset = expr_int(p->as, 0, p->cur.lineno);
+    } else if (p->cur.type == TOK_LP || p->cur.type == TOK_LB) {
+        /* `LP IX LP ...` shape — e.g. `ld (ix (- 12 + 5)), 0`. Python's
+         * grammar (src/zxbasm/asmparse.py:291-303) has no `expr : LP expr RP`
+         * production — expr's FIRST is INTEGER / ID / ADDR / MINUS / PLUS,
+         * but NOT LP. So PLY enters p_error at the inner `(`, error-recovers
+         * across the parenthesised sub-expression, and surfaces the failure
+         * at the OUTER `)` with `Syntax error. Unexpected token ')' [RP]`.
+         *
+         * Mimic that here: parse-and-discard the inner LP-RP expression so
+         * the stream is positioned at the outer RP, then emit the PLY-shape
+         * unexpected-token diagnostic at that RP. */
+        (void)parse_primary(p);  /* consumes inner `( expr )` */
+        if (p->cur.type == close) {
+            asm_unexpected(p);   /* `Unexpected token ')' [RP]` at outer RP */
+            parser_advance(p);
+        }
+        *offset = expr_int(p->as, 0, op_lineno);
+        return true;
     } else {
         /* Python p_ind8_I (src/zxbasm/asmparse.py:291-321): the bare
          * `LP IX expr RP` form requires the offset to lead with a unary
