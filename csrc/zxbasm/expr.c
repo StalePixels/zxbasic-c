@@ -101,7 +101,12 @@ static bool eval_impl(AsmState *as, Expr *e, int64_t *result, bool ignore)
         case '*': *result = l * r; break;
         case '/':
             if (r == 0) {
-                if (!ignore) asm_error(as, e->lineno, "Division by 0");
+                /* Python's Expr.try_eval (src/zxbasm/expr.py:111-114)
+                 * unconditionally emits "Division by 0" on ZeroDivisionError
+                 * — Expr.ignore gates label lookups, NOT arithmetic.
+                 * Mirror that: report even from the try-eval (ignore=true)
+                 * path so `LD A, 10/0` fails the same way Python does. */
+                asm_error(as, e->lineno, "Division by 0");
                 return false;
             }
             /* Python-style integer division: floor division */
@@ -112,7 +117,7 @@ static bool eval_impl(AsmState *as, Expr *e, int64_t *result, bool ignore)
             break;
         case '%':
             if (r == 0) {
-                if (!ignore) asm_error(as, e->lineno, "Division by 0");
+                asm_error(as, e->lineno, "Division by 0");
                 return false;
             }
             *result = l % r;
