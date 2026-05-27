@@ -110,16 +110,20 @@ static void test_optimization_level(void) {
 
 static void test_output_format_tap(void) {
     CompilerOptions opts;
-    char *argv[] = {"zxbc", "--parse-only", "--tap", "test.bas"};
-    int rc = parse(&opts, 4, argv);
+    /* `--tap` and `--parse-only` are mutually exclusive (Python's argparse
+     * groups them together — `-T | -t | -A | -E | --parse-only | -f`).
+     * Test --tap on its own. */
+    char *argv[] = {"zxbc", "--tap", "test.bas"};
+    int rc = parse(&opts, 3, argv);
     ASSERT_EQ_INT(rc, 0);
     ASSERT_STR_EQ(opts.output_file_type, "tap");
 }
 
 static void test_output_format_tzx(void) {
     CompilerOptions opts;
-    char *argv[] = {"zxbc", "--parse-only", "--tzx", "test.bas"};
-    int rc = parse(&opts, 4, argv);
+    /* See test_output_format_tap — --tzx is in the same mutex group. */
+    char *argv[] = {"zxbc", "--tzx", "test.bas"};
+    int rc = parse(&opts, 3, argv);
     ASSERT_EQ_INT(rc, 0);
     ASSERT_STR_EQ(opts.output_file_type, "tzx");
 }
