@@ -22,12 +22,7 @@ set -uo pipefail
 ZXBPP_C="${1:?Usage: $0 <c-zxbpp-binary> <test-dir>}"
 TEST_DIR="${2:?Usage: $0 <c-zxbpp-binary> <test-dir>}"
 
-PYTHON=/opt/homebrew/bin/python3.12
-if [ ! -x "$PYTHON" ]; then
-    echo "ERROR: required interpreter $PYTHON not present." >&2
-    echo "       Strict harness will not silently fall back to system python3." >&2
-    exit 2
-fi
+. "$(dirname "$0")/_find_python312.sh"
 
 ZXBPP_C=$(cd "$(dirname "$ZXBPP_C")" && pwd)/$(basename "$ZXBPP_C")
 TEST_DIR=$(cd "$TEST_DIR" && pwd)

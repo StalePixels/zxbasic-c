@@ -27,6 +27,14 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # Test harness needs python3.12 to run the Python oracle side-by-side.
+      # Strict — falls over loudly if the interpreter is missing.
+      - name: Set up Python 3.12
+        if: runner.os != 'Windows'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
       - name: Configure CMake
         run: cmake -S csrc -B csrc/build -DCMAKE_BUILD_TYPE=Release
 
@@ -59,9 +67,9 @@ jobs:
           cd ../..
           ./csrc/build/tests/test_cmdline
 
-      - name: Run cmdline tests (Unix)
-        if: runner.os != 'Windows'
-        run: ./csrc/tests/run_cmdline_tests.sh ./csrc/build/zxbc/zxbc tests/cmdline
+      # Note: csrc/tests/run_cmdline_tests.sh was deleted in Round 0
+      # (Sprint 11) as a fuzzy harness. The 15 value-verifying cmdline
+      # tests it ran are replaced by the test_cmdline C binary above.
 
       # zxbpp text tests skipped on Windows — #line paths differ.
       # Build verification is sufficient; text output is validated on Unix.
@@ -123,10 +131,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.11
+      - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
 
       - name: Build C binary
         run: |
