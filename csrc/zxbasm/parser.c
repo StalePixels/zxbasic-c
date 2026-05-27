@@ -1877,6 +1877,16 @@ static void parse_asm(Parser *p)
         char *fname = p->cur.sval;
         parser_advance(p);
 
+        /* sanitize_filename (src/api/utils.py:81): replace `\` with `/`
+         * so Windows-style paths like ".\data\tiles.nxp" search and
+         * report identically across OSes. Python applies this to every
+         * filename in zxbpp.search_filename / incbin alike. */
+        if (fname) {
+            for (char *c = fname; *c; c++) {
+                if (*c == '\\') *c = '/';
+            }
+        }
+
         /* Optional offset and length */
         int64_t offset = 0;
         int64_t length = -1;

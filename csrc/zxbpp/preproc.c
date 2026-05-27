@@ -2506,10 +2506,31 @@ static void process_line(PreprocState *pp, const char *line)
     char *stripped = strip_comment(pp, line);
     const char *to_expand = stripped ? stripped : line;
 
-    /* In ASM mode, backslash is not a valid token (Python lexer rejects it) */
-    if (pp->in_asm && strchr(to_expand, '\\')) {
-        preproc_error(pp, "illegal preprocessor character '\\'");
-        return;
+    /* In ASM mode, a bare backslash is not a valid token (Python lexer
+     * rejects it via the catch-all). HOWEVER, Python's STRING rule
+     * (src/zxbpp/zxbpplex.py:327, applies to INITIAL/pragma/prepro/
+     * defexpr/asm/if states alike) consumes `"([^"\n]|"")*"` as one
+     * token before the catch-all runs — so any `\` inside a double-
+     * quoted string is just string content, never an error.
+     * NextBuild Windows-style `incbin ".\data\tiles.nxp"` relies on
+     * this. Skip `\` that occur inside `"..."`. */
+    if (pp->in_asm) {
+        bool in_str = false;
+        bool bad_bs = false;
+        for (const char *p = to_expand; *p; p++) {
+            char c = *p;
+            if (c == '\n') { in_str = false; continue; }
+            if (in_str) {
+                if (c == '"') in_str = false;
+                continue;
+            }
+            if (c == '"') { in_str = true; continue; }
+            if (c == '\\') { bad_bs = true; break; }
+        }
+        if (bad_bs) {
+            preproc_error(pp, "illegal preprocessor character '\\'");
+            return;
+        }
     }
 
     /* ASM-mode catch-all (zxbasmpplex.py:360).
