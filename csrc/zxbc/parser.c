@@ -2106,6 +2106,32 @@ static AstNode *make_builtin_node(Parser *p, AstNode *n, AstNode *arg,
         }
     }
 
+    /* p_code constant-fold (zxbparser.py:3465-3482 -> builtin.py:74-77):
+     * CODE/ASC of a COMPILE-TIME-CONSTANT string folds at parse time via
+     * BUILTIN.make_node when func!=None and is_string(operand).  The local
+     * asc() helper (zxbparser.py:3468-3472) returns ord(s[0]) for a
+     * non-empty string and 0 for the empty string — so the fold is total:
+     * `code ""` -> 0, `code "Hello"` -> ord('H') == 72.  Type is TYPE.ubyte.
+     * is_string single-arg (const_string_value_node) gates this: a bare
+     * STRING literal or a CLASS_const id of string type folds; a runtime
+     * string (variable or CHR$(...) call) STAYS the BUILTIN node, matching
+     * Python's else branch — without this gate we'd over-fold and miss the
+     * runtime .core.__ASC path.  The fold elides the
+     *   ld hl,.LABEL.__LABELn ; xor a ; call .core.__ASC ; ld h, a
+     * runtime sequence the BUILTIN-node path would emit, replacing it with
+     * the immediate the surrounding expression then constant-propagates
+     * (e.g. `keyin = code "1"` -> `sub 49` instead of the runtime call). */
+    if (kw == BTOK_CODE) {
+        const AstNode *sv = const_string_value_node(arg);
+        if (sv && sv->tag == AST_STRING) {
+            const char *str = sv->u.string.value ? sv->u.string.value : "";
+            int slen = sv->u.string.length;
+            double v = (slen > 0) ? (double)(unsigned char)str[0] : 0.0;
+            return make_number(p, v, lineno,
+                               p->cs->symbol_table->basic_types[TYPE_ubyte]);
+        }
+    }
+
     /* p_sgn (zxbparser.py:3489): a string argument is rejected with the
      * literal "Expected a numeric expression, got TYPE.string instead"
      * (note the verbatim Python enum repr), p[0]=None. */
