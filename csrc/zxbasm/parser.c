@@ -2119,6 +2119,10 @@ int asm_parser_parse(AsmState *as, const char *input)
      * (src/zxbasm/asmparse.py:986-989). Reached when the preprocessed
      * text has no tokens (an empty source, or one whose preprocessor
      * produced no output). */
+    /* Wholly-empty / whitespace-only source: PLY's parser cannot reduce
+     * its start symbol and calls p_error(None) — written verbatim, no
+     * "file:line: error:" prefix, no newline (src/zxbasm/asmparse.py:986-989).
+     * Matches the empty-source / no-preproc-output case (e.g. newl.err). */
     if (input) {
         const char *c = input;
         while (*c == ' ' || *c == '\t' || *c == '\n' || *c == '\r' ||
@@ -2135,6 +2139,39 @@ int asm_parser_parse(AsmState *as, const char *input)
 
     Parser parser;
     parser_init(&parser, as, input);
+
+    /* PLY p_error(None) — fires when the parse ends at EOF without the
+     * stack reaching the accept state (asmparse.py:981-989). For a non-
+     * empty source whose preprocessed output yields ONLY NEWLINE tokens
+     * (i.e. no `asm` production ever reduces beyond the empty-asms case),
+     * Python's PLY also calls p_error(None). The C preprocessor emits a
+     * placeholder NEWLINE for a bad source line that was processed-with-
+     * errors (e.g. `#define @` -> `#line ...\n\n`), so the asm parser
+     * sees `NEWLINE EOF` rather than `EOF` — drain leading NEWLINEs and
+     * emit the footer if NO real (non-NEWLINE) token follows AND at
+     * least one NEWLINE was observed. Example: preprocerr2.asm.
+     *
+     * The `at least one NEWLINE` requirement is what keeps the include-
+     * failure path (preprocerr1.asm) from spuriously emitting the
+     * footer — there the C preproc emits no placeholder NEWLINE after
+     * its initial #line, so the lex stream is empty (first = EOF). */
+    {
+        Lexer probe = parser.lex;     /* snapshot lex state */
+        Token first = parser.cur;
+        bool saw_newline = false;
+        while (first.type == TOK_NEWLINE) {
+            saw_newline = true;
+            first = lexer_next(&probe);
+        }
+        if (saw_newline && first.type == TOK_EOF) {
+            fprintf(as->err_file ? as->err_file : stderr,
+                    "General syntax error at assembler "
+                    "(unexpected End of File?)");
+            as->error_count++;
+            return as->error_count;
+        }
+    }
+
     parse_program(&parser);
     return as->error_count;
 }
