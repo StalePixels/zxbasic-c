@@ -2046,25 +2046,87 @@ static char *strip_comment(PreprocState *pp, const char *line)
     return arena_strndup(&pp->arena, line, len);
 }
 
-/* Check if line starts/ends ASM mode. Updates pp->in_asm.
- * Returns true if this line is an asm/end asm boundary. */
+/* Check if a line opens/closes ASM mode. Updates pp->in_asm.
+ *
+ * Python's zxbpplex is lex-driven, not line-driven: in INITIAL state
+ * `t_INITIAL_asmBegin` (\b[aA][sS][mM]\b) flips into the asm lexer
+ * state the moment the token is seen — anywhere on the line. In asm
+ * state, `t_asm_asmEnd` (\b[Ee][Nn][Dd][ \t]+[Aa][Ss][Mm]\b) flips
+ * back to INITIAL the moment IT is seen. So `asm : di : ei : end asm`
+ * on one line opens then closes asm mode, leaving the trailing tokens
+ * (and the next BASIC line) back in INITIAL.
+ *
+ * The previous implementation only checked the first token at the
+ * start of the line, so single-line `asm ... end asm` flipped in_asm
+ * on but never off — leaving subsequent BASIC lines parsed under the
+ * asm-mode catch-all and rejecting characters like '='.
+ *
+ * We must skip string literals (`"..."`) and comments (`'...`, REM,
+ * or `;` in asm mode) so a stringified or commented-out "asm" /
+ * "end asm" doesn't toggle the state — Python's lexer enters STRING
+ * / singlecomment / asmcomment sub-states which never see asmBegin /
+ * asmEnd. */
 static void check_asm_boundary(PreprocState *pp, const char *line)
 {
-    const char *p = skip_ws(line);
+    const char *p = line;
 
-    if (pp->in_asm) {
-        /* Check for "end asm" (case-insensitive) */
-        if (strnicmp_local(p, "end", 3) == 0 && !is_id_char(p[3])) {
-            const char *after = skip_ws(p + 3);
-            if (strnicmp_local(after, "asm", 3) == 0 && !is_id_char(after[3])) {
-                pp->in_asm = false;
+    while (*p) {
+        /* String literal: skip to closing quote (or end of line). */
+        if (*p == '"') {
+            p++;
+            while (*p && *p != '"') p++;
+            if (*p == '"') p++;
+            continue;
+        }
+
+        /* Comment introducer: rest of line is comment. */
+        if (pp->in_asm) {
+            if (*p == ';') return;
+        } else {
+            if (*p == '\'') return;
+            if ((p[0] == 'R' || p[0] == 'r') &&
+                (p[1] == 'E' || p[1] == 'e') &&
+                (p[2] == 'M' || p[2] == 'm') &&
+                (p == line || !is_id_char(p[-1])) &&
+                !is_id_char(p[3])) {
+                return;
             }
         }
-    } else {
-        /* Check for "asm" (case-insensitive), not "end asm" */
-        if (strnicmp_local(p, "asm", 3) == 0 && !is_id_char(p[3])) {
-            pp->in_asm = true;
+
+        /* Identifier-start: token boundary check. */
+        bool at_id_start = (p == line || !is_id_char(p[-1])) && is_id_char(*p);
+
+        if (at_id_start) {
+            if (pp->in_asm) {
+                /* Looking for `end[ \t]+asm` (case-insensitive, word-bounded). */
+                if (strnicmp_local(p, "end", 3) == 0 && !is_id_char(p[3])) {
+                    const char *after = p + 3;
+                    /* Python's t_asm_asmEnd uses [ \t]+ between end and asm. */
+                    if (*after == ' ' || *after == '\t') {
+                        while (*after == ' ' || *after == '\t') after++;
+                        if (strnicmp_local(after, "asm", 3) == 0 && !is_id_char(after[3])) {
+                            pp->in_asm = false;
+                            p = after + 3;
+                            continue;
+                        }
+                    }
+                }
+            } else {
+                if (strnicmp_local(p, "asm", 3) == 0 && !is_id_char(p[3])) {
+                    pp->in_asm = true;
+                    p += 3;
+                    continue;
+                }
+            }
+
+            /* Not an asm/end-asm token — skip the whole identifier so
+             * we don't mis-match e.g. `asmflag` mid-id. */
+            p++;
+            while (is_id_char(*p)) p++;
+            continue;
         }
+
+        p++;
     }
 }
 

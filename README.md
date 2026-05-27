@@ -6,7 +6,7 @@
 [![zxbpp tests](https://img.shields.io/badge/zxbpp_tests-96%2F96_passing-brightgreen)](#-phase-1--preprocessor-done)
 [![zxbasm tests](https://img.shields.io/badge/zxbasm_tests-61%2F61_passing-brightgreen)](#-phase-2--assembler-done)
 [![zxbc full pipeline](https://img.shields.io/badge/zxbc_full--O0--O3-byte--identical_to_Python-brightgreen)](#-phase-3--compiler-frontend-byte-identical)
-[![Codegen probes](https://img.shields.io/badge/probes-121_GREEN_0_RED-brightgreen)](#probe-enumeration-meter)
+[![Codegen probes](https://img.shields.io/badge/probes-122_GREEN_0_RED-brightgreen)](#probe-enumeration-meter)
 [![C unit tests](https://img.shields.io/badge/C_unit_tests-132_passing-blue)](#c-unit-test-suite)
 
 ZX BASIC — C Port 🚀
@@ -73,7 +73,7 @@ In addition to the inherited corpus, the C port has its own probe series —
 ~90 hand-authored fixtures (`csrc/tests/codegen_probes/`) that deliberately
 drive codepaths the inherited corpus is silent on. The probe runner compares
 the FULL contract per fixture (exit, stderr, Stage-1 ASM, end-to-end binary)
-against the Python oracle. **121 probes GREEN, 0 RED** across 10
+against the Python oracle. **122 probes GREEN, 0 RED** across 10
 categories (typecast, warnings, errors, arithmetic, strings, arrays, controlflow,
 switches, preprocessor, zxbasm). Wave-4 closed three more legacy
 zxbasm Error-FAIL fixtures via additive probes: `ldix2` (reject the
@@ -347,7 +347,7 @@ Here's how we get there, one step at a time:
     │         zxbpp + zxbasm work without Python!
     │
  Phase 3  ✅  BASIC Frontend — faithful PLY/LALR(1) port
-    │         1033/1033 parse-only PASS, 0 false-positives, 121 probes GREEN
+    │         1033/1033 parse-only PASS, 0 false-positives, 122 probes GREEN
     │
  Phase 4  ✅  Optimizer + IR — byte-identical to Python at -O1/-O2/-O3
     │
