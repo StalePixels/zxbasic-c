@@ -67,11 +67,25 @@ else
     exit 2
 fi
 
+# ---- mode select: zxbc (default, .bas inputs) vs zxbasm (.asm inputs) ----
+# The zxbasm wave-1 probes live in a dedicated `zxbasm/` category dir;
+# detect by basename and switch invocation. zxbasm has no intermediate
+# stage-1 asm — the binary is the only emission to compare.
+MODE=zxbc
+case "$(basename "$CAT_DIR")" in
+    zxbasm) MODE=zxbasm ;;
+esac
+
 # ---- interpreters: pinned Python oracle + the built C binaries ----
 PY=/opt/homebrew/bin/python3.12
 [ -x "$PY" ] || { echo "ERROR: required interpreter $PY not present (no silent fallback to system python3)." >&2; exit 2; }
 ZXBC_C="$ROOT/csrc/build/zxbc/zxbc"
-[ -x "$ZXBC_C" ] || { echo "ERROR: C zxbc not built at $ZXBC_C — build it (cmake --build csrc/build --target zxbc) first." >&2; exit 2; }
+ZXBASM_C="$ROOT/csrc/build/zxbasm/zxbasm"
+if [ "$MODE" = "zxbc" ]; then
+    [ -x "$ZXBC_C" ] || { echo "ERROR: C zxbc not built at $ZXBC_C — build it (cmake --build csrc/build --target zxbc) first." >&2; exit 2; }
+else
+    [ -x "$ZXBASM_C" ] || { echo "ERROR: C zxbasm not built at $ZXBASM_C — build it (cmake --build csrc/build --target zxbasm) first." >&2; exit 2; }
+fi
 
 # ---- normalisation: strip the absolute project root from TEXT streams only ----
 # Two spellings of the root (symlink-resolved and as-walked) are both replaced.
@@ -99,6 +113,19 @@ sys.exit(entry_point() or 0)
 " )
 }
 
+# Run the Python zxbasm oracle from a scratch CWD with an explicit argv list.
+pyrun_asm() {
+    local cwd="$1"; shift
+    local argv="$1"
+    ( cd "$cwd" && "$PY" -c "
+import sys
+sys.path.insert(0, '$ROOT')
+from src.zxbasm import zxbasm as _m
+sys.argv = ['zxbasm'] + $argv
+sys.exit(_m.main() or 0)
+" )
+}
+
 SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/zxbc_probe_XXXXXX")
 [ -n "$SCRATCH" ] && [ -d "$SCRATCH" ] || { echo "ERROR: could not create scratch dir." >&2; exit 2; }
 cleanup() { rm -rf "$SCRATCH"; }
@@ -114,9 +141,105 @@ SKIP_PY=0
 
 echo "==================== CODEGEN PROBES :: $(basename "$CAT_DIR") ===================="
 echo "  oracle : $PY"
-echo "  c-port : $ZXBC_C"
+if [ "$MODE" = "zxbc" ]; then
+    echo "  c-port : $ZXBC_C"
+else
+    echo "  c-port : $ZXBASM_C"
+fi
 echo "  dir    : ${CAT_DIR#$ROOT/}"
 echo "  --------------------------------------------------------------"
+
+if [ "$MODE" = "zxbasm" ]; then
+    # ---- zxbasm probe loop: .asm inputs, no stage-1 intermediate ----
+    # Contract per fixture: exit code, normalised stderr, end-to-end binary.
+    # `--zxnext` is auto-added if filename starts with `zxnext_`, matching
+    # the existing run_zxbasm_tests.sh convention.
+    for asm in "$CAT_DIR"/*.asm; do
+        [ -e "$asm" ] || continue
+        stem=$(basename "$asm" .asm)
+        TOTAL=$((TOTAL + 1))
+
+        d="$SCRATCH/$stem"; mkdir -p "$d/py" "$d/cy"
+
+        extra_argv=""
+        case "$stem" in
+            zxnext_*) extra_argv="'--zxnext'," ;;
+        esac
+
+        py_bin="$d/py/out.bin"; py_err="$d/py/err"
+        cy_bin="$d/cy/out.bin"; cy_err="$d/cy/err"
+        py_rc=0; cy_rc=0
+
+        pyrun_asm "$d/py" "[${extra_argv}'-o','$py_bin','$asm']" >/dev/null 2>"$py_err" || py_rc=$?
+        if [ -n "$extra_argv" ]; then
+            ( cd "$d/cy" && "$ZXBASM_C" --zxnext -o "$cy_bin" "$asm" ) >/dev/null 2>"$cy_err" || cy_rc=$?
+        else
+            ( cd "$d/cy" && "$ZXBASM_C" -o "$cy_bin" "$asm" ) >/dev/null 2>"$cy_err" || cy_rc=$?
+        fi
+
+        if is_py_internal "$py_err"; then
+            SKIP_PY=$((SKIP_PY + 1))
+            echo "SKIP-PY-ERROR     $stem :: Python internal error"
+            rm -rf "$d"; continue
+        fi
+
+        # (1) exit code
+        if [ "$py_rc" -ne "$cy_rc" ]; then
+            D_EXIT=$((D_EXIT + 1))
+            echo "PROBE-DIFF-EXIT   $stem :: exit Py=$py_rc  C=$cy_rc"
+            echo "    Py stderr: $(norm_text <"$py_err" | grep -iE 'error|warning' | head -1 | cut -c1-110)"
+            echo "    C  stderr: $(norm_text <"$cy_err" | grep -iE 'error|warning' | head -1 | cut -c1-110)"
+            rm -rf "$d"; continue
+        fi
+
+        # (2) stderr (path-normalised)
+        norm_text <"$py_err" >"$d/py.en"
+        norm_text <"$cy_err" >"$d/cy.en"
+        if ! cmp -s "$d/py.en" "$d/cy.en"; then
+            D_STDERR=$((D_STDERR + 1))
+            echo "PROBE-DIFF-STDERR $stem :: exit match ($py_rc) but normalised stderr differs"
+            diff "$d/py.en" "$d/cy.en" | grep -E '^[<>]' | while IFS= read -r ln; do
+                case "$ln" in
+                    "<"*) echo "    P${ln#<}";;
+                    ">"*) echo "    C${ln#>}";;
+                esac
+            done
+            rm -rf "$d"; continue
+        fi
+
+        # (3) binary — RAW cmp; presence may legitimately differ on error.
+        py_has=0; [ -s "$py_bin" ] && py_has=1
+        cy_has=0; [ -s "$cy_bin" ] && cy_has=1
+        if [ "$py_has" -ne "$cy_has" ]; then
+            D_BIN=$((D_BIN + 1))
+            echo "PROBE-DIFF-BIN    $stem :: binary presence differs (Py bin=$py_has  C bin=$cy_has)"
+            rm -rf "$d"; continue
+        fi
+        if [ "$py_has" -eq 1 ] && ! cmp -s "$py_bin" "$cy_bin"; then
+            D_BIN=$((D_BIN + 1))
+            firstdiff=$(cmp "$py_bin" "$cy_bin" 2>&1 | head -1)
+            echo "PROBE-DIFF-BIN    $stem :: binary differs (Py $(wc -c <"$py_bin" | tr -d ' ')B vs C $(wc -c <"$cy_bin" | tr -d ' ')B) :: $firstdiff"
+            rm -rf "$d"; continue
+        fi
+
+        EQUAL=$((EQUAL + 1))
+        echo "PROBE-EQUAL       $stem"
+        rm -rf "$d"
+    done
+
+    cleanup; trap - EXIT INT TERM
+
+    echo "  --------------------------------------------------------------"
+    echo "  SUMMARY ($(basename "$CAT_DIR"))"
+    printf '    fixtures            %d\n' "$TOTAL"
+    printf '    PROBE-EQUAL         %d\n' "$EQUAL"
+    printf '    PROBE-DIFF-EXIT     %d\n' "$D_EXIT"
+    printf '    PROBE-DIFF-STDERR   %d\n' "$D_STDERR"
+    printf '    PROBE-DIFF-BIN      %d\n' "$D_BIN"
+    printf '    SKIP-PY-ERROR       %d\n' "$SKIP_PY"
+    echo "=============================================================="
+    exit 0
+fi
 
 for bas in "$CAT_DIR"/*.bas; do
     [ -e "$bas" ] || continue
