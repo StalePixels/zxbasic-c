@@ -3576,6 +3576,11 @@ static AstNode *parse_postfix(Parser *p, AstNode *left, bool expr_context) {
     return left;
 }
 
+/* Forward-decl: SHL/SHR operand casts (float/fixed LHS -> ulong, RHS -> ubyte).
+ * Defined alongside pd_binary; mirrors zxbparser.p_expr_shl_expr/shr. */
+static void shift_cast_operands(Parser *p, const char *op,
+                                AstNode **left, AstNode **right, int lineno);
+
 /* Continue parsing binary operators from a given left-hand side.
  * This is the infix portion of the Pratt parser, extracted so it can be
  * used both by parse_expression and by statement-level expression parsing
@@ -3596,8 +3601,12 @@ static AstNode *parse_infix(Parser *p, AstNode *left, Precedence min_prec) {
         if (!right) return left;
 
         /* Use semantic make_binary_node for type coercion, constant folding,
-         * CONSTEXPR wrapping, and string concatenation */
+         * CONSTEXPR wrapping, and string concatenation. Shift-specific
+         * operand casts (float/fixed LHS -> ulong, RHS -> ubyte) live in
+         * shift_cast_operands, mirroring zxbparser.p_expr_shl_expr/shr. */
         const char *op_name = operator_name(op_type);
+        shift_cast_operands(p, op_name, &left, &right, lineno);
+        if (!left || !right) return left;
         AstNode *result = make_binary_node(p->cs, op_name, left, right, lineno, NULL);
         if (!result) return left; /* error already reported */
         left = result;
@@ -8748,8 +8757,40 @@ static void pd_label_gate(PdCtx *c, AstNode *body, int prodno) {
  * NULL (a type error already reported) fall back to the LEFT operand — matching
  * the production parser's parse_infix `if (!result) return left;` (parser.c:
  * 3522), the byte-clean swap baseline the engine must equal. */
+/* Port of zxbparser.p_expr_shl_expr / p_expr_shr_expr
+ * (src/zxbc/zxbparser.py:2406-2421, 2424-2439): for SHL and SHR, a
+ * float-or-fixed LHS is cast to ulong and the RHS is ALWAYS cast to
+ * ubyte before building the BINARY node. Done at the parser layer so
+ * the IC stream never sees a non-existent shlf/shrf/shlf16/shrf16
+ * opcode (the _QUAD_TABLE has no such row). binary.py:131 deliberately
+ * skips the common-type cast for SHR/SHL, so make_binary_node must
+ * already see the corrected operands.
+ *
+ * Used by both the Pratt fast-path (parse_infix) and the production
+ * parser (pd_binary for cases 261/262). */
+static void shift_cast_operands(Parser *p, const char *op,
+                                AstNode **left, AstNode **right, int lineno) {
+    if (!(strcmp(op, "SHL") == 0 || strcmp(op, "SHR") == 0)) return;
+    SymbolTable *st = p->cs->symbol_table;
+    if (*left && (*left)->type_ && (*left)->type_->final_type) {
+        BasicType lbt = (*left)->type_->final_type->basic_type;
+        if (lbt == TYPE_float || lbt == TYPE_fixed) {
+            *left = make_typecast(p->cs,
+                                  st->basic_types[TYPE_ulong],
+                                  *left, lineno);
+        }
+    }
+    if (*right) {
+        *right = make_typecast(p->cs,
+                               st->basic_types[TYPE_ubyte],
+                               *right, lineno);
+    }
+}
+
 static AstNode *pd_binary(Parser *p, const char *op, AstNode *left,
                           AstNode *right, int lineno) {
+    shift_cast_operands(p, op, &left, &right, lineno);
+    if (!left || !right) return left;
     AstNode *result = make_binary_node(p->cs, op, left, right, lineno, NULL);
     if (!result) return left;  /* parse_infix recovery */
     return result;
