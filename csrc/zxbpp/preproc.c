@@ -55,6 +55,8 @@ void preproc_init(PreprocState *pp)
     pp->asm_filter_mode = false;
     pp->block_comment_level = 0;
     pp->builtins_registered = false;
+    pp->paren_any_err = false;
+    pp->paren_last_line_err = false;
     pp->err_file = stderr;
 }
 
@@ -1473,6 +1475,17 @@ static void handle_include(PreprocState *pp, const char *rest)
     char *saved_file = pp->current_file;
     int saved_line = pp->current_line;
 
+    /* Save parent's macrocall-args paren tracking and start the
+     * include with a fresh frame.  PLY's `p_include_file :
+     * include NEWLINE program _ENDFILE_` is its own sub-parse with
+     * an independent recovery state, so the inclusion mustn't be
+     * influenced by errors that happened in the outer file (and
+     * vice versa for whatever follows the include's `_ENDFILE_`). */
+    bool saved_paren_any_err = pp->paren_any_err;
+    bool saved_paren_last_line_err = pp->paren_last_line_err;
+    pp->paren_any_err = false;
+    pp->paren_last_line_err = false;
+
     pp->current_file = arena_strdup(&pp->arena, resolved);
     pp->current_line = 1;
     preproc_emit_line(pp, 1, pp->current_file);
@@ -1552,6 +1565,25 @@ static void handle_include(PreprocState *pp, const char *rest)
     strbuf_free(&inc_linebuf);
 
     free(content);
+
+    /* Port of PLY zxbpp's `p_include_file : include NEWLINE program
+     * _ENDFILE_` p_error trigger.  When this included sub-parse has
+     * had at least one macrocall-args paren-EOL error AND the file
+     * ended on a "settled" line (last processed line was NOT itself
+     * a paren-EOL error), PLY's _ENDFILE_ arrives while the parser
+     * is still in args-recovery from the original error and fires
+     * a second p_error => "Unexpected end of file" at the line
+     * immediately after the last content line of the included file. */
+    if (pp->paren_any_err && !pp->paren_last_line_err) {
+        preproc_error(pp, "Syntax error. Unexpected end of file");
+    }
+
+    /* Restore parent's paren tracking — note: the EOF error we just
+     * fired (if any) doesn't propagate into the outer file's
+     * recovery state; PLY's include sub-parse swallows the inner
+     * recovery on `_ENDFILE_` reduction. */
+    pp->paren_any_err = saved_paren_any_err;
+    pp->paren_last_line_err = saved_paren_last_line_err;
 
     /* Restore file state and emit parent's #line */
     pp->file_stack.len--;
@@ -1990,6 +2022,122 @@ static bool is_directive(const char *line)
     return *p == '#';
 }
 
+/* Port of zxbpp's `macrocall : macrocall args` + `args : LLP arglist RRP`
+ * grammar (src/zxbpp/zxbpp.py:805-814).  The PLY parser shifts into
+ * args-parsing whenever an ID is IMMEDIATELY followed by `(` (no
+ * SEPARATOR token between, since `t_INITIAL_SEPARATOR` is its own token
+ * and breaks adjacency).  Once inside args, every `(` increases nesting
+ * and every `)` decreases.  If a NEWLINE token arrives while nesting
+ * depth > 0, PLY's p_error (src/zxbpp/zxbpp.py:885-892) fires with
+ * type=="NEWLINE" => "Syntax error. Unexpected end of line".
+ *
+ * The C `expand_macros_in_text` does runtime macro-name lookup and just
+ * passes through undefined IDs and their following text — it never
+ * tracks paren balance, never detects the unclosed `(` — so we replicate
+ * PLY's lex/parse view here, pre-expansion, on the comment-stripped
+ * line text the parser would see.
+ *
+ * Lexer-state simplifications (consistent with zxbpplex.py INITIAL):
+ *  - `"..."` is t_STRING (zxbpplex.py:327, doubled `""` escapes a quote
+ *    inside the string); `(`/`)` inside a string are not LLP/RRP.
+ *  - `'`-comments and REM keyword have already been stripped by the
+ *    caller via strip_comment() before this function runs.
+ *  - All other `(` and `)` are LLP/RRP regardless of surrounding
+ *    text (the grammar's standalone `def : LLP` / `def : RRP`
+ *    productions mean bare parens are valid tokens; only the
+ *    adjacency `ID(` triggers args parsing).
+ *  - A trailing `_` (zxbpplex.py:128 t_INITIAL_CONTINUE `[\\_]\r?\n`)
+ *    is the line-continuation token CONTINUE, not NEWLINE — so a line
+ *    ending in `_` (with the `_` not part of an identifier) does NOT
+ *    fire the NEWLINE-in-args p_error: the parser swallows CONTINUE
+ *    via `def : CONTINUE` (zxbpp.py:794) and waits for the next
+ *    physical line's tokens.  This matters because the C include-path
+ *    line-splitter only honours `\` continuation (preproc.c
+ *    inc-loop comment, "no underscore in includes"), so an `_`-tail
+ *    SUB header reaches process_line as a standalone line; without
+ *    this guard the paren-balance check over-fires on those.
+ *
+ * Returns true if a paren-EOL error was detected on this line. */
+static bool line_macrocall_paren_unclosed(const char *line)
+{
+    /* CONTINUE-tail guard: if the line ends in `_` that's not part of
+     * an identifier (i.e. is preceded by start-of-line, whitespace, or
+     * a non-id-char), the trailing newline is a CONTINUE token, not
+     * a NEWLINE token, and PLY does not fire p_error.  Mirror that
+     * here regardless of paren-depth state. */
+    {
+        size_t n = strlen(line);
+        size_t tail = n;
+        while (tail > 0 && (line[tail-1] == ' ' || line[tail-1] == '\t' ||
+                            line[tail-1] == '\r' || line[tail-1] == '\n'))
+            tail--;
+        if (tail > 0 && line[tail-1] == '_') {
+            bool standalone = (tail == 1) || !is_id_char(line[tail-2]);
+            if (standalone) return false;
+        }
+    }
+
+    const char *p = line;
+    int depth = 0;          /* args nesting depth */
+    bool in_args = false;   /* are we inside an `ID ( ... )` args span */
+    bool in_str = false;
+
+    /* PLY-INITIAL_ID = r"[_a-zA-Z][_a-zA-Z0-9]*[$%]?". The trailing
+     * `$`/`%` sigil is part of the ID; an ID immediately followed by
+     * `(` enters args parsing. */
+    while (*p) {
+        char c = *p;
+        if (in_str) {
+            if (c == '"') {
+                /* Doubled "" is an escape inside the string body */
+                if (p[1] == '"') { p += 2; continue; }
+                in_str = false;
+                p++;
+                continue;
+            }
+            /* zxbpplex STRING regex disallows newline inside the
+             * string body (`[^"\n]|""`); a stray `\n` ends the string
+             * via lexer-error, not a normal closing.  For our purposes
+             * (joined-continuation lines may embed `\n`) reset in_str. */
+            if (c == '\n') { in_str = false; }
+            p++;
+            continue;
+        }
+        if (c == '"') { in_str = true; p++; continue; }
+
+        if (is_id_start(c)) {
+            /* Consume the ID (incl. optional trailing $ or %). */
+            const char *q = p + 1;
+            while (is_id_char(*q)) q++;
+            if (*q == '$' || *q == '%') q++;
+            /* Adjacent `(` => enters args parsing. */
+            if (*q == '(') {
+                in_args = true;
+                depth = 1;
+                p = q + 1;
+                continue;
+            }
+            p = q;
+            continue;
+        }
+
+        if (in_args) {
+            if (c == '(') {
+                depth++;
+            } else if (c == ')') {
+                depth--;
+                if (depth <= 0) {
+                    in_args = false;
+                    depth = 0;
+                }
+            }
+        }
+        p++;
+    }
+
+    return in_args && depth > 0;
+}
+
 /* Process a single line of input.
  *
  * The output model matches the Python PLY grammar:
@@ -2175,6 +2323,16 @@ static void process_line(PreprocState *pp, const char *line)
 
     if (is_directive(line)) {
         process_directive(pp, line);
+        /* A `#`-directive line is its own grammar production
+         * (zxbpp.py:302-313 — `program : include_file | line | init
+         * | undef | ifdef | require | pragma | errormsg | warningmsg`)
+         * — it isn't a `defs NEWLINE` continuation, so it doesn't
+         * stay in args-error recovery.  Treat it as a "settling"
+         * line for the purposes of the include-close _ENDFILE_
+         * trigger.  #include is special-cased: its own handler
+         * saves/restores the paren state across the sub-parse, so
+         * this reset is a no-op for that case. */
+        pp->paren_last_line_err = false;
         return;
     }
 
@@ -2315,6 +2473,29 @@ static void process_line(PreprocState *pp, const char *line)
             clean[j] = '\0';
             to_expand = clean;
         }
+    }
+
+    /* Port of PLY zxbpp's macrocall args paren-balance check — see
+     * line_macrocall_paren_unclosed() for the full rationale.  Fires
+     * pre-expansion (matching what PLY's lex/parse sees) on the
+     * comment-stripped, illegal-char-cleaned line text.  Mark frame
+     * state so the include-close handler can decide whether to emit
+     * the secondary "Unexpected end of file" error (PLY's
+     * `p_include_file : ... _ENDFILE_` recovery trigger). */
+    if (!pp->in_asm && line_macrocall_paren_unclosed(to_expand)) {
+        preproc_error(pp, "Syntax error. Unexpected end of line");
+        pp->paren_any_err = true;
+        pp->paren_last_line_err = true;
+    } else {
+        /* "Settling" criterion (best-effort PLY recovery mimic):
+         * a non-empty content line that reaches this emit path
+         * (i.e. survived comment-strip + illegal-char filter) clears
+         * the last-line-was-error flag, so a subsequent _ENDFILE_
+         * with paren_any_err=true triggers the EOF diagnostic.
+         * Empty / comment-only / directive lines never reach here
+         * (handled by earlier branches in process_line) and so
+         * correctly do NOT clear the flag. */
+        pp->paren_last_line_err = false;
     }
 
     /* Regular content line — expand macros and emit */

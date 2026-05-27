@@ -121,6 +121,23 @@ typedef struct PreprocState {
     /* Block comment nesting depth: /' increments, '/ decrements */
     int block_comment_level;
 
+    /* Per-include-frame paren-balance tracking, mirroring PLY zxbpp's
+     * macrocall args grammar (src/zxbpp/zxbpp.py:810-814) +
+     * p_error (src/zxbpp/zxbpp.py:885-892).  Any `ID(` opens an args
+     * parse; if NEWLINE arrives before the matching `)`, PLY emits
+     * "Syntax error. Unexpected end of line".  When such an error has
+     * fired inside an #included file AND the file ends on a CLEAN
+     * line (i.e. the error recovery successfully consumed at least
+     * one subsequent good line), the included grammar
+     * `p_include_file : include NEWLINE program _ENDFILE_` triggers
+     * a second p_error on `_ENDFILE_` => "Unexpected end of file".
+     * At top-level this second error does NOT fire (`start : program`
+     * has no terminator constraint).  Tracked per-include and pushed/
+     * popped via the file_stack save/restore in process_directive's
+     * #include handler. */
+    bool paren_any_err;          /* any paren-EOL err fired in this frame */
+    bool paren_last_line_err;    /* last processed line was a paren-EOL err */
+
     /* Builtins registered flag (per-instance, not static) */
     bool builtins_registered;
 
