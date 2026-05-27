@@ -570,6 +570,18 @@ int codegen_emit_ex(CompilerState *cs, AstNode *ast, bool semantic_only) {
             if (!e || e->u.id.class_ != CLASS_array ||
                 e->u.id.scope != SCOPE_global)
                 continue;
+            /* scope.values(filter_by_opt=True) (scope.py:63-66): at
+             * OPTIONS.optimization_level > 1, drop unaccessed entries.
+             * SYMBOL_TABLE.arrays (symboltable.py:797-802) uses the
+             * default filter_by_opt=True, so unaccessed arrays never
+             * reach data_ast at O>1 and VarTranslator.visit_ARRAYDECL
+             * never runs on them (no W150 emitted). Mirrors Python's
+             * default-O2 silent behaviour for `DIM a(1 TO 3)`. Scalars
+             * (VARDECL above) take a different path — vars_ filter is
+             * effectively bypassed (W150 fires for unused scalars at
+             * any O); verified empirically. */
+            if (cs->opts.optimization_level > 1 && !e->u.id.accessed)
+                continue;
             AstNode *adecl = codegen_find_arraydecl(cs->ast, e);
             if (adecl != NULL)
                 ast_add_child(cs, dast, adecl);
