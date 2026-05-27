@@ -1632,6 +1632,63 @@ static void handle_line_directive(PreprocState *pp, const char *rest)
 
 /* Handle: #pragma ...
  * Returns true if this was #pragma once (no text output needed). */
+static bool handle_pragma(PreprocState *pp, const char *rest);
+
+/* Returns true if `rest` (the text AFTER `#pragma`) matches one of PLY's
+ * pragma productions (zxbpp.py:607-638): PRAGMA ID, PRAGMA ID EQ ID/INT,
+ * PRAGMA ID EQ STRING, PRAGMA PUSH/POP LP ID RP, PRAGMA ONCE.  A malformed
+ * spelling (e.g. `#pragma push_namespace foo` — PRAGMA ID ID, no EQ, no
+ * push/pop parens) does NOT match any rule; PLY's parser leaves the
+ * tokens in place for the surrounding `program` grammar to consume, so
+ * the post-preproc text retains the original `#pragma X Y` verbatim and
+ * the asm lexer later flags `#` at non-column-1 as an illegal character. */
+static bool pragma_form_is_recognised(const char *rest)
+{
+    const char *p = skip_ws(rest);
+
+    /* `once` */
+    if (strnicmp_local(p, "once", 4) == 0 && !is_id_char(p[4])) {
+        const char *q = skip_ws(p + 4);
+        return *q == '\0' || *q == '\n' || *q == '\r';
+    }
+
+    /* push(...) / pop(...) */
+    if ((strnicmp_local(p, "push", 4) == 0 && p[4] == '(') ||
+        (strnicmp_local(p, "pop",  3) == 0 && p[3] == '(')) {
+        /* Trust the existing inner parse; treat as recognised. */
+        return true;
+    }
+
+    /* ID  or  ID = value */
+    int idlen = scan_id(p);
+    if (idlen == 0) return false;
+    const char *q = skip_ws(p + idlen);
+    if (*q == '\0' || *q == '\n' || *q == '\r') return true;  /* bare ID */
+    if (*q == '=') return true;                                /* ID = ... */
+    return false;                                              /* extra token */
+}
+
+/* Emit a malformed `#pragma X Y...` directive line VERBATIM (preserving
+ * leading whitespace), mirroring Python's behavior when PLY's pragma
+ * productions fail to match: the input text passes through into the
+ * preprocessed stream and the asm lexer later flags the non-column-1
+ * `#` as an illegal character. */
+static void emit_pragma_passthrough(PreprocState *pp, const char *directive)
+{
+    strbuf_append(&pp->output, directive);
+    if (directive[0] == '\0' || directive[strlen(directive) - 1] != '\n')
+        strbuf_append_char(&pp->output, '\n');
+}
+
+static bool handle_pragma2(PreprocState *pp, const char *rest, const char *directive)
+{
+    if (!pragma_form_is_recognised(rest)) {
+        emit_pragma_passthrough(pp, directive);
+        return false;
+    }
+    return handle_pragma(pp, rest);
+}
+
 static bool handle_pragma(PreprocState *pp, const char *rest)
 {
     const char *p = skip_ws(rest);
@@ -1890,7 +1947,7 @@ static void process_directive(PreprocState *pp, const char *directive)
             pp->has_output = true;
         }
     } else if (strnicmp_local(p, "pragma", (size_t)dlen) == 0 && dlen == 6) {
-        bool was_once = handle_pragma(pp, rest);
+        bool was_once = handle_pragma2(pp, rest, directive);
         if (was_once) {
             /* #pragma once produces blank line (like #undef) */
             strbuf_append_char(&pp->output, '\n');
@@ -2020,6 +2077,20 @@ static bool is_directive(const char *line)
 {
     const char *p = skip_ws(line);
     return *p == '#';
+}
+
+/* Mirrors the lex-rule split between zxbpplex (BASIC) and zxbasmpplex
+ * (ASM): BASIC's t_INITIAL_asm_sharp regex is `[ \t]*\#` so any leading
+ * whitespace is absorbed and `#` after spaces still triggers preproc
+ * mode; ASM's t_INIIAL_sharp regex is just `\#` and only fires when the
+ * `#` itself is at column 1 — a `#` preceded by whitespace lexes as a
+ * regular TOKEN and the line flows through to the asm body verbatim.
+ * Use this gate before calling `process_directive` from the in_asm path
+ * so `    #pragma X Y` reaches the assembler intact rather than being
+ * funnelled into the `#pragma`-handler and reformatted column-1. */
+static bool is_directive_asm(const char *line)
+{
+    return *line == '#';
 }
 
 /* Port of zxbpp's `macrocall : macrocall args` + `args : LLP arglist RRP`
@@ -2321,7 +2392,14 @@ static void process_line(PreprocState *pp, const char *line)
         }
     }
 
-    if (is_directive(line)) {
+    /* ASM mode is strictly column-1 for `#` (see is_directive_asm
+     * commentary): leading whitespace makes `#` a regular TOKEN that
+     * flows to the assembler as part of the line body. BASIC mode
+     * absorbs leading whitespace into the sharp-rule and accepts the
+     * directive. */
+    if ((pp->in_asm && !pp->asm_filter_mode)
+            ? is_directive_asm(line)
+            : is_directive(line)) {
         process_directive(pp, line);
         /* A `#`-directive line is its own grammar production
          * (zxbpp.py:302-313 — `program : include_file | line | init

@@ -22,6 +22,21 @@ typedef struct Parser {
     Token cur;       /* current token */
     Token peek_tok;  /* one-token lookahead */
     bool has_peek;
+    /* PLY error-recovery state (ply/yacc.py:79 `error_count = 3`). PLY
+     * uses an LALR state machine where after p_error fires, subsequent
+     * `errorcount > 0` triggers from inside error-recovery silently
+     * reset the counter without invoking errorfunc; only on the FIRST
+     * malformed token AFTER a fully-cleared recovery does p_error fire
+     * again. The exact shift-counting is state-machine-dependent and
+     * not portable to recursive descent without a parse table. We
+     * approximate the empirically-observed behaviour on the
+     * err_pragma_namespace_cascade probe: a `pragma X Y` line whose
+     * recovery does NOT declare a fresh label (no asm:ID reduce shifted
+     * a usable symbol) is followed by a SILENT error on the next line.
+     * `prev_err_no_decl` tracks that condition; when set, the next
+     * unexpected-token report is suppressed. */
+    bool prev_err_no_decl;
+    bool decl_since_err;
 } Parser;
 
 static void parser_init(Parser *p, AsmState *as, const char *input)
@@ -29,6 +44,8 @@ static void parser_init(Parser *p, AsmState *as, const char *input)
     p->as = as;
     lexer_init(&p->lex, as, input);
     p->has_peek = false;
+    p->prev_err_no_decl = false;
+    p->decl_since_err = false;
     p->cur = lexer_next(&p->lex);
 }
 
@@ -244,16 +261,34 @@ static const char *tok_display_value(const Token *tk, char *buf, size_t bufsz) {
  * ad-hoc "Expected expression"/"Syntax error"/"Unexpected token" sites
  * so the diagnostic text and the offending-token report match Python. */
 static void asm_unexpected(Parser *p) {
+    /* PLY error-recovery suppression (ply/yacc.py:79 `errorcount`).
+     *
+     * After p_error fires, PLY's state machine often ends up in a state
+     * where the next bad line's lookahead immediately re-errors with
+     * `errorcount > 0` (so p_error is NOT re-invoked — the offending
+     * token is silently discarded). Empirically on the
+     * err_pragma_namespace_cascade probe: a `pragma X Y` line whose
+     * recovery declares NO fresh label (no `asm : ID` reduce in PLY
+     * terms) leaves the parser in a state that silences the NEXT
+     * error if it also has no-decl recovery. Cleared by any
+     * mem_declare_label() during the previous statement. */
+    bool suppress = p->prev_err_no_decl && !p->decl_since_err;
+    p->prev_err_no_decl = true;
+    p->decl_since_err = false;
+    if (suppress) {
+        p->as->error_count++;       /* counted-but-silent */
+        return;
+    }
     if (p->cur.type == TOK_NEWLINE || p->cur.type == TOK_EOF) {
         asm_error(p->as, p->cur.lineno,
                   "Syntax error. Unexpected end of line [NEWLINE]");
-        return;
+    } else {
+        char nbuf[32], vbuf[32];
+        const char *val = tok_display_value(&p->cur, vbuf, sizeof vbuf);
+        const char *name = tok_ply_name(p->cur.type, p->cur.sval, nbuf, sizeof nbuf);
+        asm_error(p->as, p->cur.lineno,
+                  "Syntax error. Unexpected token '%s' [%s]", val, name);
     }
-    char nbuf[32], vbuf[32];
-    const char *val = tok_display_value(&p->cur, vbuf, sizeof vbuf);
-    const char *name = tok_ply_name(p->cur.type, p->cur.sval, nbuf, sizeof nbuf);
-    asm_error(p->as, p->cur.lineno,
-              "Syntax error. Unexpected token '%s' [%s]", val, name);
 }
 
 /* ----------------------------------------------------------------
@@ -713,12 +748,63 @@ static void parse_asm(Parser *p)
             parser_advance(p); /* consume EQU */
             Expr *val = parse_any_expr(p);
             mem_declare_label(p->as, name, lineno, val, false);
+            p->decl_since_err = true;
+            return;
+        }
+
+        /* PLY ID-then-ID: `asm : ID` cannot reduce (FOLLOW(asm) does not
+         * include ID) and no shift action exists for ID after ID; p_error
+         * fires on the SECOND token. Mimic that: advance past the first
+         * ID (PLY's shift before failing the reduce), then route the
+         * unexpected report onto the second. This also keeps the first
+         * ID out of the label table so later identical-shape lines do
+         * not trip a phantom "already defined" cascade. */
+        if (t.type == TOK_ID && next.type == TOK_ID) {
+            parser_advance(p);          /* shift the first ID */
+            asm_unexpected(p);          /* p_error on the second */
+            parser_advance(p);          /* discard the second ID */
+            /* PLY default error recovery on the asm grammar: after
+             * shifting the error symbol, PLY tries to reduce sub-rules
+             * in the now-recovered state. If the remaining tokens form
+             * `ID NEWLINE`, that ID reduces as `asm : ID` (label decl)
+             * with NEWLINE in FOLLOW(asm). The asmparse trace on the
+             * err_pragma_namespace_cascade probe confirms this: `foo`
+             * (the third ID of `#pragma push_namespace foo`) is
+             * declared as a label during recovery. Mirror that here so
+             * the subsequent line's error suppression model
+             * (asm_unexpected / decl_since_err) matches PLY. */
+            if (p->cur.type == TOK_ID) {
+                Token id = p->cur;
+                Token peek2 = parser_peek(p);
+                if (peek2.type == TOK_NEWLINE || peek2.type == TOK_EOF) {
+                    parser_advance(p);  /* shift the trailing ID */
+                    mem_declare_label(p->as, id.sval, id.lineno, NULL, false);
+                    p->decl_since_err = true;
+                }
+            }
+            /* Leave cur at NEWLINE / further tokens; parse_program's
+             * error-resync (error_count > err0 branch) will skip_to
+             * newline + advance, which is fine when only the line
+             * NEWLINE remains. Critically, do NOT advance past the
+             * newline here ourselves — if we do, parse_program's
+             * recovery will then skip the NEXT line's tokens (the
+             * lexer's "illegal character '#'" advances the lex
+             * cursor before our advance grabs it, so the post-
+             * newline cur is already inside the next line). */
             return;
         }
 
         if (next.type == TOK_COLON || next.type == TOK_NEWLINE ||
             next.type == TOK_EOF ||
-            /* Label followed by an instruction */
+            /* Label followed by an instruction.
+             *
+             * PLY equivalent: `asm : ID` reduces only when lookahead is in
+             * FOLLOW(asm) = {NEWLINE, CO, $end}. The "label + opcode on
+             * same line" arm is the COLON-less spelling that PLY accepts
+             * via `asms : asms CO asm` only when CO is shifted — but the
+             * recursive-descent port permits it without the CO if the
+             * follower is a recognised opcode/pseudo token. ID-ID is
+             * handled above. */
             (t.type == TOK_ID &&
              next.type != TOK_COMMA && next.type != TOK_LP &&
              next.type != TOK_LB && next.type != TOK_PLUS &&
@@ -738,6 +824,7 @@ static void parse_asm(Parser *p)
             if (t.type == TOK_ID || t.type == TOK_INTEGER) {
                 parser_advance(p);
                 mem_declare_label(p->as, name, lineno, NULL, false);
+                p->decl_since_err = true;
                 /* Optionally consume colon */
                 if (p->cur.type == TOK_COLON)
                     parser_advance(p);
