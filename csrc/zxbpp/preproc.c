@@ -2372,6 +2372,63 @@ static void process_line(PreprocState *pp, const char *line)
         return;
     }
 
+    /* ASM-mode catch-all (zxbasmpplex.py:360).
+     *
+     * Python rule t_line_..._INITIAL_..._ANY: r"." -> self.error(
+     *   "illegal preprocessor character '%s'" % t.value[0])
+     *
+     * In zxbasm INITIAL the accepted alphabet is: [_A-Za-z] (ID start),
+     * [0-9] (NUMBER/HEXA/BIN), the TOKEN class (see zxbasmpplex.py:118),
+     * ';' (COMMENT), '#' (sharp), '"' (STRING), '\n'/'\r' (NEWLINE),
+     * ' '/'\t' (SEPARATOR). The plain ASCII chars OUTSIDE that set are
+     * '@', '!', '?', '=' (and '\\', already handled above) — each emits
+     * one preprocessor-character error and is consumed without a token.
+     *
+     * Dedup: src/api/errmsg.py:30-34 caches identical messages, so a run
+     * like '@@@@@' reports once. We mirror that with a per-line seen[]
+     * mask, then splice the bad bytes out so good text keeps flowing. */
+    if (pp->in_asm) {
+        bool has_bad = false;
+        bool seen[256] = {0};
+        bool in_str = false;
+        for (const char *p = to_expand; *p; p++) {
+            unsigned char c = (unsigned char)*p;
+            if (c == '\n') { in_str = false; continue; }
+            if (in_str) {
+                if (c == '"') in_str = false;
+                continue;
+            }
+            if (c == '"') { in_str = true; continue; }
+            if (c == '@' || c == '!' || c == '?' || c == '=') {
+                has_bad = true;
+                if (!seen[c]) {
+                    seen[c] = true;
+                    preproc_error(pp, "illegal preprocessor character '%c'", c);
+                }
+            }
+        }
+        if (has_bad) {
+            size_t n = strlen(to_expand);
+            char *clean = arena_alloc(&pp->arena, n + 1);
+            size_t j = 0;
+            in_str = false;
+            for (const char *p = to_expand; *p; p++) {
+                char c = *p;
+                if (c == '\n') { in_str = false; clean[j++] = c; continue; }
+                if (in_str) {
+                    if (c == '"') in_str = false;
+                    clean[j++] = c;
+                    continue;
+                }
+                if (c == '"') { in_str = true; clean[j++] = c; continue; }
+                if (c == '@' || c == '!' || c == '?' || c == '=') continue;
+                clean[j++] = c;
+            }
+            clean[j] = '\0';
+            to_expand = clean;
+        }
+    }
+
     /* BASIC mode: scan for chars that trip the Python prepro INITIAL-state
      * catch-all in src/zxbpp/zxbpplex.py:399-401:
      *
