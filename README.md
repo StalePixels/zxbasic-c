@@ -6,7 +6,7 @@
 [![zxbpp tests](https://img.shields.io/badge/zxbpp_tests-96%2F96_passing-brightgreen)](#-phase-1--preprocessor-done)
 [![zxbasm tests](https://img.shields.io/badge/zxbasm_tests-61%2F61_passing-brightgreen)](#-phase-2--assembler-done)
 [![zxbc full pipeline](https://img.shields.io/badge/zxbc_full--O0--O3-byte--identical_to_Python-brightgreen)](#-phase-3--compiler-frontend-byte-identical)
-[![Codegen probes](https://img.shields.io/badge/probes-110_GREEN_0_RED-brightgreen)](#probe-enumeration-meter)
+[![Codegen probes](https://img.shields.io/badge/probes-111_GREEN_7_RED-yellow)](#probe-enumeration-meter)
 [![C unit tests](https://img.shields.io/badge/C_unit_tests-132_passing-blue)](#c-unit-test-suite)
 
 ZX BASIC — C Port 🚀
@@ -73,9 +73,11 @@ In addition to the inherited corpus, the C port has its own probe series —
 ~90 hand-authored fixtures (`csrc/tests/codegen_probes/`) that deliberately
 drive codepaths the inherited corpus is silent on. The probe runner compares
 the FULL contract per fixture (exit, stderr, Stage-1 ASM, end-to-end binary)
-against the Python oracle. **110 probes GREEN, 0 RED** across 9
+against the Python oracle. **111 probes GREEN, 7 RED** across 10
 categories (typecast, warnings, errors, arithmetic, strings, arrays, controlflow,
-switches, preprocessor). This is the enumeration-completeness check — corpus-pass
+switches, preprocessor, zxbasm). The 7 RED probes are stage-05 wave-1
+zxbasm error-path divergences — pending the zxbasm PLY parser port that
+will drive them GREEN. This is the enumeration-completeness check — corpus-pass
 alone doesn't prove the port has every Python check; the probe meter does.
 Every new oversight surfaced from real-world compilation gets a RED probe first,
 GREEN fix second.
