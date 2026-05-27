@@ -43,6 +43,9 @@ target_sources(test_ast PRIVATE
     ${CMAKE_SOURCE_DIR}/zxbc/errmsg.c
     ${CMAKE_SOURCE_DIR}/zxbc/pyfloat.c
 )
+if(UNIX)
+    target_link_libraries(test_ast m)
+endif()
 add_test(NAME ast_tests COMMAND test_ast)
 
 # test_symboltable — Symbol table operations (matches tests/api/test_symbolTable.py)
@@ -56,6 +59,9 @@ target_sources(test_symboltable PRIVATE
     ${CMAKE_SOURCE_DIR}/zxbc/errmsg.c
     ${CMAKE_SOURCE_DIR}/zxbc/pyfloat.c
 )
+if(UNIX)
+    target_link_libraries(test_symboltable m)
+endif()
 add_test(NAME symboltable_tests COMMAND test_symboltable)
 
 # test_check — api/check functions (matches tests/api/test_check.py)
@@ -69,6 +75,9 @@ target_sources(test_check PRIVATE
     ${CMAKE_SOURCE_DIR}/zxbc/errmsg.c
     ${CMAKE_SOURCE_DIR}/zxbc/pyfloat.c
 )
+if(UNIX)
+    target_link_libraries(test_check m)
+endif()
 add_test(NAME check_tests COMMAND test_check)
 
 # test_cmdline — value-verifying option parsing tests
