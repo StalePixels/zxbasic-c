@@ -1,14 +1,21 @@
-' RED probe — DIM <id>(bounds) without an `as <type>` clause must emit
-' [W100] for the array's implicit default-float type.
+' RED probe -- DIM <id>(bounds) without an `as <type>` clause emits
+' [W100] (already passes parse-only). Full-compile path must NOT emit
+' the spurious [W150] "Variable 'a' is never used" for an unused
+' array at the default optimization level (-O2).
 '
-' Python anchor: src/api/symboltable/symboltable.py:702 in declare_array:
-'     if type_.implicit:
-'         warning_implicit_type(lineno, id_, type_)
+' Python anchor: src/api/symboltable/scope.py:63-66 -- at
+' OPTIONS.optimization_level > 1, scope.values(filter_by_opt=True)
+' filters OUT unaccessed entries. zxbparser.py:550-551 uses this
+' filter when building data_ast from SYMBOL_TABLE.arrays, so an
+' unaccessed array is dropped from data_ast at O>1 and
+' var_translator.py:49-50 visit_ARRAYDECL never runs on it.
+' Empirical Python output at default (-O2): silent.
 '
-' C state: csrc/zxbc/parser.c dim_build_array (~:7106) doesn't call
-' warn_implicit_type at all — the W100 for DIM-array with no AS clause
-' is silently omitted.
+' C csrc/zxbc/var_translator.c:670-676 fires W150 for any unaccessed
+' ARRAYDECL it reaches; the data_ast construction does not apply the
+' O>1 filter, so visit_ARRAYDECL is reached and W150 fires.
 '
-' Affects corpus fixture strict7 (parse meter SM 12).
+' The probe-runner's full-compile asm-stage compare surfaces this
+' (parse-only does not invoke var_translator).
 
 DIM a(1 TO 3)
