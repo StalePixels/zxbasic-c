@@ -37,6 +37,13 @@ typedef struct Parser {
      * unexpected-token report is suppressed. */
     bool prev_err_no_decl;
     bool decl_since_err;
+    /* Per-statement: did the current parse_asm/statement make any
+     * mem_declare_label call? Reset at parse_program's statement-start;
+     * read at parse_program's statement-end to decide whether the next
+     * line's first asm_unexpected should be cascade-suppressed. This is
+     * distinct from `decl_since_err`, which tracks decls between asm_
+     * unexpected calls within a single line. */
+    bool stmt_had_decl;
 } Parser;
 
 static void parser_init(Parser *p, AsmState *as, const char *input)
@@ -46,6 +53,7 @@ static void parser_init(Parser *p, AsmState *as, const char *input)
     p->has_peek = false;
     p->prev_err_no_decl = false;
     p->decl_since_err = false;
+    p->stmt_had_decl = false;
     p->cur = lexer_next(&p->lex);
 }
 
@@ -272,8 +280,15 @@ static void asm_unexpected(Parser *p) {
      * terms) leaves the parser in a state that silences the NEXT
      * error if it also has no-decl recovery. Cleared by any
      * mem_declare_label() during the previous statement. */
-    bool suppress = p->prev_err_no_decl && !p->decl_since_err;
-    p->prev_err_no_decl = true;
+    /* Suppress only if the previous statement made no declaration AND
+     * the current statement (so far) also made none. A successful
+     * `asm : ID` reduce (mem_declare_label) on the prior statement means
+     * PLY's error-recovery `errorcount` was cleared by valid shifts, so
+     * the next error must re-fire. The intra-statement decl_since_err
+     * stays as before (used to keep the in-line "first error wins"
+     * behaviour); the cross-statement decision reads stmt_had_decl. */
+    bool suppress = p->prev_err_no_decl && !p->decl_since_err && !p->stmt_had_decl;
+    p->prev_err_no_decl = !p->stmt_had_decl;
     p->decl_since_err = false;
     if (suppress) {
         p->as->error_count++;       /* counted-but-silent */
@@ -766,7 +781,7 @@ static void parse_asm(Parser *p)
             parser_advance(p); /* consume EQU */
             Expr *val = parse_any_expr(p);
             mem_declare_label(p->as, name, lineno, val, false);
-            p->decl_since_err = true;
+            p->decl_since_err = true; p->stmt_had_decl = true;
             return;
         }
 
@@ -797,7 +812,7 @@ static void parse_asm(Parser *p)
                 if (peek2.type == TOK_NEWLINE || peek2.type == TOK_EOF) {
                     parser_advance(p);  /* shift the trailing ID */
                     mem_declare_label(p->as, id.sval, id.lineno, NULL, false);
-                    p->decl_since_err = true;
+                    p->decl_since_err = true; p->stmt_had_decl = true;
                 }
             }
             /* Leave cur at NEWLINE / further tokens; parse_program's
@@ -842,7 +857,7 @@ static void parse_asm(Parser *p)
             if (t.type == TOK_ID || t.type == TOK_INTEGER) {
                 parser_advance(p);
                 mem_declare_label(p->as, name, lineno, NULL, false);
-                p->decl_since_err = true;
+                p->decl_since_err = true; p->stmt_had_decl = true;
                 /* Optionally consume colon */
                 if (p->cur.type == TOK_COLON)
                     parser_advance(p);
@@ -1321,14 +1336,17 @@ static void parse_asm(Parser *p)
             } else if (p->cur.type == TOK_A && p->as->zxnext) {
                 parser_advance(p);
                 instr = make_instr(p, lineno, mnemonic_buf(p, "ADD HL,A"));
-            } else {
+            } else if (p->as->zxnext) {
                 Expr *val = parse_any_expr(p);
-                if (p->as->zxnext) {
-                    instr = make_instr_expr(p, lineno, "ADD HL,NN", val);
-                } else {
-                    asm_error(p->as, lineno, "Syntax error");
-                    parser_skip_to_newline(p); return;
-                }
+                instr = make_instr_expr(p, lineno, "ADD HL,NN", val);
+            } else {
+                /* Without --zxnext, `ADD HL,<non-reg16>` is a PLY-level
+                 * syntax error at the offending token (e.g. `ADD HL,A`
+                 * -> `'A' [A]`; `ADD HL,0201h` -> `'513' [INTEGER]`).
+                 * Use asm_unexpected so the report carries the PLY-shape
+                 * token render rather than a bare "Syntax error". */
+                asm_unexpected(p);
+                parser_skip_to_newline(p); return;
             }
         }
         else if (is_reg16i(p->cur.type)) {
@@ -2060,6 +2078,8 @@ static void parse_program(Parser *p)
          * loop (which produced the spurious cascade, e.g. `and :` ->
          * "Unexpected token 'A'"). */
         int err0 = p->as->error_count;
+        /* Reset per-statement decl flag; mem_declare_label sets it. */
+        p->stmt_had_decl = false;
         parse_asm(p);
 
         /* After an instruction, expect colon (more instructions), newline, or EOF */
