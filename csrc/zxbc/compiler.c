@@ -985,10 +985,38 @@ AstNode *make_typecast(CompilerState *cs, TypeInfo *new_type, AstNode *node, int
     }
 
     /* It's a number — perform static conversion */
-    /* If it was a named CONST, convert to NUMBER for folding */
+    /* If it was a named CONST, convert to NUMBER (typecast.py:84-86):
+     *   if check.is_const(node):
+     *       node = SymbolNUMBER(node.value, node.lineno, node.type_)
+     * Python REPLACES the CONST id reference with a freshly-built NUMBER
+     * before mutating value/type. The C had this as a comment-only no-op
+     * which left the original CONST id in place — the subsequent
+     * `node->type_ = new_type` at the tail then permanently mutates the
+     * SHARED symbol-table node's type. Any LATER reference to the same
+     * CONST id (e.g. `Foo(plane1)` after `Foo(plane1+baseframe)` widened
+     * the CONST to float for the binary common_type) reads the mutated
+     * type and emits the wider push (FIXED 5-byte for what should be a
+     * UBYTE 1-byte push). Mirror Python: extract the CONST's stored
+     * numeric value into a fresh NUMBER node carrying the CONST's
+     * original type, then fall through to the value/type mutation block
+     * — which now writes to the throwaway NUMBER, leaving the shared
+     * CONST id intact for other call sites. (NextBuild ScaleRotataSprite
+     * Δ+156: CONST plane1/plane2/plane3 used in both ubyte-param and
+     * float-arithmetic contexts.) */
     if (check_is_const(node)) {
-        /* Treat as number with same value */
-        /* For now, just update the type directly */
+        AstNode *dv = node->u.id.default_value_expr;
+        /* Resolve through CONSTEXPR/TYPECAST wrappers to the inner
+         * NUMBER (mirrors make_binary_node's CONST-value extraction). */
+        while (dv && dv->tag == AST_CONSTEXPR && dv->child_count > 0)
+            dv = dv->children[0];
+        while (dv && dv->tag == AST_TYPECAST && dv->child_count > 0)
+            dv = dv->children[0];
+        if (dv && dv->tag == AST_NUMBER) {
+            AstNode *fresh = ast_new(cs, AST_NUMBER, lineno);
+            fresh->u.number.value = dv->u.number.value;
+            fresh->type_ = node->type_; /* CONST id's current type */
+            node = fresh;
+        }
     }
 
     TypeInfo *bool_type = cs->symbol_table->basic_types[TYPE_boolean];
