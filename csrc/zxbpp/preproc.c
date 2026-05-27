@@ -2454,12 +2454,21 @@ static void process_line(PreprocState *pp, const char *line)
         }
     }
 
-    /* ASM mode is strictly column-1 for `#` (see is_directive_asm
-     * commentary): leading whitespace makes `#` a regular TOKEN that
-     * flows to the assembler as part of the line body. BASIC mode
-     * absorbs leading whitespace into the sharp-rule and accepts the
-     * directive. */
-    if ((pp->in_asm && !pp->asm_filter_mode)
+    /* First-pass (BASIC lexer, zxbpplex) — the sharp rule
+     * t_INITIAL_asm_sharp (zxbpplex.py:350-357) has regex `[ \t]*\#`
+     * with find_column(t)==1. Because the leading whitespace itself
+     * is part of the token's match (lexpos at start-of-line), the
+     * column-1 guard is satisfied and the directive fires — even
+     * inside the `asm` lexer-state, since the rule's name covers BOTH
+     * INITIAL and asm states. So an indented `#ifdef`/`#else`/`#endif`
+     * inside an inline `asm…end asm` block IS a directive in Python's
+     * first pass; treat it the same here, regardless of in_asm.
+     *
+     * Second-pass whole-file ASM re-filter (asm_filter_mode) drives
+     * the dedicated zxbasmpplex lexer, whose t_INIIAL_sharp regex is
+     * just `\#` — strictly column-1. Use is_directive_asm() only on
+     * that pass. */
+    if (pp->asm_filter_mode
             ? is_directive_asm(line)
             : is_directive(line)) {
         process_directive(pp, line);
