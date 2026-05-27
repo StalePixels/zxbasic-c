@@ -27,10 +27,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Test harness needs python3.12 to run the Python oracle side-by-side.
+      # Test harness needs python3.12 to run the Python oracle side-by-side
+      # (run_zxbpp_tests.sh, run_zxbasm_tests.sh — both Unix AND Windows).
       # Strict — falls over loudly if the interpreter is missing.
       - name: Set up Python 3.12
-        if: runner.os != 'Windows'
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
