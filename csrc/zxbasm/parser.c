@@ -51,6 +51,8 @@ static void parser_advance(Parser *p)
     }
 }
 
+static void asm_unexpected(Parser *p);
+
 static bool parser_match(Parser *p, TokenType type)
 {
     if (p->cur.type == type) {
@@ -66,14 +68,12 @@ static bool parser_expect(Parser *p, TokenType type)
         parser_advance(p);
         return true;
     }
-    if (p->cur.type != TOK_NEWLINE && p->cur.type != TOK_EOF) {
-        asm_error(p->as, p->cur.lineno,
-                  "Syntax error. Unexpected token '%s' [%d]",
-                  p->cur.sval ? p->cur.sval : "?", p->cur.type);
-    } else if (p->cur.type == TOK_NEWLINE) {
-        asm_error(p->as, p->cur.lineno,
-                  "Syntax error. Unexpected end of line [NEWLINE]");
-    }
+    /* Route through the centralised PLY p_error formatter so the
+     * unexpected-token report carries the source lexeme (Python's p.value)
+     * and the canonical PLY token NAME (e.g. '~' [BXOR], 'HL' [HL])
+     * instead of the C-side enum id. asm_unexpected handles both the
+     * NEWLINE/EOF branch and the normal token branch. */
+    asm_unexpected(p);
     return false;
 }
 
@@ -224,10 +224,16 @@ static const char *tok_display_value(const Token *tk, char *buf, size_t bufsz) {
     case TOK_STRING:
         return tk->sval ? tk->sval : "";
     default:
-        /* register / flag / instruction: the matched lexeme (Python's
-         * p.value); fall back to the uppercase name. */
-        if (tk->original_id) return tk->original_id;
+        /* register / flag / instruction / pseudo-op: Python's PLY ID lexer
+         * (src/zxbasm/asmlex.py:300-304) sets t.value = tmp.upper() for
+         * anything matching reserved_instructions/pseudo/regs/flags — so
+         * p.value in p_error is the UPPERCASE lexeme, not the source
+         * spelling. tok.sval is already uppercased for keywords (lexer.c
+         * t_INITIAL_ID port); tok.original_id is the verbatim source case
+         * (lower for `hl`, etc.). Prefer sval so `LD A, hl` reports
+         * 'HL' [HL] not 'hl' [HL]. */
         if (tk->sval) return tk->sval;
+        if (tk->original_id) return tk->original_id;
         return reg_name(tk->type);
     }
 }
@@ -1906,9 +1912,12 @@ static void parse_asm(Parser *p)
         return;
     }
 
-    /* If we get here, it's an error */
-    asm_error(p->as, lineno, "Syntax error. Unexpected token '%s' [%d]",
-              p->cur.sval ? p->cur.sval : "?", p->cur.type);
+    /* If we get here, it's an error — use the PLY-shape formatter so the
+     * report carries source lexeme + canonical PLY token NAME (Python's
+     * p.value / p.type). The non-printable / unknown-char path (e.g. '~'
+     * which lexes to TOK_BXOR) renders as '~' [BXOR] not '?' [14]. */
+    (void)lineno;
+    asm_unexpected(p);
     parser_skip_to_newline(p);
 }
 
