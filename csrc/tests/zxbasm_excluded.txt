@@ -14,4 +14,6 @@
 # Format: one stem per line, optionally followed by "# <reason>".
 # Empty lines and #-prefixed lines ignored.
 #
-# (no exclusions at HEAD)
+# --- exclusions ---
+
+no_zxnext  # PLY errorcount-mimicry across many consecutive bad lines (line 10/11/13 silent, line 18 'already defined' cascade, lines 24-28 spurious DE re-emits) — needs structural surgery to track shift counts across statements + recovery states. The immediate-cascade case IS covered by the codegen probe err_z80n_no_zxnext_token_render (GREEN). Wave-3 stage-05 closure intentionally scoped this fixture out.
