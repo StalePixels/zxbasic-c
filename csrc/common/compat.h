@@ -25,6 +25,7 @@
     #define strncasecmp  _strnicmp
     #define strcasecmp   _stricmp
     #define strdup       _strdup
+    #define strtok_r     strtok_s
     #define PATH_MAX     _MAX_PATH
 
     /* access() and R_OK */
