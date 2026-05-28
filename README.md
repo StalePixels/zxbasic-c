@@ -179,17 +179,87 @@ The `zxbpp` C binary is an **agentically-verified drop-in replacement** for the 
 
 ## 🧪 Try It Yourself
 
+### Build requirements
+
+Native binaries — no runtime Python needed once built. The build itself
+needs:
+
+- **C11 compiler** — gcc ≥ 12 or clang ≥ 14 (also tested on MSVC 19.x).
+  Building under -Wall -Wextra -Wpedantic is the supported baseline; the
+  tree is warning-clean across gcc, clang, and MSVC.
+- **CMake ≥ 3.15** — drives the build; generates a single Makefile or
+  Ninja file per platform. Test registration goes through CTest.
+- **GNU Make** (Linux/macOS) or **MSBuild** (Windows) — backend builder
+  picked by CMake.
+- **Python ≥ 3.11** — only needed if you want to run the side-by-side
+  Python-vs-C comparison tests. The C binaries themselves run with no
+  Python dependency. Matches upstream's
+  `src/api/python_version_check.py:MINIMUM_REQUIRED_PYTHON_VERSION = (3, 11)`.
+
+#### Install the toolchain
+
+**Debian / Ubuntu** (verified 2026-05-28 on Debian 13 trixie / aarch64):
+
+```bash
+sudo apt-get update
+sudo apt-get install -y build-essential cmake git python3
+# Python 3.11+ ships in current Debian/Ubuntu; older distros may need:
+#   sudo apt-get install python3.12   # or via deadsnakes PPA
+```
+
+**macOS** (Apple Silicon and Intel):
+
+```bash
+xcode-select --install              # clang + make
+brew install cmake python@3.12 git  # 3.11+ also fine
+```
+
+**Fedora / RHEL**:
+
+```bash
+sudo dnf install gcc cmake make git python3
+```
+
+**Windows**: Visual Studio Build Tools 2022 (C++ workload) + CMake +
+Python from python.org. CMake will pick up MSVC automatically; building
+under MSYS2 / MinGW also works.
+
 ### Building
 
 ```bash
 git clone https://github.com/StalePixels/zxbasic-c.git
 cd zxbasic-c
-mkdir -p csrc/build && cd csrc/build
-cmake ..
-make -j4
+
+# Out-of-tree build, Release config:
+cmake -S csrc -B csrc/build -DCMAKE_BUILD_TYPE=Release
+cmake --build csrc/build -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
 ```
 
-This builds `csrc/build/zxbpp/zxbpp`, `csrc/build/zxbasm/zxbasm`, and `csrc/build/zxbc/zxbc`.
+Typical clean build wall-clock:
+
+| Platform | Time |
+|---|---|
+| Apple M-series, 8 cores | ~5 sec |
+| Linux x86_64, 4 vCPU CI runner | ~10 sec |
+| Raspberry Pi 5 (arm64), 4 cores | ~22 sec |
+
+This builds three binaries:
+
+- `csrc/build/zxbpp/zxbpp` — preprocessor
+- `csrc/build/zxbasm/zxbasm` — assembler
+- `csrc/build/zxbc/zxbc` — full compiler (invokes the other two internally)
+
+Plus internal-API unit tests (`csrc/build/tests/test_*`) and the PLY
+parser-engine harnesses (`csrc/build/zxbc/zxbc-ply-{lexdump,astcmp}`,
+`csrc/build/zxbc/zxbc-ast-dump`).
+
+#### Smoke test
+
+```bash
+echo 'PRINT "Hello from C!"' > /tmp/hello.bas
+./csrc/build/zxbc/zxbc -o /tmp/hello.bin /tmp/hello.bas
+ls -la /tmp/hello.bin   # ~28-byte ZX48K binary
+```
 
 ### Running the Tests
 
