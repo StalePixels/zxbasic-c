@@ -10,6 +10,19 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# All executables (the multicall binary and the standalone tools, when
+# enabled) land under <build>/bin/ so the symlinks have a single target
+# directory and so test harnesses see a stable, layout-independent path.
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+
+# Standalone per-tool executables (zxbpp / zxbasm / zxbc as separate
+# binaries) are useful for debugging a single applet in isolation, but
+# the production layout ships the multicall binary plus three symlinks.
+# Opt-in: -DZXBASIC_BUILD_STANDALONE=ON. Default OFF.
+option(ZXBASIC_BUILD_STANDALONE
+       "Also build the three tools as separate standalone executables"
+       OFF)
+
 # Warning flags
 if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
     add_compile_options(-Wall -Wextra -Wpedantic -Wno-unused-parameter)

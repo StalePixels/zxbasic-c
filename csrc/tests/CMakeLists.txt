@@ -2,11 +2,14 @@
 
 # ---- Functional tests (existing) ----
 
-# zxbpp preprocessor tests
+# zxbpp preprocessor tests — invoked via the bin/ zxbpp entry, which is
+# the multicall zxbasic-suite binary under the applet name (symlink on
+# Unix, copy on Windows). The harness is name-agnostic; it just takes a
+# binary path as argv[1].
 add_test(
     NAME zxbpp_prepro_tests
     COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/run_zxbpp_tests.sh
-        $<TARGET_FILE:zxbpp>
+        $<TARGET_FILE_DIR:zxbasic-suite>/zxbpp$<$<BOOL:${WIN32}>:.exe>
         ${CMAKE_SOURCE_DIR}/../tests/functional/zxbpp
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/../tests/functional/zxbpp
 )

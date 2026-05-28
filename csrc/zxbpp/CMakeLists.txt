@@ -16,10 +16,11 @@ target_include_directories(zxbpp_lib PUBLIC
 
 target_link_libraries(zxbpp_lib PUBLIC zxbasic_common)
 
-# Standalone preprocessor binary
-add_executable(zxbpp
-    main.c
-)
-target_compile_definitions(zxbpp PRIVATE ZXBASIC_STANDALONE)
-
-target_link_libraries(zxbpp PRIVATE zxbpp_lib)
+# Standalone preprocessor binary — opt-in (-DZXBASIC_BUILD_STANDALONE=ON).
+# The production layout ships the multicall zxbasic-suite binary with a
+# zxbpp symlink; the standalone is for single-applet debugging.
+if(ZXBASIC_BUILD_STANDALONE)
+    add_executable(zxbpp main.c)
+    target_compile_definitions(zxbpp PRIVATE ZXBASIC_STANDALONE)
+    target_link_libraries(zxbpp PRIVATE zxbpp_lib)
+endif()

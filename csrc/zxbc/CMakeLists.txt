@@ -67,14 +67,17 @@ if(UNIX)
     target_link_libraries(zxbc_parser_lib PUBLIC m)
 endif()
 
-# Production zxbc binary — leftover sources after the lib extraction.
-add_executable(zxbc
-    main.c
-    args.c
-)
-target_compile_definitions(zxbc PRIVATE ZXBASIC_STANDALONE)
-
-target_link_libraries(zxbc PRIVATE zxbc_parser_lib)
+# Standalone zxbc binary — opt-in (-DZXBASIC_BUILD_STANDALONE=ON).
+# The production layout ships the multicall zxbasic-suite binary with a
+# zxbc symlink; the standalone is for single-applet debugging.
+if(ZXBASIC_BUILD_STANDALONE)
+    add_executable(zxbc
+        main.c
+        args.c
+    )
+    target_compile_definitions(zxbc PRIVATE ZXBASIC_STANDALONE)
+    target_link_libraries(zxbc PRIVATE zxbc_parser_lib)
+endif()
 
 # Phase A lexer-parity validation harness (not part of the production binary).
 # Drives the production lexer single-pass for byte-for-byte token-stream

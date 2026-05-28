@@ -42,10 +42,11 @@ if(UNIX)
     target_link_libraries(zxbasm_lib PUBLIC m)
 endif()
 
-# Standalone assembler binary — entry point only; links the lib.
-add_executable(zxbasm
-    main.c
-)
-target_compile_definitions(zxbasm PRIVATE ZXBASIC_STANDALONE)
-
-target_link_libraries(zxbasm PRIVATE zxbasm_lib)
+# Standalone assembler binary — opt-in (-DZXBASIC_BUILD_STANDALONE=ON).
+# The production layout ships the multicall zxbasic-suite binary with a
+# zxbasm symlink; the standalone is for single-applet debugging.
+if(ZXBASIC_BUILD_STANDALONE)
+    add_executable(zxbasm main.c)
+    target_compile_definitions(zxbasm PRIVATE ZXBASIC_STANDALONE)
+    target_link_libraries(zxbasm PRIVATE zxbasm_lib)
+endif()
