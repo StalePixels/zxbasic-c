@@ -183,3 +183,27 @@ bool get_executable_dir(const char *argv0, char *out, size_t out_size) {
     strcpy(out, real_exe);
     return true;
 }
+
+bool get_lib_include_root(const char *argv0, char *out, size_t out_size) {
+    const char *env = getenv("ZXBASIC_INC_PATH");
+    if (env && *env) {
+        if (strlen(env) + 1 > out_size) return false;
+        strcpy(out, env);
+        return true;
+    }
+
+    char exe_dir[PATH_MAX];
+    if (!get_executable_dir(argv0, exe_dir, sizeof(exe_dir)))
+        return false;
+
+    char raw[PATH_MAX * 2 + 32];
+    snprintf(raw, sizeof(raw), "%s/../../../src/lib", exe_dir);
+
+    char real[PATH_MAX];
+    if (!realpath(raw, real))
+        return false;
+    if (strlen(real) + 1 > out_size)
+        return false;
+    strcpy(out, real);
+    return true;
+}

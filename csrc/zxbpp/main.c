@@ -126,19 +126,19 @@ int zxbpp_main(int argc, char *argv[])
      * for the arch with no existence check — only per-file lookup skips
      * missing dirs, zxbpp.py:158-205). */
     {
-        char exe_dir[PATH_MAX];
-        /* Oversized: "%s/../../../src/lib/arch/%s/..." joins two PATH_MAX-class
-         * strings, so gcc's -Wformat-truncation fires on PATH_MAX dest. */
+        char lib_root[PATH_MAX];
+        /* Oversized: "%s/arch/%s/..." joins two PATH_MAX-class strings,
+         * so gcc's -Wformat-truncation fires on PATH_MAX dest. */
         char raw_path[PATH_MAX * 2 + 64];
         char real_path[PATH_MAX];
 
-        if (get_executable_dir(argv[0], exe_dir, sizeof(exe_dir))) {
+        if (get_lib_include_root(argv[0], lib_root, sizeof(lib_root))) {
             snprintf(raw_path, sizeof(raw_path),
-                     "%s/../../../src/lib/arch/%s/stdlib", exe_dir, arch);
+                     "%s/arch/%s/stdlib", lib_root, arch);
             if (realpath(raw_path, real_path))
                 vec_push(pp.include_paths, arena_strdup(&pp.arena, real_path));
             snprintf(raw_path, sizeof(raw_path),
-                     "%s/../../../src/lib/arch/%s/runtime", exe_dir, arch);
+                     "%s/arch/%s/runtime", lib_root, arch);
             if (realpath(raw_path, real_path))
                 vec_push(pp.include_paths, arena_strdup(&pp.arena, real_path));
         }

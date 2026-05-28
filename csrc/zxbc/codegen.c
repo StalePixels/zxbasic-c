@@ -750,19 +750,19 @@ int codegen_emit_ex(CompilerState *cs, AstNode *ast, bool semantic_only) {
      * platforms, so passing NULL is sound. */
     {
         const char *arch = cs->opts.architecture ? cs->opts.architecture : "zx48k";
-        char exe_dir[PATH_MAX];
+        char lib_root[PATH_MAX];
         /* raw_path oversized: joining two PATH_MAX-class strings via
-         * "%s/../../../src/lib/arch/%s/..." trips gcc's -Wformat-truncation. */
+         * "%s/arch/%s/..." trips gcc's -Wformat-truncation. */
         char raw_path[PATH_MAX * 2 + 64];
         char real_path[PATH_MAX];
 
-        if (get_executable_dir(NULL, exe_dir, sizeof(exe_dir))) {
+        if (get_lib_include_root(NULL, lib_root, sizeof(lib_root))) {
             snprintf(raw_path, sizeof(raw_path),
-                     "%s/../../../src/lib/arch/%s/stdlib", exe_dir, arch);
+                     "%s/arch/%s/stdlib", lib_root, arch);
             if (realpath(raw_path, real_path))
                 vec_push(ppf.include_paths, arena_strdup(&ppf.arena, real_path));
             snprintf(raw_path, sizeof(raw_path),
-                     "%s/../../../src/lib/arch/%s/runtime", exe_dir, arch);
+                     "%s/arch/%s/runtime", lib_root, arch);
             if (realpath(raw_path, real_path))
                 vec_push(ppf.include_paths, arena_strdup(&ppf.arena, real_path));
         }
