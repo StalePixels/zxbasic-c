@@ -31,8 +31,15 @@ zxbasic-c/
 ## Build
 
 ```bash
-cd csrc/build && cmake .. && make
+cmake -S csrc -B csrc/build -DCMAKE_BUILD_TYPE=Release
+cmake --build csrc/build -j8
 ```
+
+Produces `csrc/build/bin/zxbasic-suite` (the real binary) plus
+`zxbpp`/`zxbasm`/`zxbc` symlinks next to it that dispatch via argv[0].
+On Windows the symlinks are replaced with `.exe` copies (no symlink
+primitive). Opt-in `-DZXBASIC_BUILD_STANDALONE=ON` adds separate
+per-tool executables for single-applet debugging; not the default.
 
 ## Key Rules
 
@@ -82,7 +89,12 @@ These are vendored, permissively-licensed libraries chosen over hand-rolled impl
 - Structs use `typedef` (e.g., `typedef struct Foo { ... } Foo;`)
 - Arena allocation preferred over malloc/free for compiler data
 - State passed via struct pointer — no globals
-- Each component (zxbpp, zxbasm, zxbc) is a standalone executable with its own `main.c`
+- Each component (zxbpp, zxbasm, zxbc) has its own `main.c` exposing a
+  `<tool>_main(argc, argv)` entry point. In the production build these
+  are linked into the multicall `zxbasic-suite` binary which dispatches
+  via argv[0]; an opt-in `ZXBASIC_BUILD_STANDALONE` build re-adds a
+  thin `main()` wrapper around each `*_main` to produce separate
+  per-tool executables for single-applet debugging.
 
 ## Testing
 
@@ -116,11 +128,12 @@ Always validate against Python when adding features — don't trust assumptions.
 
 ```bash
 # Build and quick test:
-cd csrc/build && cmake .. && make -j4 && cd ../..
-./csrc/tests/run_zxbpp_tests.sh ./csrc/build/zxbpp/zxbpp tests/functional/zxbpp
+cmake -S csrc -B csrc/build -DCMAKE_BUILD_TYPE=Release
+cmake --build csrc/build -j4
+./csrc/tests/run_zxbpp_tests.sh ./csrc/build/bin/zxbpp tests/functional/zxbpp
 
 # Full Python comparison (slower, requires Python 3.11+):
-./csrc/tests/compare_python_c.sh ./csrc/build/zxbpp/zxbpp tests/functional/zxbpp
+./csrc/tests/compare_python_c.sh ./csrc/build/bin/zxbpp tests/functional/zxbpp
 ```
 
 ### Test File Conventions

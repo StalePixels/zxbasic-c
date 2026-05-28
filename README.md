@@ -243,23 +243,47 @@ Typical clean build wall-clock:
 | Linux x86_64, 4 vCPU CI runner | ~10 sec |
 | Raspberry Pi 5 (arm64), 4 cores | ~22 sec |
 
-This builds three binaries:
+This builds a single multicall binary plus three applet symlinks:
 
-- `csrc/build/zxbpp/zxbpp` — preprocessor
-- `csrc/build/zxbasm/zxbasm` — assembler
-- `csrc/build/zxbc/zxbc` — full compiler (invokes the other two internally)
+```
+csrc/build/bin/
+  zxbasic-suite        # the real binary
+  zxbpp     -> zxbasic-suite   # preprocessor
+  zxbasm    -> zxbasic-suite   # assembler
+  zxbc      -> zxbasic-suite   # full compiler (invokes the other two internally)
+```
 
-Plus internal-API unit tests (`csrc/build/tests/test_*`) and the PLY
-parser-engine harnesses (`csrc/build/zxbc/zxbc-ply-{lexdump,astcmp}`,
-`csrc/build/zxbc/zxbc-ast-dump`).
+Each applet symlink dispatches into the matching tool inside the suite
+based on argv[0]; the three names behave exactly as they would as
+separate executables. On Windows the symlinks are replaced with copies
+of the .exe under each applet name (same dispatch path).
+
+Plus internal-API unit tests (`csrc/build/bin/test_*`) and the PLY
+parser-engine harnesses (`csrc/build/bin/zxbc-ply-{lexdump,astcmp}`,
+`csrc/build/bin/zxbc-ast-dump`).
+
+The standalone per-tool executables remain as an opt-in for debugging
+a single applet in isolation:
+
+```bash
+cmake -S csrc -B csrc/build-standalone -DCMAKE_BUILD_TYPE=Release \
+      -DZXBASIC_BUILD_STANDALONE=ON
+cmake --build csrc/build-standalone
+```
 
 #### Smoke test
 
 ```bash
 echo 'PRINT "Hello from C!"' > /tmp/hello.bas
-./csrc/build/zxbc/zxbc -o /tmp/hello.bin /tmp/hello.bas
+./csrc/build/bin/zxbc -o /tmp/hello.bin /tmp/hello.bas
 ls -la /tmp/hello.bin   # ~28-byte ZX48K binary
 ```
+
+#### Installing
+
+`cmake --install csrc/build --prefix /usr/local` lays down the same
+shape under `${prefix}/bin` — one real binary, three applet symlinks
+(or `.exe` copies on Windows).
 
 ### Running the Tests
 
@@ -282,10 +306,10 @@ Individual harnesses can still be driven directly:
 
 ```bash
 # Preprocessor tests (91 success + 5 error):
-./csrc/tests/run_zxbpp_tests.sh ./csrc/build/zxbpp/zxbpp tests/functional/zxbpp
+./csrc/tests/run_zxbpp_tests.sh ./csrc/build/bin/zxbpp tests/functional/zxbpp
 
 # Assembler tests (60 success + 32 error, binary-exact):
-./csrc/tests/run_zxbasm_tests.sh ./csrc/build/zxbasm/zxbasm tests/functional/asm
+./csrc/tests/run_zxbasm_tests.sh ./csrc/build/bin/zxbasm tests/functional/asm
 
 # C unit tests via CTest:
 cd csrc/build && ctest --output-on-failure
@@ -302,8 +326,8 @@ Want to see for yourself that C matches Python? You'll need Python 3.11+:
 #   Fedora:  sudo dnf install python3
 
 # Run both Python and C on every test, diff the outputs:
-./csrc/tests/compare_python_c.sh ./csrc/build/zxbpp/zxbpp tests/functional/zxbpp
-./csrc/tests/compare_python_c_asm.sh ./csrc/build/zxbasm/zxbasm tests/functional/asm
+./csrc/tests/compare_python_c.sh ./csrc/build/bin/zxbpp tests/functional/zxbpp
+./csrc/tests/compare_python_c_asm.sh ./csrc/build/bin/zxbasm tests/functional/asm
 ```
 
 This runs the original Python tools and the C ports on all test inputs and
@@ -327,30 +351,30 @@ where the pinned Python crashes.
 echo 'PRINT "Hello from C!"' > hello.bas
 
 # Compile to a raw binary (the default output format, ORG $8000):
-./csrc/build/zxbc/zxbc -o hello.bin hello.bas
+./csrc/build/bin/zxbc -o hello.bin hello.bas
 
 # Compile to a .tap tape image with a BASIC loader and autorun:
-./csrc/build/zxbc/zxbc -f tap -B -a -o hello.tap hello.bas
+./csrc/build/bin/zxbc -f tap -B -a -o hello.tap hello.bas
 
 # Same for .tzx, .sna, .z80:
-./csrc/build/zxbc/zxbc -f tzx -B -a -o hello.tzx hello.bas
-./csrc/build/zxbc/zxbc -f sna -B -a -o hello.sna hello.bas
-./csrc/build/zxbc/zxbc -f z80 -B -a -o hello.z80 hello.bas
+./csrc/build/bin/zxbc -f tzx -B -a -o hello.tzx hello.bas
+./csrc/build/bin/zxbc -f sna -B -a -o hello.sna hello.bas
+./csrc/build/bin/zxbc -f z80 -B -a -o hello.z80 hello.bas
 
 # Generate the Stage-1 assembly only (useful for inspection):
-./csrc/build/zxbc/zxbc -f asm -o hello.asm hello.bas
+./csrc/build/bin/zxbc -f asm -o hello.asm hello.bas
 
 # Different optimization levels — all four produce Python-identical bytes:
-./csrc/build/zxbc/zxbc -O3 -o hello-O3.bin hello.bas
+./csrc/build/bin/zxbc -O3 -o hello-O3.bin hello.bas
 
 # Pick a target architecture (default zx48k; zxnext enables Z80N opcodes):
-./csrc/build/zxbc/zxbc --arch=zxnext -o hello.bin hello.bas
+./csrc/build/bin/zxbc --arch=zxnext -o hello.bin hello.bas
 
 # Add extra include search paths (multiple -I accepted):
-./csrc/build/zxbc/zxbc -I lib/ -I shared/ -o myapp.bin myapp.bas
+./csrc/build/bin/zxbc -I lib/ -I shared/ -o myapp.bin myapp.bas
 
 # Parse-only (semantic validation without code emission, for editors/CI):
-./csrc/build/zxbc/zxbc --parse-only myfile.bas
+./csrc/build/bin/zxbc --parse-only myfile.bas
 ```
 
 **Same flag surface as Python `zxbc` — every flag in the upstream CLI is
@@ -370,7 +394,7 @@ behaviors. Common ones: `-o`, `-O0`/`-O1`/`-O2`/`-O3`, `-f`/`--output-format`
 python3 zxbpp.py myfile.bas -o myfile.preprocessed.bas
 
 # Use:
-./csrc/build/zxbpp/zxbpp myfile.bas -o myfile.preprocessed.bas
+./csrc/build/bin/zxbpp myfile.bas -o myfile.preprocessed.bas
 ```
 
 **Same flag surface as Python `zxbpp` — all upstream flags accepted.** 96/96
@@ -382,7 +406,7 @@ stringizing, ASM-mode blocks, `#pragma` / `#require` / `#init` / `#error` /
 ### Assembler (`zxbasm`) — drop-in for Python's assembly stage
 
 ```bash
-./csrc/build/zxbasm/zxbasm myfile.asm -o myfile.bin
+./csrc/build/bin/zxbasm myfile.asm -o myfile.bin
 ```
 
 **Same flag surface as Python `zxbasm` — all upstream flags accepted.** 61/61
@@ -405,7 +429,7 @@ sys.exit(main(['-O2', '-f', 'tap', '-B', '-a', '-o', 'py.tap', 'hello.bas']) or 
 "
 
 # C:
-./csrc/build/zxbc/zxbc -O2 -f tap -B -a -o c.tap hello.bas
+./csrc/build/bin/zxbc -O2 -f tap -B -a -o c.tap hello.bas
 
 # Byte-compare:
 cmp py.tap c.tap && echo "✅ byte-identical"
@@ -429,12 +453,12 @@ or `zxbc` will run the full pipeline in-process:
 
 ```bash
 # Explicit chain (preprocess → compile-to-asm → assemble):
-./csrc/build/zxbpp/zxbpp myfile.bas -o myfile.pre.bas
-./csrc/build/zxbc/zxbc -f asm -o myfile.asm myfile.pre.bas
-./csrc/build/zxbasm/zxbasm myfile.asm -o myfile.bin
+./csrc/build/bin/zxbpp myfile.bas -o myfile.pre.bas
+./csrc/build/bin/zxbc -f asm -o myfile.asm myfile.pre.bas
+./csrc/build/bin/zxbasm myfile.asm -o myfile.bin
 
 # Or one shot (zxbc invokes both internally):
-./csrc/build/zxbc/zxbc -f bin -o myfile.bin myfile.bas
+./csrc/build/bin/zxbc -f bin -o myfile.bin myfile.bas
 ```
 
 Native C binaries — no Python dependency, suitable for embedding in CI, build
