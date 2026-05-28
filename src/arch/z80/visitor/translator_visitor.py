@@ -17,7 +17,7 @@ from src.api.exception import InvalidCONSTexpr, InvalidOperatorError
 from src.arch.z80 import backend
 from src.arch.z80.backend.runtime import LABEL_REQUIRED_MODULES, RUNTIME_LABELS
 from src.arch.z80.backend.runtime import Labels as RuntimeLabel
-from src.ast.tree import ChildrenList
+from src.ast_.tree import ChildrenList
 from src.symbols import sym as symbols
 from src.symbols.symbol_ import Symbol
 from src.symbols.type_ import Type
@@ -97,11 +97,17 @@ class TranslatorVisitor(TranslatorInstVisitor):
     def visit_BLOCK(self, node):
         __DEBUG__("BLOCK", 2)
         for child in node.children:
-            yield child
+            yield self.visit(child)
+
+    def visit_TYPECAST(self, node):
+        yield self.visit(node.operand)
+        assert node.operand.type_.is_basic
+        assert node.type_.is_basic
+        self.ic_cast(node.t, node.operand.type_, node.type_, node.operand.t)
 
     # Visits any temporal attribute
     def visit_ATTR_TMP(self, node):
-        yield node.children[0]
+        yield self.visit(node.children[0])
         self.ic_fparam(node.children[0].type_, node.children[0].t)
 
         label = {
@@ -122,8 +128,11 @@ class TranslatorVisitor(TranslatorInstVisitor):
         if label in LABEL_REQUIRED_MODULES:
             backend.REQUIRES.add(LABEL_REQUIRED_MODULES[label])
 
-    # This function must be called before emit_strings
     def emit_data_blocks(self):
+        """Emits the DATA instruction blocks used by READ.
+        This function must be called before emit_strings() because it will emit access to string variables,
+        marking them as required.
+        """
         if not gl.DATA_IS_USED or not gl.DATAS:
             return  # nothing to do
 
@@ -248,10 +257,12 @@ class TranslatorVisitor(TranslatorInstVisitor):
         raise InvalidCONSTexpr(node)
 
     @staticmethod
-    def check_attr(node, n):
+    def check_attr(node: Symbol, n: int) -> Symbol | None:
         """Check if ATTR has to be normalized
         after this instruction has been translated
         to intermediate code.
         """
         if len(node.children) > n:
             return node.children[n]
+
+        return None
