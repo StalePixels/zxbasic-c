@@ -38,7 +38,9 @@
     (v).data[(v).len++] = (item); \
 } while(0)
 
-#define vec_pop(v) ((v).data[--(v).len])
+/* Statement-form pop: discards the value (all current call sites do).
+ * Use vec_last(v) before vec_pop(v) if you need the value. */
+#define vec_pop(v) do { --(v).len; } while(0)
 
 #define vec_last(v) ((v).data[(v).len - 1])
 

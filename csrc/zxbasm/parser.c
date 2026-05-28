@@ -1185,7 +1185,8 @@ static void parse_asm(Parser *p)
                         "Stack underflow. No more Namespaces to pop. Current namespace is %s",
                         m->namespace_);
                 } else {
-                    m->namespace_ = vec_pop(m->namespace_stack);
+                    m->namespace_ = vec_last(m->namespace_stack);
+                    vec_pop(m->namespace_stack);
                 }
             }
             return;
