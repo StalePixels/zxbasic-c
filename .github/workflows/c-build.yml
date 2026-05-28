@@ -46,26 +46,45 @@ jobs:
         if: runner.os == 'Windows'
         run: cmake --build csrc/build --config Release -j $env:NUMBER_OF_PROCESSORS
 
+      # Production layout sanity — the multicall binary and its three
+      # applet entries (zxbpp / zxbasm / zxbc) must be present under
+      # bin/ and runnable. Tests below invoke via these names, proving
+      # the shipping path, not a side-built standalone.
+      - name: Verify multicall layout (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          test -x csrc/build/bin/zxbasic-suite
+          test -L csrc/build/bin/zxbpp
+          test -L csrc/build/bin/zxbasm
+          test -L csrc/build/bin/zxbc
+          ./csrc/build/bin/zxbpp --help >/dev/null
+          ./csrc/build/bin/zxbasm --help >/dev/null
+          ./csrc/build/bin/zxbasic-suite zxbpp --help >/dev/null
+
+      - name: Verify multicall layout (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          test -x csrc/build/bin/Release/zxbasic-suite.exe
+          test -f csrc/build/bin/Release/zxbpp.exe
+          test -f csrc/build/bin/Release/zxbasm.exe
+          test -f csrc/build/bin/Release/zxbc.exe
+
       - name: Run zxbpp tests (Unix)
         if: runner.os != 'Windows'
-        run: ./csrc/tests/run_zxbpp_tests.sh ./csrc/build/zxbpp/zxbpp tests/functional/zxbpp
+        run: ./csrc/tests/run_zxbpp_tests.sh ./csrc/build/bin/zxbpp tests/functional/zxbpp
 
       - name: Run zxbasm tests (Unix)
         if: runner.os != 'Windows'
-        run: ./csrc/tests/run_zxbasm_tests.sh ./csrc/build/zxbasm/zxbasm tests/functional/asm
+        run: ./csrc/tests/run_zxbasm_tests.sh ./csrc/build/bin/zxbasm tests/functional/asm
 
+      # Unit tests now share bin/ with the production tools (single
+      # runtime output dir). ctest is the canonical runner; this step
+      # invokes it directly so failures are wired into the workflow's
+      # exit code rather than aggregated into a separate target.
       - name: Run unit tests (Unix)
         if: runner.os != 'Windows'
-        run: |
-          cd csrc/build
-          ./tests/test_utils
-          ./tests/test_config
-          ./tests/test_types
-          ./tests/test_ast
-          ./tests/test_symboltable
-          ./tests/test_check
-          cd ../..
-          ./csrc/build/tests/test_cmdline
+        run: cd csrc/build && ctest --output-on-failure
 
       # Note: csrc/tests/run_cmdline_tests.sh was deleted in Round 0
       # (Sprint 11) as a fuzzy harness. The 15 value-verifying cmdline
@@ -77,49 +96,41 @@ jobs:
       - name: Run zxbasm tests (Windows)
         if: runner.os == 'Windows'
         shell: bash
-        run: ./csrc/tests/run_zxbasm_tests.sh ./csrc/build/zxbasm/Release/zxbasm.exe tests/functional/asm
+        run: ./csrc/tests/run_zxbasm_tests.sh ./csrc/build/bin/Release/zxbasm.exe tests/functional/asm
 
       - name: Run unit tests (Windows)
         if: runner.os == 'Windows'
         shell: bash
+        run: cd csrc/build && ctest -C Release --output-on-failure
+
+      # Ship the multicall binary as the release artifact. On Unix we
+      # also include the three applet symlinks; tar preserves them.
+      # On Windows the .exe is shipped under each applet name directly
+      # (no symlink primitive — see csrc/multicall/CMakeLists.txt).
+      - name: Stage release tree (Unix)
+        if: runner.os != 'Windows'
         run: |
-          cd csrc/build
-          ./tests/Release/test_utils.exe
-          ./tests/Release/test_config.exe
-          ./tests/Release/test_types.exe
-          ./tests/Release/test_ast.exe
-          ./tests/Release/test_symboltable.exe
-          ./tests/Release/test_check.exe
-          cd ../..
-          ./csrc/build/tests/Release/test_cmdline.exe
+          mkdir -p artifact/bin
+          cp -a csrc/build/bin/zxbasic-suite artifact/bin/
+          cp -a csrc/build/bin/zxbpp artifact/bin/
+          cp -a csrc/build/bin/zxbasm artifact/bin/
+          cp -a csrc/build/bin/zxbc artifact/bin/
 
-      - name: Upload zxbpp binary (Unix)
-        if: runner.os != 'Windows'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact }}-zxbpp
-          path: csrc/build/zxbpp/zxbpp
-
-      - name: Upload zxbasm binary (Unix)
-        if: runner.os != 'Windows'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact }}-zxbasm
-          path: csrc/build/zxbasm/zxbasm
-
-      - name: Upload zxbpp binary (Windows)
+      - name: Stage release tree (Windows)
         if: runner.os == 'Windows'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact }}-zxbpp
-          path: csrc/build/zxbpp/Release/zxbpp.exe
+        shell: bash
+        run: |
+          mkdir -p artifact/bin
+          cp csrc/build/bin/Release/zxbasic-suite.exe artifact/bin/
+          cp csrc/build/bin/Release/zxbpp.exe artifact/bin/
+          cp csrc/build/bin/Release/zxbasm.exe artifact/bin/
+          cp csrc/build/bin/Release/zxbc.exe artifact/bin/
 
-      - name: Upload zxbasm binary (Windows)
-        if: runner.os == 'Windows'
+      - name: Upload zxbasic-suite (multicall + applets)
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}-zxbasm
-          path: csrc/build/zxbasm/Release/zxbasm.exe
+          name: ${{ matrix.artifact }}-zxbasic-suite
+          path: artifact/bin
 
   # Compare against Python ground truth (single platform is sufficient)
   python-comparison:
@@ -142,10 +153,10 @@ jobs:
           cmake --build csrc/build -j$(nproc)
 
       - name: Compare Python vs C output (zxbpp)
-        run: ./csrc/tests/compare_python_c.sh ./csrc/build/zxbpp/zxbpp tests/functional/zxbpp
+        run: ./csrc/tests/compare_python_c.sh ./csrc/build/bin/zxbpp tests/functional/zxbpp
 
       - name: Compare Python vs C output (zxbasm)
-        run: ./csrc/tests/compare_python_c_asm.sh ./csrc/build/zxbasm/zxbasm tests/functional/asm
+        run: ./csrc/tests/compare_python_c_asm.sh ./csrc/build/bin/zxbasm tests/functional/asm
 
   # Create release binaries when a tag is pushed
   release:
@@ -166,8 +177,10 @@ jobs:
           cd artifacts
           for dir in */; do
             name="${dir%/}"
-            chmod +x "$dir/zxbpp"
-            tar czf "${name}.tar.gz" -C "$dir" zxbpp
+            # Each artefact dir contains the multicall binary plus the
+            # three applet entries (symlinks on Unix, copies on Windows).
+            # tar preserves symlinks; --dereference would explode them.
+            tar czf "${name}.tar.gz" -C "$dir" .
           done
 
       - name: Create GitHub Release
