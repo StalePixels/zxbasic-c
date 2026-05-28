@@ -1,2 +1,0 @@
-/usr/bin/ar qc libzxbasm_lib.a CMakeFiles/zxbasm_lib.dir/asm_core.c.o CMakeFiles/zxbasm_lib.dir/asm_instr.c.o CMakeFiles/zxbasm_lib.dir/basic.c.o CMakeFiles/zxbasm_lib.dir/expr.c.o CMakeFiles/zxbasm_lib.dir/gensnapshot.c.o CMakeFiles/zxbasm_lib.dir/lexer.c.o CMakeFiles/zxbasm_lib.dir/memory.c.o CMakeFiles/zxbasm_lib.dir/outfmt_sna.c.o CMakeFiles/zxbasm_lib.dir/outfmt_tap.c.o CMakeFiles/zxbasm_lib.dir/outfmt_tzx.c.o CMakeFiles/zxbasm_lib.dir/outfmt_z80.c.o CMakeFiles/zxbasm_lib.dir/parser.c.o CMakeFiles/zxbasm_lib.dir/z80_opcodes.c.o
-/usr/bin/ranlib libzxbasm_lib.a

@@ -1,2 +1,0 @@
-/usr/bin/ar qc libzxbasic_common.a CMakeFiles/zxbasic_common.dir/arena.c.o CMakeFiles/zxbasic_common.dir/strbuf.c.o CMakeFiles/zxbasic_common.dir/hashmap.c.o CMakeFiles/zxbasic_common.dir/ya_getopt.c.o CMakeFiles/zxbasic_common.dir/cwalk.c.o CMakeFiles/zxbasic_common.dir/utils.c.o CMakeFiles/zxbasic_common.dir/config_file.c.o
-/usr/bin/ranlib libzxbasic_common.a

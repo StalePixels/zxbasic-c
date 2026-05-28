@@ -16,6 +16,7 @@ scratch/
 .coverage
 htmlcov/
 build/
+build-*/
 venv/
 .pypi-token
 .coverage.*
