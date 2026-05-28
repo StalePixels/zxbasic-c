@@ -1,0 +1,2 @@
+/usr/bin/ar qc libzxbpp_lib.a CMakeFiles/zxbpp_lib.dir/preproc.c.o
+/usr/bin/ranlib libzxbpp_lib.a

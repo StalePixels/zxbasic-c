@@ -238,9 +238,9 @@ static void basic_immediate_float(double x, char *C, char *ED, char *LH)
 
     /* C = "0"+bin2hex(E)+"h"; ED = "0"+b2h(M[8:16])+b2h(M[:8])+"h";
      * LH = "0"+b2h(M[24:])+b2h(M[16:24])+"h" */
-    snprintf(C,  8,  "0%sh", he);
-    snprintf(ED, 8,  "0%s%sh", hm0, hm1);
-    snprintf(LH, 8,  "0%s%sh", hm2, hm3);
+    snprintf(C,  16, "0%sh", he);
+    snprintf(ED, 16, "0%s%sh", hm0, hm1);
+    snprintf(LH, 16, "0%s%sh", hm2, hm3);
 }
 
 /* int(hexstr[:2], 16) helper — parse a 2-char (or fewer) hex substring. */
@@ -352,7 +352,7 @@ static void basic_number(double number, ByteBuf *out)
         }
         bb_push(out, 14); /* + [14] */
 
-        char C[8], ED[8], LH[8];
+        char C[16], ED[16], LH[16];
         basic_immediate_float(number, C, ED, LH);
         /* C = C[:2]; ED = ED[:4]; LH = LH[:4]  (strip leading '0' & 'h')
          * Python: C/ED/LH are like "0AAh"/"0AABBh"/"0CCDDh".

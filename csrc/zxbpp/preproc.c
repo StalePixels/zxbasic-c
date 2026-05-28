@@ -355,7 +355,9 @@ static char *read_file(const char *path)
 
 static char *resolve_include(PreprocState *pp, const char *name, bool is_system)
 {
-    char path[PATH_MAX];
+    /* Oversized so gcc's -Wformat-truncation doesn't fire when joining two
+     * PATH_MAX-class inputs with "%s/%s"; access() validates the result. */
+    char path[PATH_MAX * 2 + 32];
 
     /* For local includes ("file"), try current file's directory first */
     if (!is_system && pp->current_file) {
@@ -1383,12 +1385,12 @@ static void handle_include(PreprocState *pp, const char *rest)
             const char *arch_pos = strstr(ipath, default_arch);
             if (arch_pos) {
                 /* Build path with substituted arch */
-                char arch_ipath[PATH_MAX];
+                char arch_ipath[PATH_MAX * 2 + 32];
                 int prefix_len = (int)(arch_pos - ipath);
                 snprintf(arch_ipath, sizeof(arch_ipath), "%.*s%s%s",
                         prefix_len, ipath, arch_value,
                         arch_pos + strlen(default_arch));
-                char trypath[PATH_MAX];
+                char trypath[PATH_MAX * 3 + 64];
                 snprintf(trypath, sizeof(trypath), "%s/%s", arch_ipath, fn);
                 if (access(trypath, R_OK) == 0) {
                     const char *norm = trypath;

@@ -127,7 +127,9 @@ int main(int argc, char *argv[])
      * missing dirs, zxbpp.py:158-205). */
     {
         char exe_dir[PATH_MAX];
-        char raw_path[PATH_MAX];
+        /* Oversized: "%s/../../../src/lib/arch/%s/..." joins two PATH_MAX-class
+         * strings, so gcc's -Wformat-truncation fires on PATH_MAX dest. */
+        char raw_path[PATH_MAX * 2 + 64];
         char real_path[PATH_MAX];
 
         if (get_executable_dir(argv[0], exe_dir, sizeof(exe_dir))) {

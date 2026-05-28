@@ -751,7 +751,9 @@ int codegen_emit_ex(CompilerState *cs, AstNode *ast, bool semantic_only) {
     {
         const char *arch = cs->opts.architecture ? cs->opts.architecture : "zx48k";
         char exe_dir[PATH_MAX];
-        char raw_path[PATH_MAX];
+        /* raw_path oversized: joining two PATH_MAX-class strings via
+         * "%s/../../../src/lib/arch/%s/..." trips gcc's -Wformat-truncation. */
+        char raw_path[PATH_MAX * 2 + 64];
         char real_path[PATH_MAX];
 
         if (get_executable_dir(NULL, exe_dir, sizeof(exe_dir))) {

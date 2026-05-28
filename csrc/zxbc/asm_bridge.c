@@ -58,7 +58,9 @@ static void asm_set_include_paths(AsmState *as, const char *arch,
     int n = 0;
 
     const char *a = (arch && arch[0]) ? arch : "zx48k";
-    char exe_dir[PATH_MAX], raw_path[PATH_MAX], real_path[PATH_MAX];
+    /* raw_path oversized: joining two PATH_MAX-class strings via
+     * "%s/../../../src/lib/arch/%s/..." trips gcc's -Wformat-truncation. */
+    char exe_dir[PATH_MAX], raw_path[PATH_MAX * 2 + 64], real_path[PATH_MAX];
     if (get_executable_dir(NULL, exe_dir, sizeof(exe_dir))) {
         snprintf(raw_path, sizeof(raw_path),
                  "%s/../../../src/lib/arch/%s/stdlib", exe_dir, a);

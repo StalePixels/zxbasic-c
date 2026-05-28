@@ -3455,7 +3455,7 @@ static StrVec emit_pastoref(Backend *b, Quad *q) {
         sv_push(b, &out, "ld c, l");            /* BC = lower 16, A = exp */
         sv_push(b, &out, "pop hl");             /* recover pointer */
     } else if (!indirect && s_is_float(value)) {
-        char C[8], DE[8], BC[8];
+        char C[16], DE[16], BC[16];
         z80h_immediate_float(s_float_val(value), C, DE, BC);
         sv_pushf(b, &out, "ld a, %s", C);
         sv_pushf(b, &out, "ld de, %s", DE);
@@ -3843,7 +3843,7 @@ static StrVec float_get_oper(Backend *b, const char *op1, const char *op2) {
             sv_pushf(b, &out, "ld hl, (%ld)", iop);
             sv_push(b, &out, s_runtime_call(b, RL_ILOADF));
         } else {
-            char C[8], DE[8], BC[8];
+            char C[16], DE[16], BC[16];
             z80h_immediate_float(opf, C, DE, BC);
             sv_pushf(b, &out, "ld a, %s", C);
             sv_pushf(b, &out, "ld de, %s", DE);
@@ -3868,7 +3868,7 @@ static StrVec float_get_oper(Backend *b, const char *op1, const char *op2) {
     if (op2 != NULL) {
         op = op1;
         if (s_is_float(op)) {
-            char C[8], DE[8], BC[8];
+            char C[16], DE[16], BC[16];
             z80h_immediate_float(s_float_val(op), C, DE, BC);
             sv_pushf(b, &out, "ld hl, %s", BC);
             sv_push(b, &out, "push hl");
@@ -4862,7 +4862,7 @@ static StrVec emit_data(Backend *b, Quad *q) {
         return out;
     } else if (strcmp(t, "f") == 0) {
         for (int i = 0; i < n; i++) {
-            char Cs[8], DEs[8], HLs[8];
+            char Cs[16], DEs[16], HLs[16];
             z80h_immediate_float(strtod(items[i], NULL), Cs, DEs, HLs);
             sv_pushf(b, &out, "DEFB %s", Cs);
             sv_pushf(b, &out, "DEFW %s, %s", DEs, HLs);

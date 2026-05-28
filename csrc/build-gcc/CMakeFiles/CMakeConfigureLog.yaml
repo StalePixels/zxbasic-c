@@ -1,0 +1,2188 @@
+
+---
+events:
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineSystem.cmake:12 (find_program)"
+      - "CMakeLists.txt:7 (project)"
+    mode: "program"
+    variable: "CMAKE_UNAME"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: true
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "uname"
+    candidate_directories:
+      - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin/"
+      - "/opt/homebrew/opt/imagemagick-full/bin/"
+      - "/Users/darran/.local/bin/"
+      - "/Users/darran/Library/pnpm/"
+      - "/opt/homebrew/opt/mysql-client@8.4/bin/"
+      - "/Users/darran/Library/Python/3.9/bin/"
+      - "/opt/homebrew/opt/php@8.1/bin/"
+      - "/Users/darran/.nvm/versions/node/v22.22.0/bin/"
+      - "/Users/darran/bin/"
+      - "/u/GIT/ZX/bin/"
+      - "/usr/local/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/local/sbin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/opt/X11/bin/"
+      - "/opt/gemini/bin/"
+      - "/opt/homebrew/bin/"
+      - "/opt/jetbrains/bin/"
+      - "/opt/mono/bin/"
+      - "/Users/darran/.lmstudio/bin/"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/clangd-lsp/1.0.0/bin/"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/swift-lsp/1.0.0/bin/"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/skill-creator/unknown/bin/"
+    searched_directories:
+      - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin/uname"
+      - "/opt/homebrew/opt/imagemagick-full/bin/uname"
+      - "/Users/darran/.local/bin/uname"
+      - "/Users/darran/Library/pnpm/uname"
+      - "/opt/homebrew/opt/mysql-client@8.4/bin/uname"
+      - "/Users/darran/Library/Python/3.9/bin/uname"
+      - "/opt/homebrew/opt/php@8.1/bin/uname"
+      - "/Users/darran/.nvm/versions/node/v22.22.0/bin/uname"
+      - "/Users/darran/bin/uname"
+      - "/u/GIT/ZX/bin/uname"
+      - "/usr/local/bin/uname"
+    found: "/usr/bin/uname"
+    search_context:
+      ENV{PATH}:
+        - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin"
+        - "/opt/homebrew/opt/imagemagick-full/bin"
+        - "/Users/darran/.local/bin"
+        - "/Users/darran/Library/pnpm"
+        - "/opt/homebrew/opt/mysql-client@8.4/bin"
+        - "/Users/darran/Library/Python/3.9/bin"
+        - "/opt/homebrew/opt/php@8.1/bin"
+        - "/Users/darran/.nvm/versions/node/v22.22.0/bin"
+        - "~/bin"
+        - "/u/GIT/ZX/bin"
+        - "/usr/local/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/local/sbin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/opt/X11/bin"
+        - "/opt/gemini/bin"
+        - "/opt/homebrew/bin"
+        - "/opt/jetbrains/bin"
+        - "/opt/mono/bin"
+        - "/Users/darran/.lmstudio/bin"
+        - "/Users/darran/.claude/plugins/cache/claude-plugins-official/clangd-lsp/1.0.0/bin"
+        - "/Users/darran/.claude/plugins/cache/claude-plugins-official/swift-lsp/1.0.0/bin"
+        - "/Users/darran/.claude/plugins/cache/claude-plugins-official/skill-creator/unknown/bin"
+  -
+    kind: "message-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineSystem.cmake:212 (message)"
+      - "CMakeLists.txt:7 (project)"
+    message: |
+      The system is: Darwin - 25.5.0 - arm64
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeUnixFindMake.cmake:5 (find_program)"
+      - "CMakeLists.txt:7 (project)"
+    mode: "program"
+    variable: "CMAKE_MAKE_PROGRAM"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: true
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "gmake"
+      - "make"
+      - "smake"
+    candidate_directories:
+      - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin/"
+      - "/opt/homebrew/opt/imagemagick-full/bin/"
+      - "/Users/darran/.local/bin/"
+      - "/Users/darran/Library/pnpm/"
+      - "/opt/homebrew/opt/mysql-client@8.4/bin/"
+      - "/Users/darran/Library/Python/3.9/bin/"
+      - "/opt/homebrew/opt/php@8.1/bin/"
+      - "/Users/darran/.nvm/versions/node/v22.22.0/bin/"
+      - "/Users/darran/bin/"
+      - "/u/GIT/ZX/bin/"
+      - "/usr/local/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/local/sbin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/opt/X11/bin/"
+      - "/opt/gemini/bin/"
+      - "/opt/homebrew/bin/"
+      - "/opt/jetbrains/bin/"
+      - "/opt/mono/bin/"
+      - "/Users/darran/.lmstudio/bin/"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/clangd-lsp/1.0.0/bin/"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/swift-lsp/1.0.0/bin/"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/skill-creator/unknown/bin/"
+    searched_directories:
+      - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin/gmake"
+      - "/opt/homebrew/opt/imagemagick-full/bin/gmake"
+      - "/Users/darran/.local/bin/gmake"
+      - "/Users/darran/Library/pnpm/gmake"
+      - "/opt/homebrew/opt/mysql-client@8.4/bin/gmake"
+      - "/Users/darran/Library/Python/3.9/bin/gmake"
+      - "/opt/homebrew/opt/php@8.1/bin/gmake"
+      - "/Users/darran/.nvm/versions/node/v22.22.0/bin/gmake"
+      - "/Users/darran/bin/gmake"
+      - "/u/GIT/ZX/bin/gmake"
+      - "/usr/local/bin/gmake"
+      - "/usr/bin/gmake"
+      - "/bin/gmake"
+      - "/usr/local/sbin/gmake"
+      - "/usr/sbin/gmake"
+      - "/sbin/gmake"
+      - "/opt/X11/bin/gmake"
+      - "/opt/gemini/bin/gmake"
+    found: "/opt/homebrew/bin/gmake"
+    search_context:
+      ENV{PATH}:
+        - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin"
+        - "/opt/homebrew/opt/imagemagick-full/bin"
+        - "/Users/darran/.local/bin"
+        - "/Users/darran/Library/pnpm"
+        - "/opt/homebrew/opt/mysql-client@8.4/bin"
+        - "/Users/darran/Library/Python/3.9/bin"
+        - "/opt/homebrew/opt/php@8.1/bin"
+        - "/Users/darran/.nvm/versions/node/v22.22.0/bin"
+        - "~/bin"
+        - "/u/GIT/ZX/bin"
+        - "/usr/local/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/local/sbin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/opt/X11/bin"
+        - "/opt/gemini/bin"
+        - "/opt/homebrew/bin"
+        - "/opt/jetbrains/bin"
+        - "/opt/mono/bin"
+        - "/Users/darran/.lmstudio/bin"
+        - "/Users/darran/.claude/plugins/cache/claude-plugins-official/clangd-lsp/1.0.0/bin"
+        - "/Users/darran/.claude/plugins/cache/claude-plugins-official/swift-lsp/1.0.0/bin"
+        - "/Users/darran/.claude/plugins/cache/claude-plugins-official/skill-creator/unknown/bin"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompiler.cmake:73 (find_program)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCCompiler.cmake:64 (_cmake_find_compiler)"
+      - "CMakeLists.txt:7 (project)"
+    mode: "program"
+    variable: "CMAKE_C_COMPILER"
+    description: "C compiler"
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: true
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "/opt/homebrew/bin/gcc-15"
+    candidate_directories:
+      - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin/"
+      - "/opt/homebrew/opt/imagemagick-full/bin/"
+      - "/Users/darran/.local/bin/"
+      - "/Users/darran/Library/pnpm/"
+      - "/opt/homebrew/opt/mysql-client@8.4/bin/"
+      - "/Users/darran/Library/Python/3.9/bin/"
+      - "/opt/homebrew/opt/php@8.1/bin/"
+      - "/Users/darran/.nvm/versions/node/v22.22.0/bin/"
+      - "/Users/darran/bin/"
+      - "/u/GIT/ZX/bin/"
+      - "/usr/local/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/local/sbin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/opt/X11/bin/"
+      - "/opt/gemini/bin/"
+      - "/opt/homebrew/bin/"
+      - "/opt/jetbrains/bin/"
+      - "/opt/mono/bin/"
+      - "/Users/darran/.lmstudio/bin/"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/clangd-lsp/1.0.0/bin/"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/swift-lsp/1.0.0/bin/"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/skill-creator/unknown/bin/"
+    found: "/opt/homebrew/bin/gcc-15"
+    search_context:
+      ENV{PATH}:
+        - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin"
+        - "/opt/homebrew/opt/imagemagick-full/bin"
+        - "/Users/darran/.local/bin"
+        - "/Users/darran/Library/pnpm"
+        - "/opt/homebrew/opt/mysql-client@8.4/bin"
+        - "/Users/darran/Library/Python/3.9/bin"
+        - "/opt/homebrew/opt/php@8.1/bin"
+        - "/Users/darran/.nvm/versions/node/v22.22.0/bin"
+        - "~/bin"
+        - "/u/GIT/ZX/bin"
+        - "/usr/local/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/local/sbin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/opt/X11/bin"
+        - "/opt/gemini/bin"
+        - "/opt/homebrew/bin"
+        - "/opt/jetbrains/bin"
+        - "/opt/mono/bin"
+        - "/Users/darran/.lmstudio/bin"
+        - "/Users/darran/.claude/plugins/cache/claude-plugins-official/clangd-lsp/1.0.0/bin"
+        - "/Users/darran/.claude/plugins/cache/claude-plugins-official/swift-lsp/1.0.0/bin"
+        - "/Users/darran/.claude/plugins/cache/claude-plugins-official/skill-creator/unknown/bin"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerId.cmake:468 (find_file)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerId.cmake:506 (CMAKE_DETERMINE_COMPILER_ID_WRITE)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerId.cmake:8 (CMAKE_DETERMINE_COMPILER_ID_BUILD)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCCompiler.cmake:122 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:7 (project)"
+    mode: "file"
+    variable: "src_in"
+    description: "Path to a file."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: true
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "CMakeCCompilerId.c.in"
+    candidate_directories:
+      - "/opt/homebrew/share/cmake/Modules/"
+    found: "/opt/homebrew/share/cmake/Modules/CMakeCCompilerId.c.in"
+    search_context:
+      ENV{PATH}:
+        - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin"
+        - "/opt/homebrew/opt/imagemagick-full/bin"
+        - "/Users/darran/.local/bin"
+        - "/Users/darran/Library/pnpm"
+        - "/opt/homebrew/opt/mysql-client@8.4/bin"
+        - "/Users/darran/Library/Python/3.9/bin"
+        - "/opt/homebrew/opt/php@8.1/bin"
+        - "/Users/darran/.nvm/versions/node/v22.22.0/bin"
+        - "~/bin"
+        - "/u/GIT/ZX/bin"
+        - "/usr/local/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/local/sbin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/opt/X11/bin"
+        - "/opt/gemini/bin"
+        - "/opt/homebrew/bin"
+        - "/opt/jetbrains/bin"
+        - "/opt/mono/bin"
+        - "/Users/darran/.lmstudio/bin"
+        - "/Users/darran/.claude/plugins/cache/claude-plugins-official/clangd-lsp/1.0.0/bin"
+        - "/Users/darran/.claude/plugins/cache/claude-plugins-official/swift-lsp/1.0.0/bin"
+        - "/Users/darran/.claude/plugins/cache/claude-plugins-official/skill-creator/unknown/bin"
+  -
+    kind: "message-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerId.cmake:17 (message)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCCompiler.cmake:122 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:7 (project)"
+    message: |
+      Compiling the C compiler identification source file "CMakeCCompilerId.c" succeeded.
+      Compiler: /opt/homebrew/bin/gcc-15 
+      Build flags: 
+      Id flags:  
+      
+      The output was:
+      0
+      
+      
+      Compilation of the C compiler identification source "CMakeCCompilerId.c" produced "a.out"
+      
+      The C compiler identification is GNU, found in:
+        /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/CMakeFiles/4.3.2/CompilerIdC/a.out
+      
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
+      - "CMakeLists.txt:7 (project)"
+    mode: "program"
+    variable: "CMAKE_AR"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "ar-15"
+      - "ar"
+    candidate_directories:
+      - "/opt/homebrew/bin/"
+      - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin/"
+      - "/opt/homebrew/opt/imagemagick-full/bin/"
+      - "/Users/darran/.local/bin/"
+      - "/Users/darran/Library/pnpm/"
+      - "/opt/homebrew/opt/mysql-client@8.4/bin/"
+      - "/Users/darran/Library/Python/3.9/bin/"
+      - "/opt/homebrew/opt/php@8.1/bin/"
+      - "/Users/darran/.nvm/versions/node/v22.22.0/bin/"
+      - "/Users/darran/bin/"
+      - "/u/GIT/ZX/bin/"
+      - "/usr/local/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/local/sbin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/opt/X11/bin/"
+      - "/opt/gemini/bin/"
+      - "/opt/jetbrains/bin/"
+      - "/opt/mono/bin/"
+      - "/Users/darran/.lmstudio/bin/"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/clangd-lsp/1.0.0/bin/"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/swift-lsp/1.0.0/bin/"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/skill-creator/unknown/bin/"
+    searched_directories:
+      - "/opt/homebrew/bin/ar-15"
+      - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin/ar-15"
+      - "/opt/homebrew/opt/imagemagick-full/bin/ar-15"
+      - "/Users/darran/.local/bin/ar-15"
+      - "/Users/darran/Library/pnpm/ar-15"
+      - "/opt/homebrew/opt/mysql-client@8.4/bin/ar-15"
+      - "/Users/darran/Library/Python/3.9/bin/ar-15"
+      - "/opt/homebrew/opt/php@8.1/bin/ar-15"
+      - "/Users/darran/.nvm/versions/node/v22.22.0/bin/ar-15"
+      - "/Users/darran/bin/ar-15"
+      - "/u/GIT/ZX/bin/ar-15"
+      - "/usr/local/bin/ar-15"
+      - "/usr/bin/ar-15"
+      - "/bin/ar-15"
+      - "/usr/local/sbin/ar-15"
+      - "/usr/sbin/ar-15"
+      - "/sbin/ar-15"
+      - "/opt/X11/bin/ar-15"
+      - "/opt/gemini/bin/ar-15"
+      - "/opt/jetbrains/bin/ar-15"
+      - "/opt/mono/bin/ar-15"
+      - "/Users/darran/.lmstudio/bin/ar-15"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/clangd-lsp/1.0.0/bin/ar-15"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/swift-lsp/1.0.0/bin/ar-15"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/skill-creator/unknown/bin/ar-15"
+      - "/opt/homebrew/bin/ar"
+      - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin/ar"
+      - "/opt/homebrew/opt/imagemagick-full/bin/ar"
+      - "/Users/darran/.local/bin/ar"
+      - "/Users/darran/Library/pnpm/ar"
+      - "/opt/homebrew/opt/mysql-client@8.4/bin/ar"
+      - "/Users/darran/Library/Python/3.9/bin/ar"
+      - "/opt/homebrew/opt/php@8.1/bin/ar"
+      - "/Users/darran/.nvm/versions/node/v22.22.0/bin/ar"
+      - "/Users/darran/bin/ar"
+      - "/u/GIT/ZX/bin/ar"
+      - "/usr/local/bin/ar"
+    found: "/usr/bin/ar"
+    search_context:
+      ENV{PATH}:
+        - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin"
+        - "/opt/homebrew/opt/imagemagick-full/bin"
+        - "/Users/darran/.local/bin"
+        - "/Users/darran/Library/pnpm"
+        - "/opt/homebrew/opt/mysql-client@8.4/bin"
+        - "/Users/darran/Library/Python/3.9/bin"
+        - "/opt/homebrew/opt/php@8.1/bin"
+        - "/Users/darran/.nvm/versions/node/v22.22.0/bin"
+        - "~/bin"
+        - "/u/GIT/ZX/bin"
+        - "/usr/local/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/local/sbin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/opt/X11/bin"
+        - "/opt/gemini/bin"
+        - "/opt/homebrew/bin"
+        - "/opt/jetbrains/bin"
+        - "/opt/mono/bin"
+        - "/Users/darran/.lmstudio/bin"
+        - "/Users/darran/.claude/plugins/cache/claude-plugins-official/clangd-lsp/1.0.0/bin"
+        - "/Users/darran/.claude/plugins/cache/claude-plugins-official/swift-lsp/1.0.0/bin"
+        - "/Users/darran/.claude/plugins/cache/claude-plugins-official/skill-creator/unknown/bin"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
+      - "CMakeLists.txt:7 (project)"
+    mode: "program"
+    variable: "CMAKE_RANLIB"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "ranlib-15"
+      - "ranlib"
+    candidate_directories:
+      - "/opt/homebrew/bin/"
+      - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin/"
+      - "/opt/homebrew/opt/imagemagick-full/bin/"
+      - "/Users/darran/.local/bin/"
+      - "/Users/darran/Library/pnpm/"
+      - "/opt/homebrew/opt/mysql-client@8.4/bin/"
+      - "/Users/darran/Library/Python/3.9/bin/"
+      - "/opt/homebrew/opt/php@8.1/bin/"
+      - "/Users/darran/.nvm/versions/node/v22.22.0/bin/"
+      - "/Users/darran/bin/"
+      - "/u/GIT/ZX/bin/"
+      - "/usr/local/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/local/sbin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/opt/X11/bin/"
+      - "/opt/gemini/bin/"
+      - "/opt/jetbrains/bin/"
+      - "/opt/mono/bin/"
+      - "/Users/darran/.lmstudio/bin/"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/clangd-lsp/1.0.0/bin/"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/swift-lsp/1.0.0/bin/"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/skill-creator/unknown/bin/"
+    searched_directories:
+      - "/opt/homebrew/bin/ranlib-15"
+      - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin/ranlib-15"
+      - "/opt/homebrew/opt/imagemagick-full/bin/ranlib-15"
+      - "/Users/darran/.local/bin/ranlib-15"
+      - "/Users/darran/Library/pnpm/ranlib-15"
+      - "/opt/homebrew/opt/mysql-client@8.4/bin/ranlib-15"
+      - "/Users/darran/Library/Python/3.9/bin/ranlib-15"
+      - "/opt/homebrew/opt/php@8.1/bin/ranlib-15"
+      - "/Users/darran/.nvm/versions/node/v22.22.0/bin/ranlib-15"
+      - "/Users/darran/bin/ranlib-15"
+      - "/u/GIT/ZX/bin/ranlib-15"
+      - "/usr/local/bin/ranlib-15"
+      - "/usr/bin/ranlib-15"
+      - "/bin/ranlib-15"
+      - "/usr/local/sbin/ranlib-15"
+      - "/usr/sbin/ranlib-15"
+      - "/sbin/ranlib-15"
+      - "/opt/X11/bin/ranlib-15"
+      - "/opt/gemini/bin/ranlib-15"
+      - "/opt/jetbrains/bin/ranlib-15"
+      - "/opt/mono/bin/ranlib-15"
+      - "/Users/darran/.lmstudio/bin/ranlib-15"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/clangd-lsp/1.0.0/bin/ranlib-15"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/swift-lsp/1.0.0/bin/ranlib-15"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/skill-creator/unknown/bin/ranlib-15"
+      - "/opt/homebrew/bin/ranlib"
+      - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin/ranlib"
+      - "/opt/homebrew/opt/imagemagick-full/bin/ranlib"
+      - "/Users/darran/.local/bin/ranlib"
+      - "/Users/darran/Library/pnpm/ranlib"
+      - "/opt/homebrew/opt/mysql-client@8.4/bin/ranlib"
+      - "/Users/darran/Library/Python/3.9/bin/ranlib"
+      - "/opt/homebrew/opt/php@8.1/bin/ranlib"
+      - "/Users/darran/.nvm/versions/node/v22.22.0/bin/ranlib"
+      - "/Users/darran/bin/ranlib"
+      - "/u/GIT/ZX/bin/ranlib"
+      - "/usr/local/bin/ranlib"
+    found: "/usr/bin/ranlib"
+    search_context:
+      ENV{PATH}:
+        - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin"
+        - "/opt/homebrew/opt/imagemagick-full/bin"
+        - "/Users/darran/.local/bin"
+        - "/Users/darran/Library/pnpm"
+        - "/opt/homebrew/opt/mysql-client@8.4/bin"
+        - "/Users/darran/Library/Python/3.9/bin"
+        - "/opt/homebrew/opt/php@8.1/bin"
+        - "/Users/darran/.nvm/versions/node/v22.22.0/bin"
+        - "~/bin"
+        - "/u/GIT/ZX/bin"
+        - "/usr/local/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/local/sbin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/opt/X11/bin"
+        - "/opt/gemini/bin"
+        - "/opt/homebrew/bin"
+        - "/opt/jetbrains/bin"
+        - "/opt/mono/bin"
+        - "/Users/darran/.lmstudio/bin"
+        - "/Users/darran/.claude/plugins/cache/claude-plugins-official/clangd-lsp/1.0.0/bin"
+        - "/Users/darran/.claude/plugins/cache/claude-plugins-official/swift-lsp/1.0.0/bin"
+        - "/Users/darran/.claude/plugins/cache/claude-plugins-official/skill-creator/unknown/bin"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
+      - "CMakeLists.txt:7 (project)"
+    mode: "program"
+    variable: "CMAKE_STRIP"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "strip-15"
+      - "strip"
+    candidate_directories:
+      - "/opt/homebrew/bin/"
+      - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin/"
+      - "/opt/homebrew/opt/imagemagick-full/bin/"
+      - "/Users/darran/.local/bin/"
+      - "/Users/darran/Library/pnpm/"
+      - "/opt/homebrew/opt/mysql-client@8.4/bin/"
+      - "/Users/darran/Library/Python/3.9/bin/"
+      - "/opt/homebrew/opt/php@8.1/bin/"
+      - "/Users/darran/.nvm/versions/node/v22.22.0/bin/"
+      - "/Users/darran/bin/"
+      - "/u/GIT/ZX/bin/"
+      - "/usr/local/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/local/sbin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/opt/X11/bin/"
+      - "/opt/gemini/bin/"
+      - "/opt/jetbrains/bin/"
+      - "/opt/mono/bin/"
+      - "/Users/darran/.lmstudio/bin/"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/clangd-lsp/1.0.0/bin/"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/swift-lsp/1.0.0/bin/"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/skill-creator/unknown/bin/"
+    searched_directories:
+      - "/opt/homebrew/bin/strip-15"
+      - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin/strip-15"
+      - "/opt/homebrew/opt/imagemagick-full/bin/strip-15"
+      - "/Users/darran/.local/bin/strip-15"
+      - "/Users/darran/Library/pnpm/strip-15"
+      - "/opt/homebrew/opt/mysql-client@8.4/bin/strip-15"
+      - "/Users/darran/Library/Python/3.9/bin/strip-15"
+      - "/opt/homebrew/opt/php@8.1/bin/strip-15"
+      - "/Users/darran/.nvm/versions/node/v22.22.0/bin/strip-15"
+      - "/Users/darran/bin/strip-15"
+      - "/u/GIT/ZX/bin/strip-15"
+      - "/usr/local/bin/strip-15"
+      - "/usr/bin/strip-15"
+      - "/bin/strip-15"
+      - "/usr/local/sbin/strip-15"
+      - "/usr/sbin/strip-15"
+      - "/sbin/strip-15"
+      - "/opt/X11/bin/strip-15"
+      - "/opt/gemini/bin/strip-15"
+      - "/opt/jetbrains/bin/strip-15"
+      - "/opt/mono/bin/strip-15"
+      - "/Users/darran/.lmstudio/bin/strip-15"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/clangd-lsp/1.0.0/bin/strip-15"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/swift-lsp/1.0.0/bin/strip-15"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/skill-creator/unknown/bin/strip-15"
+      - "/opt/homebrew/bin/strip"
+      - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin/strip"
+      - "/opt/homebrew/opt/imagemagick-full/bin/strip"
+      - "/Users/darran/.local/bin/strip"
+      - "/Users/darran/Library/pnpm/strip"
+      - "/opt/homebrew/opt/mysql-client@8.4/bin/strip"
+      - "/Users/darran/Library/Python/3.9/bin/strip"
+      - "/opt/homebrew/opt/php@8.1/bin/strip"
+      - "/Users/darran/.nvm/versions/node/v22.22.0/bin/strip"
+      - "/Users/darran/bin/strip"
+      - "/u/GIT/ZX/bin/strip"
+      - "/usr/local/bin/strip"
+    found: "/usr/bin/strip"
+    search_context:
+      ENV{PATH}:
+        - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin"
+        - "/opt/homebrew/opt/imagemagick-full/bin"
+        - "/Users/darran/.local/bin"
+        - "/Users/darran/Library/pnpm"
+        - "/opt/homebrew/opt/mysql-client@8.4/bin"
+        - "/Users/darran/Library/Python/3.9/bin"
+        - "/opt/homebrew/opt/php@8.1/bin"
+        - "/Users/darran/.nvm/versions/node/v22.22.0/bin"
+        - "~/bin"
+        - "/u/GIT/ZX/bin"
+        - "/usr/local/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/local/sbin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/opt/X11/bin"
+        - "/opt/gemini/bin"
+        - "/opt/homebrew/bin"
+        - "/opt/jetbrains/bin"
+        - "/opt/mono/bin"
+        - "/Users/darran/.lmstudio/bin"
+        - "/Users/darran/.claude/plugins/cache/claude-plugins-official/clangd-lsp/1.0.0/bin"
+        - "/Users/darran/.claude/plugins/cache/claude-plugins-official/swift-lsp/1.0.0/bin"
+        - "/Users/darran/.claude/plugins/cache/claude-plugins-official/skill-creator/unknown/bin"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
+      - "CMakeLists.txt:7 (project)"
+    mode: "program"
+    variable: "CMAKE_LINKER"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "ld-15"
+      - "ld"
+    candidate_directories:
+      - "/opt/homebrew/bin/"
+      - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin/"
+      - "/opt/homebrew/opt/imagemagick-full/bin/"
+      - "/Users/darran/.local/bin/"
+      - "/Users/darran/Library/pnpm/"
+      - "/opt/homebrew/opt/mysql-client@8.4/bin/"
+      - "/Users/darran/Library/Python/3.9/bin/"
+      - "/opt/homebrew/opt/php@8.1/bin/"
+      - "/Users/darran/.nvm/versions/node/v22.22.0/bin/"
+      - "/Users/darran/bin/"
+      - "/u/GIT/ZX/bin/"
+      - "/usr/local/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/local/sbin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/opt/X11/bin/"
+      - "/opt/gemini/bin/"
+      - "/opt/jetbrains/bin/"
+      - "/opt/mono/bin/"
+      - "/Users/darran/.lmstudio/bin/"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/clangd-lsp/1.0.0/bin/"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/swift-lsp/1.0.0/bin/"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/skill-creator/unknown/bin/"
+    searched_directories:
+      - "/opt/homebrew/bin/ld-15"
+      - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin/ld-15"
+      - "/opt/homebrew/opt/imagemagick-full/bin/ld-15"
+      - "/Users/darran/.local/bin/ld-15"
+      - "/Users/darran/Library/pnpm/ld-15"
+      - "/opt/homebrew/opt/mysql-client@8.4/bin/ld-15"
+      - "/Users/darran/Library/Python/3.9/bin/ld-15"
+      - "/opt/homebrew/opt/php@8.1/bin/ld-15"
+      - "/Users/darran/.nvm/versions/node/v22.22.0/bin/ld-15"
+      - "/Users/darran/bin/ld-15"
+      - "/u/GIT/ZX/bin/ld-15"
+      - "/usr/local/bin/ld-15"
+      - "/usr/bin/ld-15"
+      - "/bin/ld-15"
+      - "/usr/local/sbin/ld-15"
+      - "/usr/sbin/ld-15"
+      - "/sbin/ld-15"
+      - "/opt/X11/bin/ld-15"
+      - "/opt/gemini/bin/ld-15"
+      - "/opt/jetbrains/bin/ld-15"
+      - "/opt/mono/bin/ld-15"
+      - "/Users/darran/.lmstudio/bin/ld-15"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/clangd-lsp/1.0.0/bin/ld-15"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/swift-lsp/1.0.0/bin/ld-15"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/skill-creator/unknown/bin/ld-15"
+      - "/opt/homebrew/bin/ld"
+      - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin/ld"
+      - "/opt/homebrew/opt/imagemagick-full/bin/ld"
+      - "/Users/darran/.local/bin/ld"
+      - "/Users/darran/Library/pnpm/ld"
+      - "/opt/homebrew/opt/mysql-client@8.4/bin/ld"
+      - "/Users/darran/Library/Python/3.9/bin/ld"
+      - "/opt/homebrew/opt/php@8.1/bin/ld"
+      - "/Users/darran/.nvm/versions/node/v22.22.0/bin/ld"
+      - "/Users/darran/bin/ld"
+      - "/u/GIT/ZX/bin/ld"
+      - "/usr/local/bin/ld"
+    found: "/usr/bin/ld"
+    search_context:
+      ENV{PATH}:
+        - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin"
+        - "/opt/homebrew/opt/imagemagick-full/bin"
+        - "/Users/darran/.local/bin"
+        - "/Users/darran/Library/pnpm"
+        - "/opt/homebrew/opt/mysql-client@8.4/bin"
+        - "/Users/darran/Library/Python/3.9/bin"
+        - "/opt/homebrew/opt/php@8.1/bin"
+        - "/Users/darran/.nvm/versions/node/v22.22.0/bin"
+        - "~/bin"
+        - "/u/GIT/ZX/bin"
+        - "/usr/local/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/local/sbin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/opt/X11/bin"
+        - "/opt/gemini/bin"
+        - "/opt/homebrew/bin"
+        - "/opt/jetbrains/bin"
+        - "/opt/mono/bin"
+        - "/Users/darran/.lmstudio/bin"
+        - "/Users/darran/.claude/plugins/cache/claude-plugins-official/clangd-lsp/1.0.0/bin"
+        - "/Users/darran/.claude/plugins/cache/claude-plugins-official/swift-lsp/1.0.0/bin"
+        - "/Users/darran/.claude/plugins/cache/claude-plugins-official/skill-creator/unknown/bin"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
+      - "CMakeLists.txt:7 (project)"
+    mode: "program"
+    variable: "CMAKE_NM"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "nm-15"
+      - "nm"
+    candidate_directories:
+      - "/opt/homebrew/bin/"
+      - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin/"
+      - "/opt/homebrew/opt/imagemagick-full/bin/"
+      - "/Users/darran/.local/bin/"
+      - "/Users/darran/Library/pnpm/"
+      - "/opt/homebrew/opt/mysql-client@8.4/bin/"
+      - "/Users/darran/Library/Python/3.9/bin/"
+      - "/opt/homebrew/opt/php@8.1/bin/"
+      - "/Users/darran/.nvm/versions/node/v22.22.0/bin/"
+      - "/Users/darran/bin/"
+      - "/u/GIT/ZX/bin/"
+      - "/usr/local/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/local/sbin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/opt/X11/bin/"
+      - "/opt/gemini/bin/"
+      - "/opt/jetbrains/bin/"
+      - "/opt/mono/bin/"
+      - "/Users/darran/.lmstudio/bin/"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/clangd-lsp/1.0.0/bin/"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/swift-lsp/1.0.0/bin/"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/skill-creator/unknown/bin/"
+    searched_directories:
+      - "/opt/homebrew/bin/nm-15"
+      - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin/nm-15"
+      - "/opt/homebrew/opt/imagemagick-full/bin/nm-15"
+      - "/Users/darran/.local/bin/nm-15"
+      - "/Users/darran/Library/pnpm/nm-15"
+      - "/opt/homebrew/opt/mysql-client@8.4/bin/nm-15"
+      - "/Users/darran/Library/Python/3.9/bin/nm-15"
+      - "/opt/homebrew/opt/php@8.1/bin/nm-15"
+      - "/Users/darran/.nvm/versions/node/v22.22.0/bin/nm-15"
+      - "/Users/darran/bin/nm-15"
+      - "/u/GIT/ZX/bin/nm-15"
+      - "/usr/local/bin/nm-15"
+      - "/usr/bin/nm-15"
+      - "/bin/nm-15"
+      - "/usr/local/sbin/nm-15"
+      - "/usr/sbin/nm-15"
+      - "/sbin/nm-15"
+      - "/opt/X11/bin/nm-15"
+      - "/opt/gemini/bin/nm-15"
+      - "/opt/jetbrains/bin/nm-15"
+      - "/opt/mono/bin/nm-15"
+      - "/Users/darran/.lmstudio/bin/nm-15"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/clangd-lsp/1.0.0/bin/nm-15"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/swift-lsp/1.0.0/bin/nm-15"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/skill-creator/unknown/bin/nm-15"
+      - "/opt/homebrew/bin/nm"
+      - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin/nm"
+      - "/opt/homebrew/opt/imagemagick-full/bin/nm"
+      - "/Users/darran/.local/bin/nm"
+      - "/Users/darran/Library/pnpm/nm"
+      - "/opt/homebrew/opt/mysql-client@8.4/bin/nm"
+      - "/Users/darran/Library/Python/3.9/bin/nm"
+      - "/opt/homebrew/opt/php@8.1/bin/nm"
+      - "/Users/darran/.nvm/versions/node/v22.22.0/bin/nm"
+      - "/Users/darran/bin/nm"
+      - "/u/GIT/ZX/bin/nm"
+      - "/usr/local/bin/nm"
+    found: "/usr/bin/nm"
+    search_context:
+      ENV{PATH}:
+        - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin"
+        - "/opt/homebrew/opt/imagemagick-full/bin"
+        - "/Users/darran/.local/bin"
+        - "/Users/darran/Library/pnpm"
+        - "/opt/homebrew/opt/mysql-client@8.4/bin"
+        - "/Users/darran/Library/Python/3.9/bin"
+        - "/opt/homebrew/opt/php@8.1/bin"
+        - "/Users/darran/.nvm/versions/node/v22.22.0/bin"
+        - "~/bin"
+        - "/u/GIT/ZX/bin"
+        - "/usr/local/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/local/sbin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/opt/X11/bin"
+        - "/opt/gemini/bin"
+        - "/opt/homebrew/bin"
+        - "/opt/jetbrains/bin"
+        - "/opt/mono/bin"
+        - "/Users/darran/.lmstudio/bin"
+        - "/Users/darran/.claude/plugins/cache/claude-plugins-official/clangd-lsp/1.0.0/bin"
+        - "/Users/darran/.claude/plugins/cache/claude-plugins-official/swift-lsp/1.0.0/bin"
+        - "/Users/darran/.claude/plugins/cache/claude-plugins-official/skill-creator/unknown/bin"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
+      - "CMakeLists.txt:7 (project)"
+    mode: "program"
+    variable: "CMAKE_OBJDUMP"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "objdump-15"
+      - "objdump"
+    candidate_directories:
+      - "/opt/homebrew/bin/"
+      - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin/"
+      - "/opt/homebrew/opt/imagemagick-full/bin/"
+      - "/Users/darran/.local/bin/"
+      - "/Users/darran/Library/pnpm/"
+      - "/opt/homebrew/opt/mysql-client@8.4/bin/"
+      - "/Users/darran/Library/Python/3.9/bin/"
+      - "/opt/homebrew/opt/php@8.1/bin/"
+      - "/Users/darran/.nvm/versions/node/v22.22.0/bin/"
+      - "/Users/darran/bin/"
+      - "/u/GIT/ZX/bin/"
+      - "/usr/local/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/local/sbin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/opt/X11/bin/"
+      - "/opt/gemini/bin/"
+      - "/opt/jetbrains/bin/"
+      - "/opt/mono/bin/"
+      - "/Users/darran/.lmstudio/bin/"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/clangd-lsp/1.0.0/bin/"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/swift-lsp/1.0.0/bin/"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/skill-creator/unknown/bin/"
+    searched_directories:
+      - "/opt/homebrew/bin/objdump-15"
+      - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin/objdump-15"
+      - "/opt/homebrew/opt/imagemagick-full/bin/objdump-15"
+      - "/Users/darran/.local/bin/objdump-15"
+      - "/Users/darran/Library/pnpm/objdump-15"
+      - "/opt/homebrew/opt/mysql-client@8.4/bin/objdump-15"
+      - "/Users/darran/Library/Python/3.9/bin/objdump-15"
+      - "/opt/homebrew/opt/php@8.1/bin/objdump-15"
+      - "/Users/darran/.nvm/versions/node/v22.22.0/bin/objdump-15"
+      - "/Users/darran/bin/objdump-15"
+      - "/u/GIT/ZX/bin/objdump-15"
+      - "/usr/local/bin/objdump-15"
+      - "/usr/bin/objdump-15"
+      - "/bin/objdump-15"
+      - "/usr/local/sbin/objdump-15"
+      - "/usr/sbin/objdump-15"
+      - "/sbin/objdump-15"
+      - "/opt/X11/bin/objdump-15"
+      - "/opt/gemini/bin/objdump-15"
+      - "/opt/jetbrains/bin/objdump-15"
+      - "/opt/mono/bin/objdump-15"
+      - "/Users/darran/.lmstudio/bin/objdump-15"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/clangd-lsp/1.0.0/bin/objdump-15"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/swift-lsp/1.0.0/bin/objdump-15"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/skill-creator/unknown/bin/objdump-15"
+      - "/opt/homebrew/bin/objdump"
+      - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin/objdump"
+      - "/opt/homebrew/opt/imagemagick-full/bin/objdump"
+      - "/Users/darran/.local/bin/objdump"
+      - "/Users/darran/Library/pnpm/objdump"
+      - "/opt/homebrew/opt/mysql-client@8.4/bin/objdump"
+      - "/Users/darran/Library/Python/3.9/bin/objdump"
+      - "/opt/homebrew/opt/php@8.1/bin/objdump"
+      - "/Users/darran/.nvm/versions/node/v22.22.0/bin/objdump"
+      - "/Users/darran/bin/objdump"
+      - "/u/GIT/ZX/bin/objdump"
+      - "/usr/local/bin/objdump"
+    found: "/usr/bin/objdump"
+    search_context:
+      ENV{PATH}:
+        - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin"
+        - "/opt/homebrew/opt/imagemagick-full/bin"
+        - "/Users/darran/.local/bin"
+        - "/Users/darran/Library/pnpm"
+        - "/opt/homebrew/opt/mysql-client@8.4/bin"
+        - "/Users/darran/Library/Python/3.9/bin"
+        - "/opt/homebrew/opt/php@8.1/bin"
+        - "/Users/darran/.nvm/versions/node/v22.22.0/bin"
+        - "~/bin"
+        - "/u/GIT/ZX/bin"
+        - "/usr/local/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/local/sbin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/opt/X11/bin"
+        - "/opt/gemini/bin"
+        - "/opt/homebrew/bin"
+        - "/opt/jetbrains/bin"
+        - "/opt/mono/bin"
+        - "/Users/darran/.lmstudio/bin"
+        - "/Users/darran/.claude/plugins/cache/claude-plugins-official/clangd-lsp/1.0.0/bin"
+        - "/Users/darran/.claude/plugins/cache/claude-plugins-official/swift-lsp/1.0.0/bin"
+        - "/Users/darran/.claude/plugins/cache/claude-plugins-official/skill-creator/unknown/bin"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
+      - "CMakeLists.txt:7 (project)"
+    mode: "program"
+    variable: "CMAKE_OBJCOPY"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "objcopy-15"
+      - "objcopy"
+    candidate_directories:
+      - "/opt/homebrew/bin/"
+      - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin/"
+      - "/opt/homebrew/opt/imagemagick-full/bin/"
+      - "/Users/darran/.local/bin/"
+      - "/Users/darran/Library/pnpm/"
+      - "/opt/homebrew/opt/mysql-client@8.4/bin/"
+      - "/Users/darran/Library/Python/3.9/bin/"
+      - "/opt/homebrew/opt/php@8.1/bin/"
+      - "/Users/darran/.nvm/versions/node/v22.22.0/bin/"
+      - "/Users/darran/bin/"
+      - "/u/GIT/ZX/bin/"
+      - "/usr/local/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/local/sbin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/opt/X11/bin/"
+      - "/opt/gemini/bin/"
+      - "/opt/jetbrains/bin/"
+      - "/opt/mono/bin/"
+      - "/Users/darran/.lmstudio/bin/"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/clangd-lsp/1.0.0/bin/"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/swift-lsp/1.0.0/bin/"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/skill-creator/unknown/bin/"
+    searched_directories:
+      - "/opt/homebrew/bin/objcopy-15"
+      - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin/objcopy-15"
+      - "/opt/homebrew/opt/imagemagick-full/bin/objcopy-15"
+      - "/Users/darran/.local/bin/objcopy-15"
+      - "/Users/darran/Library/pnpm/objcopy-15"
+      - "/opt/homebrew/opt/mysql-client@8.4/bin/objcopy-15"
+      - "/Users/darran/Library/Python/3.9/bin/objcopy-15"
+      - "/opt/homebrew/opt/php@8.1/bin/objcopy-15"
+      - "/Users/darran/.nvm/versions/node/v22.22.0/bin/objcopy-15"
+      - "/Users/darran/bin/objcopy-15"
+      - "/u/GIT/ZX/bin/objcopy-15"
+      - "/usr/local/bin/objcopy-15"
+      - "/usr/bin/objcopy-15"
+      - "/bin/objcopy-15"
+      - "/usr/local/sbin/objcopy-15"
+      - "/usr/sbin/objcopy-15"
+      - "/sbin/objcopy-15"
+      - "/opt/X11/bin/objcopy-15"
+      - "/opt/gemini/bin/objcopy-15"
+      - "/opt/jetbrains/bin/objcopy-15"
+      - "/opt/mono/bin/objcopy-15"
+      - "/Users/darran/.lmstudio/bin/objcopy-15"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/clangd-lsp/1.0.0/bin/objcopy-15"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/swift-lsp/1.0.0/bin/objcopy-15"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/skill-creator/unknown/bin/objcopy-15"
+      - "/opt/homebrew/bin/objcopy"
+      - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin/objcopy"
+      - "/opt/homebrew/opt/imagemagick-full/bin/objcopy"
+      - "/Users/darran/.local/bin/objcopy"
+      - "/Users/darran/Library/pnpm/objcopy"
+      - "/opt/homebrew/opt/mysql-client@8.4/bin/objcopy"
+      - "/Users/darran/Library/Python/3.9/bin/objcopy"
+      - "/opt/homebrew/opt/php@8.1/bin/objcopy"
+      - "/Users/darran/.nvm/versions/node/v22.22.0/bin/objcopy"
+      - "/Users/darran/bin/objcopy"
+      - "/u/GIT/ZX/bin/objcopy"
+      - "/usr/local/bin/objcopy"
+      - "/usr/bin/objcopy"
+      - "/bin/objcopy"
+      - "/usr/local/sbin/objcopy"
+      - "/usr/sbin/objcopy"
+      - "/sbin/objcopy"
+      - "/opt/X11/bin/objcopy"
+      - "/opt/gemini/bin/objcopy"
+      - "/opt/jetbrains/bin/objcopy"
+      - "/opt/mono/bin/objcopy"
+      - "/Users/darran/.lmstudio/bin/objcopy"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/clangd-lsp/1.0.0/bin/objcopy"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/swift-lsp/1.0.0/bin/objcopy"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/skill-creator/unknown/bin/objcopy"
+    found: false
+    search_context:
+      ENV{PATH}:
+        - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin"
+        - "/opt/homebrew/opt/imagemagick-full/bin"
+        - "/Users/darran/.local/bin"
+        - "/Users/darran/Library/pnpm"
+        - "/opt/homebrew/opt/mysql-client@8.4/bin"
+        - "/Users/darran/Library/Python/3.9/bin"
+        - "/opt/homebrew/opt/php@8.1/bin"
+        - "/Users/darran/.nvm/versions/node/v22.22.0/bin"
+        - "~/bin"
+        - "/u/GIT/ZX/bin"
+        - "/usr/local/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/local/sbin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/opt/X11/bin"
+        - "/opt/gemini/bin"
+        - "/opt/homebrew/bin"
+        - "/opt/jetbrains/bin"
+        - "/opt/mono/bin"
+        - "/Users/darran/.lmstudio/bin"
+        - "/Users/darran/.claude/plugins/cache/claude-plugins-official/clangd-lsp/1.0.0/bin"
+        - "/Users/darran/.claude/plugins/cache/claude-plugins-official/swift-lsp/1.0.0/bin"
+        - "/Users/darran/.claude/plugins/cache/claude-plugins-official/skill-creator/unknown/bin"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
+      - "CMakeLists.txt:7 (project)"
+    mode: "program"
+    variable: "CMAKE_READELF"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "readelf-15"
+      - "readelf"
+    candidate_directories:
+      - "/opt/homebrew/bin/"
+      - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin/"
+      - "/opt/homebrew/opt/imagemagick-full/bin/"
+      - "/Users/darran/.local/bin/"
+      - "/Users/darran/Library/pnpm/"
+      - "/opt/homebrew/opt/mysql-client@8.4/bin/"
+      - "/Users/darran/Library/Python/3.9/bin/"
+      - "/opt/homebrew/opt/php@8.1/bin/"
+      - "/Users/darran/.nvm/versions/node/v22.22.0/bin/"
+      - "/Users/darran/bin/"
+      - "/u/GIT/ZX/bin/"
+      - "/usr/local/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/local/sbin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/opt/X11/bin/"
+      - "/opt/gemini/bin/"
+      - "/opt/jetbrains/bin/"
+      - "/opt/mono/bin/"
+      - "/Users/darran/.lmstudio/bin/"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/clangd-lsp/1.0.0/bin/"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/swift-lsp/1.0.0/bin/"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/skill-creator/unknown/bin/"
+    searched_directories:
+      - "/opt/homebrew/bin/readelf-15"
+      - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin/readelf-15"
+      - "/opt/homebrew/opt/imagemagick-full/bin/readelf-15"
+      - "/Users/darran/.local/bin/readelf-15"
+      - "/Users/darran/Library/pnpm/readelf-15"
+      - "/opt/homebrew/opt/mysql-client@8.4/bin/readelf-15"
+      - "/Users/darran/Library/Python/3.9/bin/readelf-15"
+      - "/opt/homebrew/opt/php@8.1/bin/readelf-15"
+      - "/Users/darran/.nvm/versions/node/v22.22.0/bin/readelf-15"
+      - "/Users/darran/bin/readelf-15"
+      - "/u/GIT/ZX/bin/readelf-15"
+      - "/usr/local/bin/readelf-15"
+      - "/usr/bin/readelf-15"
+      - "/bin/readelf-15"
+      - "/usr/local/sbin/readelf-15"
+      - "/usr/sbin/readelf-15"
+      - "/sbin/readelf-15"
+      - "/opt/X11/bin/readelf-15"
+      - "/opt/gemini/bin/readelf-15"
+      - "/opt/jetbrains/bin/readelf-15"
+      - "/opt/mono/bin/readelf-15"
+      - "/Users/darran/.lmstudio/bin/readelf-15"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/clangd-lsp/1.0.0/bin/readelf-15"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/swift-lsp/1.0.0/bin/readelf-15"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/skill-creator/unknown/bin/readelf-15"
+      - "/opt/homebrew/bin/readelf"
+      - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin/readelf"
+      - "/opt/homebrew/opt/imagemagick-full/bin/readelf"
+      - "/Users/darran/.local/bin/readelf"
+      - "/Users/darran/Library/pnpm/readelf"
+      - "/opt/homebrew/opt/mysql-client@8.4/bin/readelf"
+      - "/Users/darran/Library/Python/3.9/bin/readelf"
+      - "/opt/homebrew/opt/php@8.1/bin/readelf"
+      - "/Users/darran/.nvm/versions/node/v22.22.0/bin/readelf"
+      - "/Users/darran/bin/readelf"
+      - "/u/GIT/ZX/bin/readelf"
+      - "/usr/local/bin/readelf"
+      - "/usr/bin/readelf"
+      - "/bin/readelf"
+      - "/usr/local/sbin/readelf"
+      - "/usr/sbin/readelf"
+      - "/sbin/readelf"
+      - "/opt/X11/bin/readelf"
+      - "/opt/gemini/bin/readelf"
+      - "/opt/jetbrains/bin/readelf"
+      - "/opt/mono/bin/readelf"
+      - "/Users/darran/.lmstudio/bin/readelf"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/clangd-lsp/1.0.0/bin/readelf"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/swift-lsp/1.0.0/bin/readelf"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/skill-creator/unknown/bin/readelf"
+    found: false
+    search_context:
+      ENV{PATH}:
+        - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin"
+        - "/opt/homebrew/opt/imagemagick-full/bin"
+        - "/Users/darran/.local/bin"
+        - "/Users/darran/Library/pnpm"
+        - "/opt/homebrew/opt/mysql-client@8.4/bin"
+        - "/Users/darran/Library/Python/3.9/bin"
+        - "/opt/homebrew/opt/php@8.1/bin"
+        - "/Users/darran/.nvm/versions/node/v22.22.0/bin"
+        - "~/bin"
+        - "/u/GIT/ZX/bin"
+        - "/usr/local/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/local/sbin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/opt/X11/bin"
+        - "/opt/gemini/bin"
+        - "/opt/homebrew/bin"
+        - "/opt/jetbrains/bin"
+        - "/opt/mono/bin"
+        - "/Users/darran/.lmstudio/bin"
+        - "/Users/darran/.claude/plugins/cache/claude-plugins-official/clangd-lsp/1.0.0/bin"
+        - "/Users/darran/.claude/plugins/cache/claude-plugins-official/swift-lsp/1.0.0/bin"
+        - "/Users/darran/.claude/plugins/cache/claude-plugins-official/skill-creator/unknown/bin"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
+      - "CMakeLists.txt:7 (project)"
+    mode: "program"
+    variable: "CMAKE_DLLTOOL"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "dlltool-15"
+      - "dlltool"
+    candidate_directories:
+      - "/opt/homebrew/bin/"
+      - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin/"
+      - "/opt/homebrew/opt/imagemagick-full/bin/"
+      - "/Users/darran/.local/bin/"
+      - "/Users/darran/Library/pnpm/"
+      - "/opt/homebrew/opt/mysql-client@8.4/bin/"
+      - "/Users/darran/Library/Python/3.9/bin/"
+      - "/opt/homebrew/opt/php@8.1/bin/"
+      - "/Users/darran/.nvm/versions/node/v22.22.0/bin/"
+      - "/Users/darran/bin/"
+      - "/u/GIT/ZX/bin/"
+      - "/usr/local/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/local/sbin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/opt/X11/bin/"
+      - "/opt/gemini/bin/"
+      - "/opt/jetbrains/bin/"
+      - "/opt/mono/bin/"
+      - "/Users/darran/.lmstudio/bin/"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/clangd-lsp/1.0.0/bin/"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/swift-lsp/1.0.0/bin/"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/skill-creator/unknown/bin/"
+    searched_directories:
+      - "/opt/homebrew/bin/dlltool-15"
+      - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin/dlltool-15"
+      - "/opt/homebrew/opt/imagemagick-full/bin/dlltool-15"
+      - "/Users/darran/.local/bin/dlltool-15"
+      - "/Users/darran/Library/pnpm/dlltool-15"
+      - "/opt/homebrew/opt/mysql-client@8.4/bin/dlltool-15"
+      - "/Users/darran/Library/Python/3.9/bin/dlltool-15"
+      - "/opt/homebrew/opt/php@8.1/bin/dlltool-15"
+      - "/Users/darran/.nvm/versions/node/v22.22.0/bin/dlltool-15"
+      - "/Users/darran/bin/dlltool-15"
+      - "/u/GIT/ZX/bin/dlltool-15"
+      - "/usr/local/bin/dlltool-15"
+      - "/usr/bin/dlltool-15"
+      - "/bin/dlltool-15"
+      - "/usr/local/sbin/dlltool-15"
+      - "/usr/sbin/dlltool-15"
+      - "/sbin/dlltool-15"
+      - "/opt/X11/bin/dlltool-15"
+      - "/opt/gemini/bin/dlltool-15"
+      - "/opt/jetbrains/bin/dlltool-15"
+      - "/opt/mono/bin/dlltool-15"
+      - "/Users/darran/.lmstudio/bin/dlltool-15"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/clangd-lsp/1.0.0/bin/dlltool-15"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/swift-lsp/1.0.0/bin/dlltool-15"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/skill-creator/unknown/bin/dlltool-15"
+      - "/opt/homebrew/bin/dlltool"
+      - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin/dlltool"
+      - "/opt/homebrew/opt/imagemagick-full/bin/dlltool"
+      - "/Users/darran/.local/bin/dlltool"
+      - "/Users/darran/Library/pnpm/dlltool"
+      - "/opt/homebrew/opt/mysql-client@8.4/bin/dlltool"
+      - "/Users/darran/Library/Python/3.9/bin/dlltool"
+      - "/opt/homebrew/opt/php@8.1/bin/dlltool"
+      - "/Users/darran/.nvm/versions/node/v22.22.0/bin/dlltool"
+      - "/Users/darran/bin/dlltool"
+      - "/u/GIT/ZX/bin/dlltool"
+      - "/usr/local/bin/dlltool"
+      - "/usr/bin/dlltool"
+      - "/bin/dlltool"
+      - "/usr/local/sbin/dlltool"
+      - "/usr/sbin/dlltool"
+      - "/sbin/dlltool"
+      - "/opt/X11/bin/dlltool"
+      - "/opt/gemini/bin/dlltool"
+      - "/opt/jetbrains/bin/dlltool"
+      - "/opt/mono/bin/dlltool"
+      - "/Users/darran/.lmstudio/bin/dlltool"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/clangd-lsp/1.0.0/bin/dlltool"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/swift-lsp/1.0.0/bin/dlltool"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/skill-creator/unknown/bin/dlltool"
+    found: false
+    search_context:
+      ENV{PATH}:
+        - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin"
+        - "/opt/homebrew/opt/imagemagick-full/bin"
+        - "/Users/darran/.local/bin"
+        - "/Users/darran/Library/pnpm"
+        - "/opt/homebrew/opt/mysql-client@8.4/bin"
+        - "/Users/darran/Library/Python/3.9/bin"
+        - "/opt/homebrew/opt/php@8.1/bin"
+        - "/Users/darran/.nvm/versions/node/v22.22.0/bin"
+        - "~/bin"
+        - "/u/GIT/ZX/bin"
+        - "/usr/local/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/local/sbin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/opt/X11/bin"
+        - "/opt/gemini/bin"
+        - "/opt/homebrew/bin"
+        - "/opt/jetbrains/bin"
+        - "/opt/mono/bin"
+        - "/Users/darran/.lmstudio/bin"
+        - "/Users/darran/.claude/plugins/cache/claude-plugins-official/clangd-lsp/1.0.0/bin"
+        - "/Users/darran/.claude/plugins/cache/claude-plugins-official/swift-lsp/1.0.0/bin"
+        - "/Users/darran/.claude/plugins/cache/claude-plugins-official/skill-creator/unknown/bin"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
+      - "CMakeLists.txt:7 (project)"
+    mode: "program"
+    variable: "CMAKE_ADDR2LINE"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "addr2line-15"
+      - "addr2line"
+    candidate_directories:
+      - "/opt/homebrew/bin/"
+      - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin/"
+      - "/opt/homebrew/opt/imagemagick-full/bin/"
+      - "/Users/darran/.local/bin/"
+      - "/Users/darran/Library/pnpm/"
+      - "/opt/homebrew/opt/mysql-client@8.4/bin/"
+      - "/Users/darran/Library/Python/3.9/bin/"
+      - "/opt/homebrew/opt/php@8.1/bin/"
+      - "/Users/darran/.nvm/versions/node/v22.22.0/bin/"
+      - "/Users/darran/bin/"
+      - "/u/GIT/ZX/bin/"
+      - "/usr/local/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/local/sbin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/opt/X11/bin/"
+      - "/opt/gemini/bin/"
+      - "/opt/jetbrains/bin/"
+      - "/opt/mono/bin/"
+      - "/Users/darran/.lmstudio/bin/"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/clangd-lsp/1.0.0/bin/"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/swift-lsp/1.0.0/bin/"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/skill-creator/unknown/bin/"
+    searched_directories:
+      - "/opt/homebrew/bin/addr2line-15"
+      - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin/addr2line-15"
+      - "/opt/homebrew/opt/imagemagick-full/bin/addr2line-15"
+      - "/Users/darran/.local/bin/addr2line-15"
+      - "/Users/darran/Library/pnpm/addr2line-15"
+      - "/opt/homebrew/opt/mysql-client@8.4/bin/addr2line-15"
+      - "/Users/darran/Library/Python/3.9/bin/addr2line-15"
+      - "/opt/homebrew/opt/php@8.1/bin/addr2line-15"
+      - "/Users/darran/.nvm/versions/node/v22.22.0/bin/addr2line-15"
+      - "/Users/darran/bin/addr2line-15"
+      - "/u/GIT/ZX/bin/addr2line-15"
+      - "/usr/local/bin/addr2line-15"
+      - "/usr/bin/addr2line-15"
+      - "/bin/addr2line-15"
+      - "/usr/local/sbin/addr2line-15"
+      - "/usr/sbin/addr2line-15"
+      - "/sbin/addr2line-15"
+      - "/opt/X11/bin/addr2line-15"
+      - "/opt/gemini/bin/addr2line-15"
+      - "/opt/jetbrains/bin/addr2line-15"
+      - "/opt/mono/bin/addr2line-15"
+      - "/Users/darran/.lmstudio/bin/addr2line-15"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/clangd-lsp/1.0.0/bin/addr2line-15"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/swift-lsp/1.0.0/bin/addr2line-15"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/skill-creator/unknown/bin/addr2line-15"
+      - "/opt/homebrew/bin/addr2line"
+      - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin/addr2line"
+      - "/opt/homebrew/opt/imagemagick-full/bin/addr2line"
+      - "/Users/darran/.local/bin/addr2line"
+      - "/Users/darran/Library/pnpm/addr2line"
+      - "/opt/homebrew/opt/mysql-client@8.4/bin/addr2line"
+      - "/Users/darran/Library/Python/3.9/bin/addr2line"
+      - "/opt/homebrew/opt/php@8.1/bin/addr2line"
+      - "/Users/darran/.nvm/versions/node/v22.22.0/bin/addr2line"
+      - "/Users/darran/bin/addr2line"
+      - "/u/GIT/ZX/bin/addr2line"
+      - "/usr/local/bin/addr2line"
+      - "/usr/bin/addr2line"
+      - "/bin/addr2line"
+      - "/usr/local/sbin/addr2line"
+      - "/usr/sbin/addr2line"
+      - "/sbin/addr2line"
+      - "/opt/X11/bin/addr2line"
+      - "/opt/gemini/bin/addr2line"
+      - "/opt/jetbrains/bin/addr2line"
+      - "/opt/mono/bin/addr2line"
+      - "/Users/darran/.lmstudio/bin/addr2line"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/clangd-lsp/1.0.0/bin/addr2line"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/swift-lsp/1.0.0/bin/addr2line"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/skill-creator/unknown/bin/addr2line"
+    found: false
+    search_context:
+      ENV{PATH}:
+        - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin"
+        - "/opt/homebrew/opt/imagemagick-full/bin"
+        - "/Users/darran/.local/bin"
+        - "/Users/darran/Library/pnpm"
+        - "/opt/homebrew/opt/mysql-client@8.4/bin"
+        - "/Users/darran/Library/Python/3.9/bin"
+        - "/opt/homebrew/opt/php@8.1/bin"
+        - "/Users/darran/.nvm/versions/node/v22.22.0/bin"
+        - "~/bin"
+        - "/u/GIT/ZX/bin"
+        - "/usr/local/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/local/sbin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/opt/X11/bin"
+        - "/opt/gemini/bin"
+        - "/opt/homebrew/bin"
+        - "/opt/jetbrains/bin"
+        - "/opt/mono/bin"
+        - "/Users/darran/.lmstudio/bin"
+        - "/Users/darran/.claude/plugins/cache/claude-plugins-official/clangd-lsp/1.0.0/bin"
+        - "/Users/darran/.claude/plugins/cache/claude-plugins-official/swift-lsp/1.0.0/bin"
+        - "/Users/darran/.claude/plugins/cache/claude-plugins-official/skill-creator/unknown/bin"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
+      - "CMakeLists.txt:7 (project)"
+    mode: "program"
+    variable: "CMAKE_TAPI"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "tapi-15"
+      - "tapi"
+    candidate_directories:
+      - "/opt/homebrew/bin/"
+      - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin/"
+      - "/opt/homebrew/opt/imagemagick-full/bin/"
+      - "/Users/darran/.local/bin/"
+      - "/Users/darran/Library/pnpm/"
+      - "/opt/homebrew/opt/mysql-client@8.4/bin/"
+      - "/Users/darran/Library/Python/3.9/bin/"
+      - "/opt/homebrew/opt/php@8.1/bin/"
+      - "/Users/darran/.nvm/versions/node/v22.22.0/bin/"
+      - "/Users/darran/bin/"
+      - "/u/GIT/ZX/bin/"
+      - "/usr/local/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/local/sbin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/opt/X11/bin/"
+      - "/opt/gemini/bin/"
+      - "/opt/jetbrains/bin/"
+      - "/opt/mono/bin/"
+      - "/Users/darran/.lmstudio/bin/"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/clangd-lsp/1.0.0/bin/"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/swift-lsp/1.0.0/bin/"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/skill-creator/unknown/bin/"
+    searched_directories:
+      - "/opt/homebrew/bin/tapi-15"
+      - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin/tapi-15"
+      - "/opt/homebrew/opt/imagemagick-full/bin/tapi-15"
+      - "/Users/darran/.local/bin/tapi-15"
+      - "/Users/darran/Library/pnpm/tapi-15"
+      - "/opt/homebrew/opt/mysql-client@8.4/bin/tapi-15"
+      - "/Users/darran/Library/Python/3.9/bin/tapi-15"
+      - "/opt/homebrew/opt/php@8.1/bin/tapi-15"
+      - "/Users/darran/.nvm/versions/node/v22.22.0/bin/tapi-15"
+      - "/Users/darran/bin/tapi-15"
+      - "/u/GIT/ZX/bin/tapi-15"
+      - "/usr/local/bin/tapi-15"
+      - "/usr/bin/tapi-15"
+      - "/bin/tapi-15"
+      - "/usr/local/sbin/tapi-15"
+      - "/usr/sbin/tapi-15"
+      - "/sbin/tapi-15"
+      - "/opt/X11/bin/tapi-15"
+      - "/opt/gemini/bin/tapi-15"
+      - "/opt/jetbrains/bin/tapi-15"
+      - "/opt/mono/bin/tapi-15"
+      - "/Users/darran/.lmstudio/bin/tapi-15"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/clangd-lsp/1.0.0/bin/tapi-15"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/swift-lsp/1.0.0/bin/tapi-15"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/skill-creator/unknown/bin/tapi-15"
+      - "/opt/homebrew/bin/tapi"
+      - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin/tapi"
+      - "/opt/homebrew/opt/imagemagick-full/bin/tapi"
+      - "/Users/darran/.local/bin/tapi"
+      - "/Users/darran/Library/pnpm/tapi"
+      - "/opt/homebrew/opt/mysql-client@8.4/bin/tapi"
+      - "/Users/darran/Library/Python/3.9/bin/tapi"
+      - "/opt/homebrew/opt/php@8.1/bin/tapi"
+      - "/Users/darran/.nvm/versions/node/v22.22.0/bin/tapi"
+      - "/Users/darran/bin/tapi"
+      - "/u/GIT/ZX/bin/tapi"
+      - "/usr/local/bin/tapi"
+      - "/usr/bin/tapi"
+      - "/bin/tapi"
+      - "/usr/local/sbin/tapi"
+      - "/usr/sbin/tapi"
+      - "/sbin/tapi"
+      - "/opt/X11/bin/tapi"
+      - "/opt/gemini/bin/tapi"
+      - "/opt/jetbrains/bin/tapi"
+      - "/opt/mono/bin/tapi"
+      - "/Users/darran/.lmstudio/bin/tapi"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/clangd-lsp/1.0.0/bin/tapi"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/swift-lsp/1.0.0/bin/tapi"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/skill-creator/unknown/bin/tapi"
+    found: false
+    search_context:
+      ENV{PATH}:
+        - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin"
+        - "/opt/homebrew/opt/imagemagick-full/bin"
+        - "/Users/darran/.local/bin"
+        - "/Users/darran/Library/pnpm"
+        - "/opt/homebrew/opt/mysql-client@8.4/bin"
+        - "/Users/darran/Library/Python/3.9/bin"
+        - "/opt/homebrew/opt/php@8.1/bin"
+        - "/Users/darran/.nvm/versions/node/v22.22.0/bin"
+        - "~/bin"
+        - "/u/GIT/ZX/bin"
+        - "/usr/local/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/local/sbin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/opt/X11/bin"
+        - "/opt/gemini/bin"
+        - "/opt/homebrew/bin"
+        - "/opt/jetbrains/bin"
+        - "/opt/mono/bin"
+        - "/Users/darran/.lmstudio/bin"
+        - "/Users/darran/.claude/plugins/cache/claude-plugins-official/clangd-lsp/1.0.0/bin"
+        - "/Users/darran/.claude/plugins/cache/claude-plugins-official/swift-lsp/1.0.0/bin"
+        - "/Users/darran/.claude/plugins/cache/claude-plugins-official/skill-creator/unknown/bin"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/Compiler/GNU-FindBinUtils.cmake:18 (find_program)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCCompiler.cmake:201 (include)"
+      - "CMakeLists.txt:7 (project)"
+    mode: "program"
+    variable: "CMAKE_C_COMPILER_AR"
+    description: "A wrapper around 'ar' adding the appropriate '--plugin' option for the GCC compiler"
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "gcc-ar-15.2"
+      - "gcc-ar-15"
+      - "gcc-ar15"
+      - "gcc-ar"
+    candidate_directories:
+      - "/opt/homebrew/bin/"
+      - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin/"
+      - "/opt/homebrew/opt/imagemagick-full/bin/"
+      - "/Users/darran/.local/bin/"
+      - "/Users/darran/Library/pnpm/"
+      - "/opt/homebrew/opt/mysql-client@8.4/bin/"
+      - "/Users/darran/Library/Python/3.9/bin/"
+      - "/opt/homebrew/opt/php@8.1/bin/"
+      - "/Users/darran/.nvm/versions/node/v22.22.0/bin/"
+      - "/Users/darran/bin/"
+      - "/u/GIT/ZX/bin/"
+      - "/usr/local/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/local/sbin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/opt/X11/bin/"
+      - "/opt/gemini/bin/"
+      - "/opt/jetbrains/bin/"
+      - "/opt/mono/bin/"
+      - "/Users/darran/.lmstudio/bin/"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/clangd-lsp/1.0.0/bin/"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/swift-lsp/1.0.0/bin/"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/skill-creator/unknown/bin/"
+    searched_directories:
+      - "/opt/homebrew/bin/gcc-ar-15.2"
+      - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin/gcc-ar-15.2"
+      - "/opt/homebrew/opt/imagemagick-full/bin/gcc-ar-15.2"
+      - "/Users/darran/.local/bin/gcc-ar-15.2"
+      - "/Users/darran/Library/pnpm/gcc-ar-15.2"
+      - "/opt/homebrew/opt/mysql-client@8.4/bin/gcc-ar-15.2"
+      - "/Users/darran/Library/Python/3.9/bin/gcc-ar-15.2"
+      - "/opt/homebrew/opt/php@8.1/bin/gcc-ar-15.2"
+      - "/Users/darran/.nvm/versions/node/v22.22.0/bin/gcc-ar-15.2"
+      - "/Users/darran/bin/gcc-ar-15.2"
+      - "/u/GIT/ZX/bin/gcc-ar-15.2"
+      - "/usr/local/bin/gcc-ar-15.2"
+      - "/usr/bin/gcc-ar-15.2"
+      - "/bin/gcc-ar-15.2"
+      - "/usr/local/sbin/gcc-ar-15.2"
+      - "/usr/sbin/gcc-ar-15.2"
+      - "/sbin/gcc-ar-15.2"
+      - "/opt/X11/bin/gcc-ar-15.2"
+      - "/opt/gemini/bin/gcc-ar-15.2"
+      - "/opt/jetbrains/bin/gcc-ar-15.2"
+      - "/opt/mono/bin/gcc-ar-15.2"
+      - "/Users/darran/.lmstudio/bin/gcc-ar-15.2"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/clangd-lsp/1.0.0/bin/gcc-ar-15.2"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/swift-lsp/1.0.0/bin/gcc-ar-15.2"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/skill-creator/unknown/bin/gcc-ar-15.2"
+    found: "/opt/homebrew/bin/gcc-ar-15"
+    search_context:
+      ENV{PATH}:
+        - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin"
+        - "/opt/homebrew/opt/imagemagick-full/bin"
+        - "/Users/darran/.local/bin"
+        - "/Users/darran/Library/pnpm"
+        - "/opt/homebrew/opt/mysql-client@8.4/bin"
+        - "/Users/darran/Library/Python/3.9/bin"
+        - "/opt/homebrew/opt/php@8.1/bin"
+        - "/Users/darran/.nvm/versions/node/v22.22.0/bin"
+        - "~/bin"
+        - "/u/GIT/ZX/bin"
+        - "/usr/local/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/local/sbin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/opt/X11/bin"
+        - "/opt/gemini/bin"
+        - "/opt/homebrew/bin"
+        - "/opt/jetbrains/bin"
+        - "/opt/mono/bin"
+        - "/Users/darran/.lmstudio/bin"
+        - "/Users/darran/.claude/plugins/cache/claude-plugins-official/clangd-lsp/1.0.0/bin"
+        - "/Users/darran/.claude/plugins/cache/claude-plugins-official/swift-lsp/1.0.0/bin"
+        - "/Users/darran/.claude/plugins/cache/claude-plugins-official/skill-creator/unknown/bin"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/Compiler/GNU-FindBinUtils.cmake:30 (find_program)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCCompiler.cmake:201 (include)"
+      - "CMakeLists.txt:7 (project)"
+    mode: "program"
+    variable: "CMAKE_C_COMPILER_RANLIB"
+    description: "A wrapper around 'ranlib' adding the appropriate '--plugin' option for the GCC compiler"
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "gcc-ranlib-15.2"
+      - "gcc-ranlib-15"
+      - "gcc-ranlib15"
+      - "gcc-ranlib"
+    candidate_directories:
+      - "/opt/homebrew/bin/"
+      - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin/"
+      - "/opt/homebrew/opt/imagemagick-full/bin/"
+      - "/Users/darran/.local/bin/"
+      - "/Users/darran/Library/pnpm/"
+      - "/opt/homebrew/opt/mysql-client@8.4/bin/"
+      - "/Users/darran/Library/Python/3.9/bin/"
+      - "/opt/homebrew/opt/php@8.1/bin/"
+      - "/Users/darran/.nvm/versions/node/v22.22.0/bin/"
+      - "/Users/darran/bin/"
+      - "/u/GIT/ZX/bin/"
+      - "/usr/local/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/local/sbin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/opt/X11/bin/"
+      - "/opt/gemini/bin/"
+      - "/opt/jetbrains/bin/"
+      - "/opt/mono/bin/"
+      - "/Users/darran/.lmstudio/bin/"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/clangd-lsp/1.0.0/bin/"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/swift-lsp/1.0.0/bin/"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/skill-creator/unknown/bin/"
+    searched_directories:
+      - "/opt/homebrew/bin/gcc-ranlib-15.2"
+      - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin/gcc-ranlib-15.2"
+      - "/opt/homebrew/opt/imagemagick-full/bin/gcc-ranlib-15.2"
+      - "/Users/darran/.local/bin/gcc-ranlib-15.2"
+      - "/Users/darran/Library/pnpm/gcc-ranlib-15.2"
+      - "/opt/homebrew/opt/mysql-client@8.4/bin/gcc-ranlib-15.2"
+      - "/Users/darran/Library/Python/3.9/bin/gcc-ranlib-15.2"
+      - "/opt/homebrew/opt/php@8.1/bin/gcc-ranlib-15.2"
+      - "/Users/darran/.nvm/versions/node/v22.22.0/bin/gcc-ranlib-15.2"
+      - "/Users/darran/bin/gcc-ranlib-15.2"
+      - "/u/GIT/ZX/bin/gcc-ranlib-15.2"
+      - "/usr/local/bin/gcc-ranlib-15.2"
+      - "/usr/bin/gcc-ranlib-15.2"
+      - "/bin/gcc-ranlib-15.2"
+      - "/usr/local/sbin/gcc-ranlib-15.2"
+      - "/usr/sbin/gcc-ranlib-15.2"
+      - "/sbin/gcc-ranlib-15.2"
+      - "/opt/X11/bin/gcc-ranlib-15.2"
+      - "/opt/gemini/bin/gcc-ranlib-15.2"
+      - "/opt/jetbrains/bin/gcc-ranlib-15.2"
+      - "/opt/mono/bin/gcc-ranlib-15.2"
+      - "/Users/darran/.lmstudio/bin/gcc-ranlib-15.2"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/clangd-lsp/1.0.0/bin/gcc-ranlib-15.2"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/swift-lsp/1.0.0/bin/gcc-ranlib-15.2"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/skill-creator/unknown/bin/gcc-ranlib-15.2"
+    found: "/opt/homebrew/bin/gcc-ranlib-15"
+    search_context:
+      ENV{PATH}:
+        - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin"
+        - "/opt/homebrew/opt/imagemagick-full/bin"
+        - "/Users/darran/.local/bin"
+        - "/Users/darran/Library/pnpm"
+        - "/opt/homebrew/opt/mysql-client@8.4/bin"
+        - "/Users/darran/Library/Python/3.9/bin"
+        - "/opt/homebrew/opt/php@8.1/bin"
+        - "/Users/darran/.nvm/versions/node/v22.22.0/bin"
+        - "~/bin"
+        - "/u/GIT/ZX/bin"
+        - "/usr/local/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/local/sbin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/opt/X11/bin"
+        - "/opt/gemini/bin"
+        - "/opt/homebrew/bin"
+        - "/opt/jetbrains/bin"
+        - "/opt/mono/bin"
+        - "/Users/darran/.lmstudio/bin"
+        - "/Users/darran/.claude/plugins/cache/claude-plugins-official/clangd-lsp/1.0.0/bin"
+        - "/Users/darran/.claude/plugins/cache/claude-plugins-official/swift-lsp/1.0.0/bin"
+        - "/Users/darran/.claude/plugins/cache/claude-plugins-official/skill-creator/unknown/bin"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/Platform/Darwin.cmake:66 (find_program)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeSystemSpecificInformation.cmake:32 (include)"
+      - "CMakeLists.txt:7 (project)"
+    mode: "program"
+    variable: "CMAKE_INSTALL_NAME_TOOL"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: true
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "install_name_tool"
+    candidate_directories:
+      - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin/"
+      - "/opt/homebrew/opt/imagemagick-full/bin/"
+      - "/Users/darran/.local/bin/"
+      - "/Users/darran/Library/pnpm/"
+      - "/opt/homebrew/opt/mysql-client@8.4/bin/"
+      - "/Users/darran/Library/Python/3.9/bin/"
+      - "/opt/homebrew/opt/php@8.1/bin/"
+      - "/Users/darran/.nvm/versions/node/v22.22.0/bin/"
+      - "/Users/darran/bin/"
+      - "/u/GIT/ZX/bin/"
+      - "/usr/local/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/local/sbin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/opt/X11/bin/"
+      - "/opt/gemini/bin/"
+      - "/opt/homebrew/bin/"
+      - "/opt/jetbrains/bin/"
+      - "/opt/mono/bin/"
+      - "/Users/darran/.lmstudio/bin/"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/clangd-lsp/1.0.0/bin/"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/swift-lsp/1.0.0/bin/"
+      - "/Users/darran/.claude/plugins/cache/claude-plugins-official/skill-creator/unknown/bin/"
+    searched_directories:
+      - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin/install_name_tool"
+      - "/opt/homebrew/opt/imagemagick-full/bin/install_name_tool"
+      - "/Users/darran/.local/bin/install_name_tool"
+      - "/Users/darran/Library/pnpm/install_name_tool"
+      - "/opt/homebrew/opt/mysql-client@8.4/bin/install_name_tool"
+      - "/Users/darran/Library/Python/3.9/bin/install_name_tool"
+      - "/opt/homebrew/opt/php@8.1/bin/install_name_tool"
+      - "/Users/darran/.nvm/versions/node/v22.22.0/bin/install_name_tool"
+      - "/Users/darran/bin/install_name_tool"
+      - "/u/GIT/ZX/bin/install_name_tool"
+      - "/usr/local/bin/install_name_tool"
+    found: "/usr/bin/install_name_tool"
+    search_context:
+      ENV{PATH}:
+        - "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/bin"
+        - "/opt/homebrew/opt/imagemagick-full/bin"
+        - "/Users/darran/.local/bin"
+        - "/Users/darran/Library/pnpm"
+        - "/opt/homebrew/opt/mysql-client@8.4/bin"
+        - "/Users/darran/Library/Python/3.9/bin"
+        - "/opt/homebrew/opt/php@8.1/bin"
+        - "/Users/darran/.nvm/versions/node/v22.22.0/bin"
+        - "~/bin"
+        - "/u/GIT/ZX/bin"
+        - "/usr/local/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/local/sbin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/opt/X11/bin"
+        - "/opt/gemini/bin"
+        - "/opt/homebrew/bin"
+        - "/opt/jetbrains/bin"
+        - "/opt/mono/bin"
+        - "/Users/darran/.lmstudio/bin"
+        - "/Users/darran/.claude/plugins/cache/claude-plugins-official/clangd-lsp/1.0.0/bin"
+        - "/Users/darran/.claude/plugins/cache/claude-plugins-official/swift-lsp/1.0.0/bin"
+        - "/Users/darran/.claude/plugins/cache/claude-plugins-official/skill-creator/unknown/bin"
+      CMAKE_INSTALL_PREFIX: "/usr/local"
+  -
+    kind: "try_compile-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerABI.cmake:83 (try_compile)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeTestCCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt:7 (project)"
+    checks:
+      - "Detecting C compiler ABI info"
+    directories:
+      source: "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/CMakeFiles/CMakeScratch/TryCompile-x53rGw"
+      binary: "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/CMakeFiles/CMakeScratch/TryCompile-x53rGw"
+    cmakeVariables:
+      CMAKE_C_FLAGS: ""
+      CMAKE_C_FLAGS_DEBUG: "-g"
+      CMAKE_EXE_LINKER_FLAGS: ""
+      CMAKE_OSX_ARCHITECTURES: ""
+      CMAKE_OSX_DEPLOYMENT_TARGET: ""
+      CMAKE_OSX_SYSROOT: ""
+    buildResult:
+      variable: "CMAKE_C_ABI_COMPILED"
+      cached: true
+      stdout: |
+        Change Dir: '/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/CMakeFiles/CMakeScratch/TryCompile-x53rGw'
+        
+        Run Build Command(s): /opt/homebrew/bin/cmake -E env VERBOSE=1 /opt/homebrew/bin/gmake -f Makefile cmTC_bb23a/fast
+        /opt/homebrew/bin/gmake  -f CMakeFiles/cmTC_bb23a.dir/build.make CMakeFiles/cmTC_bb23a.dir/build
+        gmake[1]: Entering directory '/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/CMakeFiles/CMakeScratch/TryCompile-x53rGw'
+        Building C object CMakeFiles/cmTC_bb23a.dir/CMakeCCompilerABI.c.o
+        /opt/homebrew/bin/gcc-15   -arch arm64   -v -Wl,-v -o CMakeFiles/cmTC_bb23a.dir/CMakeCCompilerABI.c.o -c /opt/homebrew/share/cmake/Modules/CMakeCCompilerABI.c
+        Using built-in specs.
+        COLLECT_GCC=/opt/homebrew/bin/gcc-15
+        Target: aarch64-apple-darwin24
+        Configured with: ../configure --prefix=/opt/homebrew/opt/gcc --libdir=/opt/homebrew/opt/gcc/lib/gcc/current --disable-nls --enable-checking=release --with-gcc-major-version-only --enable-languages=c,c++,objc,obj-c++,fortran --program-suffix=-15 --with-gmp=/opt/homebrew/opt/gmp --with-mpfr=/opt/homebrew/opt/mpfr --with-mpc=/opt/homebrew/opt/libmpc --with-isl=/opt/homebrew/opt/isl --with-zstd=/opt/homebrew/opt/zstd --with-pkgversion='Homebrew GCC 15.2.0_1' --with-bugurl=https://github.com/Homebrew/homebrew-core/issues --with-system-zlib --build=aarch64-apple-darwin24 --with-sysroot=/Library/Developer/CommandLineTools/SDKs/MacOSX15.sdk
+        Thread model: posix
+        Supported LTO compression algorithms: zlib zstd
+        gcc version 15.2.0 (Homebrew GCC 15.2.0_1) 
+        COLLECT_GCC_OPTIONS='-v' '-o' 'CMakeFiles/cmTC_bb23a.dir/CMakeCCompilerABI.c.o' '-c' '-mmacosx-version-min=26.0.0' '-asm_macosx_version_min=26.0' '-nodefaultexport' '-mcpu=apple-m1' '-mlittle-endian' '-mabi=lp64' '-dumpdir' 'CMakeFiles/cmTC_bb23a.dir/'
+         /opt/homebrew/Cellar/gcc/15.2.0_1/bin/../libexec/gcc/aarch64-apple-darwin24/15/cc1 -quiet -v -iprefix /opt/homebrew/Cellar/gcc/15.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin24/15/ -D__DYNAMIC__ /opt/homebrew/share/cmake/Modules/CMakeCCompilerABI.c -fPIC -quiet -dumpdir CMakeFiles/cmTC_bb23a.dir/ -dumpbase CMakeCCompilerABI.c.c -dumpbase-ext .c -mmacosx-version-min=26.0.0 -mcpu=apple-m1 -mlittle-endian -mabi=lp64 -version -o /var/folders/tb/dv1z6qnx7pq9qh3yzs21c5mm0000gn/T//ccxuSvMA.s
+        GNU C23 (Homebrew GCC 15.2.0_1) version 15.2.0 (aarch64-apple-darwin24)
+        	compiled by GNU C version 15.2.0, GMP version 6.3.0, MPFR version 4.2.2, MPC version 1.3.1, isl version isl-0.27-GMP
+        
+        warning: MPC header version 1.3.1 differs from library version 1.4.1.
+        GGC heuristics: --param ggc-min-expand=100 --param ggc-min-heapsize=131072
+        ignoring nonexistent directory "/opt/homebrew/Cellar/gcc/15.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin24/15/../../../../../../aarch64-apple-darwin24/include"
+        ignoring duplicate directory "/opt/homebrew/Cellar/gcc/15.2.0_1/bin/../lib/gcc/current/gcc/../../../../lib/gcc/current/gcc/aarch64-apple-darwin24/15/include"
+        ignoring nonexistent directory "/Library/Developer/CommandLineTools/SDKs/MacOSX15.sdk/usr/local/include"
+        ignoring duplicate directory "/opt/homebrew/Cellar/gcc/15.2.0_1/bin/../lib/gcc/current/gcc/../../../../lib/gcc/current/gcc/aarch64-apple-darwin24/15/include-fixed"
+        ignoring nonexistent directory "/opt/homebrew/Cellar/gcc/15.2.0_1/bin/../lib/gcc/current/gcc/../../../../lib/gcc/current/gcc/aarch64-apple-darwin24/15/../../../../../../aarch64-apple-darwin24/include"
+        ignoring nonexistent directory "/Library/Developer/CommandLineTools/SDKs/MacOSX15.sdk/Library/Frameworks"
+        #include "..." search starts here:
+        #include <...> search starts here:
+         /opt/homebrew/Cellar/gcc/15.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin24/15/include
+         /opt/homebrew/Cellar/gcc/15.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin24/15/include-fixed
+         /Library/Developer/CommandLineTools/SDKs/MacOSX15.sdk/usr/include
+         /Library/Developer/CommandLineTools/SDKs/MacOSX15.sdk/System/Library/Frameworks
+        End of search list.
+        Compiler executable checksum: ebb883bc51fff6f70adecfada1b0d06f
+        COLLECT_GCC_OPTIONS='-v' '-o' 'CMakeFiles/cmTC_bb23a.dir/CMakeCCompilerABI.c.o' '-c' '-mmacosx-version-min=26.0.0'  '-nodefaultexport' '-mcpu=apple-m1' '-mlittle-endian' '-mabi=lp64' '-dumpdir' 'CMakeFiles/cmTC_bb23a.dir/'
+         as -arch arm64 -v -mmacosx-version-min=26.0 -o CMakeFiles/cmTC_bb23a.dir/CMakeCCompilerABI.c.o /var/folders/tb/dv1z6qnx7pq9qh3yzs21c5mm0000gn/T//ccxuSvMA.s
+        Apple clang version 21.0.0 (clang-2100.1.1.101)
+        Target: arm64-apple-darwin25.5.0
+        Thread model: posix
+        InstalledDir: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin
+         "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang" -cc1as -triple arm64-apple-macosx26.0.0 -target-sdk-version=26.5 -filetype obj -main-file-name ccxuSvMA.s -target-cpu apple-m1 -target-feature +v8.5a -target-feature +aes -target-feature +altnzcv -target-feature +ccdp -target-feature +ccpp -target-feature +complxnum -target-feature +crc -target-feature +dotprod -target-feature +flagm -target-feature +fp-armv8 -target-feature +fp16fml -target-feature +fptoint -target-feature +fullfp16 -target-feature +jsconv -target-feature +lse -target-feature +neon -target-feature +pauth -target-feature +perfmon -target-feature +predres -target-feature +ras -target-feature +rcpc -target-feature +rdm -target-feature +sb -target-feature +sha2 -target-feature +sha3 -target-feature +specrestrict -target-feature +ssbs -fdebug-compilation-dir=/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/CMakeFiles/CMakeScratch/TryCompile-x53rGw -dwarf-debug-producer "Apple clang version 21.0.0 (clang-2100.1.1.101)" -dwarf-version=5 -mrelocation-model pic -o CMakeFiles/cmTC_bb23a.dir/CMakeCCompilerABI.c.o /var/folders/tb/dv1z6qnx7pq9qh3yzs21c5mm0000gn/T//ccxuSvMA.s
+        COMPILER_PATH=/opt/homebrew/Cellar/gcc/15.2.0_1/bin/../libexec/gcc/aarch64-apple-darwin24/15/:/opt/homebrew/Cellar/gcc/15.2.0_1/bin/../libexec/gcc/
+        LIBRARY_PATH=/opt/homebrew/Cellar/gcc/15.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin24/15/:/opt/homebrew/Cellar/gcc/15.2.0_1/bin/../lib/gcc/current/gcc/:/opt/homebrew/Cellar/gcc/15.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin24/15/../../../
+        COLLECT_GCC_OPTIONS='-v' '-o' 'CMakeFiles/cmTC_bb23a.dir/CMakeCCompilerABI.c.o' '-c' '-mmacosx-version-min=26.0.0'  '-nodefaultexport' '-mcpu=apple-m1' '-mlittle-endian' '-mabi=lp64' '-dumpdir' 'CMakeFiles/cmTC_bb23a.dir/CMakeCCompilerABI.c.'
+        Linking C executable cmTC_bb23a
+        /opt/homebrew/bin/cmake -E cmake_link_script CMakeFiles/cmTC_bb23a.dir/link.txt --verbose=1
+        Using built-in specs.
+        COLLECT_GCC=/opt/homebrew/bin/gcc-15
+        COLLECT_LTO_WRAPPER=/opt/homebrew/Cellar/gcc/15.2.0_1/bin/../libexec/gcc/aarch64-apple-darwin24/15/lto-wrapper
+        Target: aarch64-apple-darwin24
+        Configured with: ../configure --prefix=/opt/homebrew/opt/gcc --libdir=/opt/homebrew/opt/gcc/lib/gcc/current --disable-nls --enable-checking=release --with-gcc-major-version-only --enable-languages=c,c++,objc,obj-c++,fortran --program-suffix=-15 --with-gmp=/opt/homebrew/opt/gmp --with-mpfr=/opt/homebrew/opt/mpfr --with-mpc=/opt/homebrew/opt/libmpc --with-isl=/opt/homebrew/opt/isl --with-zstd=/opt/homebrew/opt/zstd --with-pkgversion='Homebrew GCC 15.2.0_1' --with-bugurl=https://github.com/Homebrew/homebrew-core/issues --with-system-zlib --build=aarch64-apple-darwin24 --with-sysroot=/Library/Developer/CommandLineTools/SDKs/MacOSX15.sdk
+        Thread model: posix
+        Supported LTO compression algorithms: zlib zstd
+        gcc version 15.2.0 (Homebrew GCC 15.2.0_1) 
+        COMPILER_PATH=/opt/homebrew/Cellar/gcc/15.2.0_1/bin/../libexec/gcc/aarch64-apple-darwin24/15/:/opt/homebrew/Cellar/gcc/15.2.0_1/bin/../libexec/gcc/
+        LIBRARY_PATH=/opt/homebrew/Cellar/gcc/15.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin24/15/:/opt/homebrew/Cellar/gcc/15.2.0_1/bin/../lib/gcc/current/gcc/:/opt/homebrew/Cellar/gcc/15.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin24/15/../../../
+        COLLECT_GCC_OPTIONS='-v' '-o' 'cmTC_bb23a' '-mmacosx-version-min=26.0.0' '-asm_macosx_version_min=26.0' '-nodefaultexport' '-mcpu=apple-m1' '-mlittle-endian' '-mabi=lp64' '-dumpdir' 'cmTC_bb23a.'
+         /opt/homebrew/Cellar/gcc/15.2.0_1/bin/../libexec/gcc/aarch64-apple-darwin24/15/collect2 -demangle -syslibroot /Library/Developer/CommandLineTools/SDKs/MacOSX15.sdk/ -dynamic -arch arm64 -macos_version_min 26.0.0 -o cmTC_bb23a -L/opt/homebrew/Cellar/gcc/15.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin24/15 -L/opt/homebrew/Cellar/gcc/15.2.0_1/bin/../lib/gcc/current/gcc -L/opt/homebrew/Cellar/gcc/15.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin24/15/../../.. -lemutls_w -lheapt_w -v CMakeFiles/cmTC_bb23a.dir/CMakeCCompilerABI.c.o -lgcc -lSystem -no_compact_unwind -rpath @loader_path -rpath /opt/homebrew/Cellar/gcc/15.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin24/15 -rpath /opt/homebrew/Cellar/gcc/15.2.0_1/lib/gcc/current/gcc -rpath /opt/homebrew/Cellar/gcc/15.2.0_1/lib/gcc/current
+        collect2 version 15.2.0
+        /usr/bin/ld -demangle -syslibroot /Library/Developer/CommandLineTools/SDKs/MacOSX15.sdk/ -dynamic -arch arm64 -macos_version_min 26.0.0 -o cmTC_bb23a -L/opt/homebrew/Cellar/gcc/15.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin24/15 -L/opt/homebrew/Cellar/gcc/15.2.0_1/bin/../lib/gcc/current/gcc -L/opt/homebrew/Cellar/gcc/15.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin24/15/../../.. -lemutls_w -lheapt_w -v CMakeFiles/cmTC_bb23a.dir/CMakeCCompilerABI.c.o -lgcc -lSystem -no_compact_unwind -rpath @loader_path -rpath /opt/homebrew/Cellar/gcc/15.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin24/15 -rpath /opt/homebrew/Cellar/gcc/15.2.0_1/lib/gcc/current/gcc -rpath /opt/homebrew/Cellar/gcc/15.2.0_1/lib/gcc/current
+        @(#)PROGRAM:ld PROJECT:ld-1267
+        BUILD 18:30:29 Apr 22 2026
+        configured to support archs: armv6 armv7 armv7s arm64 arm64e arm64_32 i386 x86_64 x86_64h armv6m armv7k armv7m armv7em armv8m.main armv8.1m.main
+        will use ld-classic for: armv6 armv7 armv7s i386 armv6m armv7k armv7m armv7em
+        LTO support using: LLVM version 21.0.0 (static support for 30, runtime is 30)
+        TAPI support using: Apple TAPI version 21.0.0 (tapi-2100.0.2.6)
+        Library search paths:
+        	/opt/homebrew/Cellar/gcc/15.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin24/15
+        	/opt/homebrew/Cellar/gcc/15.2.0_1/lib/gcc/current/gcc
+        	/opt/homebrew/Cellar/gcc/15.2.0_1/lib/gcc/current
+        	/Library/Developer/CommandLineTools/SDKs/MacOSX15.sdk/usr/lib
+        	/Library/Developer/CommandLineTools/SDKs/MacOSX15.sdk/usr/lib/swift
+        Framework search paths:
+        	/Library/Developer/CommandLineTools/SDKs/MacOSX15.sdk/System/Library/Frameworks
+        /opt/homebrew/bin/gcc-15  -arch arm64  -v -Wl,-v CMakeFiles/cmTC_bb23a.dir/CMakeCCompilerABI.c.o -o cmTC_bb23a
+        gmake[1]: Leaving directory '/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/CMakeFiles/CMakeScratch/TryCompile-x53rGw'
+        
+      exitCode: 0
+  -
+    kind: "message-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerABI.cmake:122 (message)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeTestCCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt:7 (project)"
+    message: |
+      Effective list of requested architectures (possibly empty)  : ""
+      Effective list of architectures found in the ABI info binary: "arm64"
+  -
+    kind: "message-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerABI.cmake:217 (message)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeTestCCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt:7 (project)"
+    message: |
+      Parsed C implicit include dir info: rv=done
+        found start of include info
+        found start of implicit include info
+          add: [/opt/homebrew/Cellar/gcc/15.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin24/15/include]
+          add: [/opt/homebrew/Cellar/gcc/15.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin24/15/include-fixed]
+          add: [/Library/Developer/CommandLineTools/SDKs/MacOSX15.sdk/usr/include]
+          add: [/Library/Developer/CommandLineTools/SDKs/MacOSX15.sdk/System/Library/Frameworks]
+        end of search list found
+        collapse include dir [/opt/homebrew/Cellar/gcc/15.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin24/15/include] ==> [/opt/homebrew/Cellar/gcc/15.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin24/15/include]
+        collapse include dir [/opt/homebrew/Cellar/gcc/15.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin24/15/include-fixed] ==> [/opt/homebrew/Cellar/gcc/15.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin24/15/include-fixed]
+        collapse include dir [/Library/Developer/CommandLineTools/SDKs/MacOSX15.sdk/usr/include] ==> [/Library/Developer/CommandLineTools/SDKs/MacOSX15.sdk/usr/include]
+        collapse include dir [/Library/Developer/CommandLineTools/SDKs/MacOSX15.sdk/System/Library/Frameworks] ==> [/Library/Developer/CommandLineTools/SDKs/MacOSX15.sdk/System/Library/Frameworks]
+        implicit include dirs: [/opt/homebrew/Cellar/gcc/15.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin24/15/include;/opt/homebrew/Cellar/gcc/15.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin24/15/include-fixed;/Library/Developer/CommandLineTools/SDKs/MacOSX15.sdk/usr/include;/Library/Developer/CommandLineTools/SDKs/MacOSX15.sdk/System/Library/Frameworks]
+      
+      
+  -
+    kind: "message-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerABI.cmake:253 (message)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeTestCCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt:7 (project)"
+    message: |
+      Parsed C implicit link information:
+        link line regex: [^( *|.*[/\\])(ld[0-9]*(|\\.[a-rt-z][a-z]*|\\.s[a-np-z][a-z]*|\\.so[a-z]+)|CMAKE_LINK_STARTFILE-NOTFOUND|([^/\\]+-)?ld|collect2)[^/\\]*( |$)]
+        linker tool regex: [^[ 	]*(->|"|[0-9]+>[ 	-]*Build:[ 	0-9]+ ms[ 	]*)?[ 	]*(([^"]*[/\\])?(ld[0-9]*(|\\.[a-rt-z][a-z]*|\\.s[a-np-z][a-z]*|\\.so[a-z]+)))("|,| |$)]
+        ignore line: [Change Dir: '/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/CMakeFiles/CMakeScratch/TryCompile-x53rGw']
+        ignore line: []
+        ignore line: [Run Build Command(s): /opt/homebrew/bin/cmake -E env VERBOSE=1 /opt/homebrew/bin/gmake -f Makefile cmTC_bb23a/fast]
+        ignore line: [/opt/homebrew/bin/gmake  -f CMakeFiles/cmTC_bb23a.dir/build.make CMakeFiles/cmTC_bb23a.dir/build]
+        ignore line: [gmake[1]: Entering directory '/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/CMakeFiles/CMakeScratch/TryCompile-x53rGw']
+        ignore line: [Building C object CMakeFiles/cmTC_bb23a.dir/CMakeCCompilerABI.c.o]
+        ignore line: [/opt/homebrew/bin/gcc-15   -arch arm64   -v -Wl -v -o CMakeFiles/cmTC_bb23a.dir/CMakeCCompilerABI.c.o -c /opt/homebrew/share/cmake/Modules/CMakeCCompilerABI.c]
+        ignore line: [Using built-in specs.]
+        ignore line: [COLLECT_GCC=/opt/homebrew/bin/gcc-15]
+        ignore line: [Target: aarch64-apple-darwin24]
+        ignore line: [Configured with: ../configure --prefix=/opt/homebrew/opt/gcc --libdir=/opt/homebrew/opt/gcc/lib/gcc/current --disable-nls --enable-checking=release --with-gcc-major-version-only --enable-languages=c c++ objc obj-c++ fortran --program-suffix=-15 --with-gmp=/opt/homebrew/opt/gmp --with-mpfr=/opt/homebrew/opt/mpfr --with-mpc=/opt/homebrew/opt/libmpc --with-isl=/opt/homebrew/opt/isl --with-zstd=/opt/homebrew/opt/zstd --with-pkgversion='Homebrew GCC 15.2.0_1' --with-bugurl=https://github.com/Homebrew/homebrew-core/issues --with-system-zlib --build=aarch64-apple-darwin24 --with-sysroot=/Library/Developer/CommandLineTools/SDKs/MacOSX15.sdk]
+        ignore line: [Thread model: posix]
+        ignore line: [Supported LTO compression algorithms: zlib zstd]
+        ignore line: [gcc version 15.2.0 (Homebrew GCC 15.2.0_1) ]
+        ignore line: [COLLECT_GCC_OPTIONS='-v' '-o' 'CMakeFiles/cmTC_bb23a.dir/CMakeCCompilerABI.c.o' '-c' '-mmacosx-version-min=26.0.0' '-asm_macosx_version_min=26.0' '-nodefaultexport' '-mcpu=apple-m1' '-mlittle-endian' '-mabi=lp64' '-dumpdir' 'CMakeFiles/cmTC_bb23a.dir/']
+        ignore line: [ /opt/homebrew/Cellar/gcc/15.2.0_1/bin/../libexec/gcc/aarch64-apple-darwin24/15/cc1 -quiet -v -iprefix /opt/homebrew/Cellar/gcc/15.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin24/15/ -D__DYNAMIC__ /opt/homebrew/share/cmake/Modules/CMakeCCompilerABI.c -fPIC -quiet -dumpdir CMakeFiles/cmTC_bb23a.dir/ -dumpbase CMakeCCompilerABI.c.c -dumpbase-ext .c -mmacosx-version-min=26.0.0 -mcpu=apple-m1 -mlittle-endian -mabi=lp64 -version -o /var/folders/tb/dv1z6qnx7pq9qh3yzs21c5mm0000gn/T//ccxuSvMA.s]
+        ignore line: [GNU C23 (Homebrew GCC 15.2.0_1) version 15.2.0 (aarch64-apple-darwin24)]
+        ignore line: [	compiled by GNU C version 15.2.0  GMP version 6.3.0  MPFR version 4.2.2  MPC version 1.3.1  isl version isl-0.27-GMP]
+        ignore line: []
+        ignore line: [warning: MPC header version 1.3.1 differs from library version 1.4.1.]
+        ignore line: [GGC heuristics: --param ggc-min-expand=100 --param ggc-min-heapsize=131072]
+        ignore line: [ignoring nonexistent directory "/opt/homebrew/Cellar/gcc/15.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin24/15/../../../../../../aarch64-apple-darwin24/include"]
+        ignore line: [ignoring duplicate directory "/opt/homebrew/Cellar/gcc/15.2.0_1/bin/../lib/gcc/current/gcc/../../../../lib/gcc/current/gcc/aarch64-apple-darwin24/15/include"]
+        ignore line: [ignoring nonexistent directory "/Library/Developer/CommandLineTools/SDKs/MacOSX15.sdk/usr/local/include"]
+        ignore line: [ignoring duplicate directory "/opt/homebrew/Cellar/gcc/15.2.0_1/bin/../lib/gcc/current/gcc/../../../../lib/gcc/current/gcc/aarch64-apple-darwin24/15/include-fixed"]
+        ignore line: [ignoring nonexistent directory "/opt/homebrew/Cellar/gcc/15.2.0_1/bin/../lib/gcc/current/gcc/../../../../lib/gcc/current/gcc/aarch64-apple-darwin24/15/../../../../../../aarch64-apple-darwin24/include"]
+        ignore line: [ignoring nonexistent directory "/Library/Developer/CommandLineTools/SDKs/MacOSX15.sdk/Library/Frameworks"]
+        ignore line: [#include "..." search starts here:]
+        ignore line: [#include <...> search starts here:]
+        ignore line: [ /opt/homebrew/Cellar/gcc/15.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin24/15/include]
+        ignore line: [ /opt/homebrew/Cellar/gcc/15.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin24/15/include-fixed]
+        ignore line: [ /Library/Developer/CommandLineTools/SDKs/MacOSX15.sdk/usr/include]
+        ignore line: [ /Library/Developer/CommandLineTools/SDKs/MacOSX15.sdk/System/Library/Frameworks]
+        ignore line: [End of search list.]
+        ignore line: [Compiler executable checksum: ebb883bc51fff6f70adecfada1b0d06f]
+        ignore line: [COLLECT_GCC_OPTIONS='-v' '-o' 'CMakeFiles/cmTC_bb23a.dir/CMakeCCompilerABI.c.o' '-c' '-mmacosx-version-min=26.0.0'  '-nodefaultexport' '-mcpu=apple-m1' '-mlittle-endian' '-mabi=lp64' '-dumpdir' 'CMakeFiles/cmTC_bb23a.dir/']
+        ignore line: [ as -arch arm64 -v -mmacosx-version-min=26.0 -o CMakeFiles/cmTC_bb23a.dir/CMakeCCompilerABI.c.o /var/folders/tb/dv1z6qnx7pq9qh3yzs21c5mm0000gn/T//ccxuSvMA.s]
+        ignore line: [Apple clang version 21.0.0 (clang-2100.1.1.101)]
+        ignore line: [Target: arm64-apple-darwin25.5.0]
+        ignore line: [Thread model: posix]
+        ignore line: [InstalledDir: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin]
+        ignore line: [ "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang" -cc1as -triple arm64-apple-macosx26.0.0 -target-sdk-version=26.5 -filetype obj -main-file-name ccxuSvMA.s -target-cpu apple-m1 -target-feature +v8.5a -target-feature +aes -target-feature +altnzcv -target-feature +ccdp -target-feature +ccpp -target-feature +complxnum -target-feature +crc -target-feature +dotprod -target-feature +flagm -target-feature +fp-armv8 -target-feature +fp16fml -target-feature +fptoint -target-feature +fullfp16 -target-feature +jsconv -target-feature +lse -target-feature +neon -target-feature +pauth -target-feature +perfmon -target-feature +predres -target-feature +ras -target-feature +rcpc -target-feature +rdm -target-feature +sb -target-feature +sha2 -target-feature +sha3 -target-feature +specrestrict -target-feature +ssbs -fdebug-compilation-dir=/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/CMakeFiles/CMakeScratch/TryCompile-x53rGw -dwarf-debug-producer "Apple clang version 21.0.0 (clang-2100.1.1.101)" -dwarf-version=5 -mrelocation-model pic -o CMakeFiles/cmTC_bb23a.dir/CMakeCCompilerABI.c.o /var/folders/tb/dv1z6qnx7pq9qh3yzs21c5mm0000gn/T//ccxuSvMA.s]
+        ignore line: [COMPILER_PATH=/opt/homebrew/Cellar/gcc/15.2.0_1/bin/../libexec/gcc/aarch64-apple-darwin24/15/:/opt/homebrew/Cellar/gcc/15.2.0_1/bin/../libexec/gcc/]
+        ignore line: [LIBRARY_PATH=/opt/homebrew/Cellar/gcc/15.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin24/15/:/opt/homebrew/Cellar/gcc/15.2.0_1/bin/../lib/gcc/current/gcc/:/opt/homebrew/Cellar/gcc/15.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin24/15/../../../]
+        ignore line: [COLLECT_GCC_OPTIONS='-v' '-o' 'CMakeFiles/cmTC_bb23a.dir/CMakeCCompilerABI.c.o' '-c' '-mmacosx-version-min=26.0.0'  '-nodefaultexport' '-mcpu=apple-m1' '-mlittle-endian' '-mabi=lp64' '-dumpdir' 'CMakeFiles/cmTC_bb23a.dir/CMakeCCompilerABI.c.']
+        ignore line: [Linking C executable cmTC_bb23a]
+        ignore line: [/opt/homebrew/bin/cmake -E cmake_link_script CMakeFiles/cmTC_bb23a.dir/link.txt --verbose=1]
+        ignore line: [Using built-in specs.]
+        ignore line: [COLLECT_GCC=/opt/homebrew/bin/gcc-15]
+        ignore line: [COLLECT_LTO_WRAPPER=/opt/homebrew/Cellar/gcc/15.2.0_1/bin/../libexec/gcc/aarch64-apple-darwin24/15/lto-wrapper]
+        ignore line: [Target: aarch64-apple-darwin24]
+        ignore line: [Configured with: ../configure --prefix=/opt/homebrew/opt/gcc --libdir=/opt/homebrew/opt/gcc/lib/gcc/current --disable-nls --enable-checking=release --with-gcc-major-version-only --enable-languages=c c++ objc obj-c++ fortran --program-suffix=-15 --with-gmp=/opt/homebrew/opt/gmp --with-mpfr=/opt/homebrew/opt/mpfr --with-mpc=/opt/homebrew/opt/libmpc --with-isl=/opt/homebrew/opt/isl --with-zstd=/opt/homebrew/opt/zstd --with-pkgversion='Homebrew GCC 15.2.0_1' --with-bugurl=https://github.com/Homebrew/homebrew-core/issues --with-system-zlib --build=aarch64-apple-darwin24 --with-sysroot=/Library/Developer/CommandLineTools/SDKs/MacOSX15.sdk]
+        ignore line: [Thread model: posix]
+        ignore line: [Supported LTO compression algorithms: zlib zstd]
+        ignore line: [gcc version 15.2.0 (Homebrew GCC 15.2.0_1) ]
+        ignore line: [COMPILER_PATH=/opt/homebrew/Cellar/gcc/15.2.0_1/bin/../libexec/gcc/aarch64-apple-darwin24/15/:/opt/homebrew/Cellar/gcc/15.2.0_1/bin/../libexec/gcc/]
+        ignore line: [LIBRARY_PATH=/opt/homebrew/Cellar/gcc/15.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin24/15/:/opt/homebrew/Cellar/gcc/15.2.0_1/bin/../lib/gcc/current/gcc/:/opt/homebrew/Cellar/gcc/15.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin24/15/../../../]
+        ignore line: [COLLECT_GCC_OPTIONS='-v' '-o' 'cmTC_bb23a' '-mmacosx-version-min=26.0.0' '-asm_macosx_version_min=26.0' '-nodefaultexport' '-mcpu=apple-m1' '-mlittle-endian' '-mabi=lp64' '-dumpdir' 'cmTC_bb23a.']
+        link line: [ /opt/homebrew/Cellar/gcc/15.2.0_1/bin/../libexec/gcc/aarch64-apple-darwin24/15/collect2 -demangle -syslibroot /Library/Developer/CommandLineTools/SDKs/MacOSX15.sdk/ -dynamic -arch arm64 -macos_version_min 26.0.0 -o cmTC_bb23a -L/opt/homebrew/Cellar/gcc/15.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin24/15 -L/opt/homebrew/Cellar/gcc/15.2.0_1/bin/../lib/gcc/current/gcc -L/opt/homebrew/Cellar/gcc/15.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin24/15/../../.. -lemutls_w -lheapt_w -v CMakeFiles/cmTC_bb23a.dir/CMakeCCompilerABI.c.o -lgcc -lSystem -no_compact_unwind -rpath @loader_path -rpath /opt/homebrew/Cellar/gcc/15.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin24/15 -rpath /opt/homebrew/Cellar/gcc/15.2.0_1/lib/gcc/current/gcc -rpath /opt/homebrew/Cellar/gcc/15.2.0_1/lib/gcc/current]
+          arg [/opt/homebrew/Cellar/gcc/15.2.0_1/bin/../libexec/gcc/aarch64-apple-darwin24/15/collect2] ==> ignore
+          arg [-demangle] ==> ignore
+          arg [-syslibroot] ==> ignore
+          arg [/Library/Developer/CommandLineTools/SDKs/MacOSX15.sdk/] ==> ignore
+          arg [-dynamic] ==> ignore
+          arg [-arch] ==> ignore
+          arg [arm64] ==> ignore
+          arg [-macos_version_min] ==> ignore
+          arg [26.0.0] ==> ignore
+          arg [-o] ==> ignore
+          arg [cmTC_bb23a] ==> ignore
+          arg [-L/opt/homebrew/Cellar/gcc/15.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin24/15] ==> dir [/opt/homebrew/Cellar/gcc/15.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin24/15]
+          arg [-L/opt/homebrew/Cellar/gcc/15.2.0_1/bin/../lib/gcc/current/gcc] ==> dir [/opt/homebrew/Cellar/gcc/15.2.0_1/bin/../lib/gcc/current/gcc]
+          arg [-L/opt/homebrew/Cellar/gcc/15.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin24/15/../../..] ==> dir [/opt/homebrew/Cellar/gcc/15.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin24/15/../../..]
+          arg [-lemutls_w] ==> lib [emutls_w]
+          arg [-lheapt_w] ==> lib [heapt_w]
+          arg [-v] ==> ignore
+          arg [CMakeFiles/cmTC_bb23a.dir/CMakeCCompilerABI.c.o] ==> ignore
+          arg [-lgcc] ==> lib [gcc]
+          arg [-lSystem] ==> lib [System]
+          arg [-no_compact_unwind] ==> ignore
+          arg [-rpath] ==> ignore
+          arg [@loader_path] ==> ignore
+          arg [-rpath] ==> ignore
+          arg [/opt/homebrew/Cellar/gcc/15.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin24/15] ==> ignore
+          arg [-rpath] ==> ignore
+          arg [/opt/homebrew/Cellar/gcc/15.2.0_1/lib/gcc/current/gcc] ==> ignore
+          arg [-rpath] ==> ignore
+          arg [/opt/homebrew/Cellar/gcc/15.2.0_1/lib/gcc/current] ==> ignore
+        ignore line: [collect2 version 15.2.0]
+        ignore line: [/usr/bin/ld -demangle -syslibroot /Library/Developer/CommandLineTools/SDKs/MacOSX15.sdk/ -dynamic -arch arm64 -macos_version_min 26.0.0 -o cmTC_bb23a -L/opt/homebrew/Cellar/gcc/15.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin24/15 -L/opt/homebrew/Cellar/gcc/15.2.0_1/bin/../lib/gcc/current/gcc -L/opt/homebrew/Cellar/gcc/15.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin24/15/../../.. -lemutls_w -lheapt_w -v CMakeFiles/cmTC_bb23a.dir/CMakeCCompilerABI.c.o -lgcc -lSystem -no_compact_unwind -rpath @loader_path -rpath /opt/homebrew/Cellar/gcc/15.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin24/15 -rpath /opt/homebrew/Cellar/gcc/15.2.0_1/lib/gcc/current/gcc -rpath /opt/homebrew/Cellar/gcc/15.2.0_1/lib/gcc/current]
+        linker tool for 'C': /usr/bin/ld
+        Library search paths: [;/opt/homebrew/Cellar/gcc/15.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin24/15;/opt/homebrew/Cellar/gcc/15.2.0_1/lib/gcc/current/gcc;/opt/homebrew/Cellar/gcc/15.2.0_1/lib/gcc/current;/Library/Developer/CommandLineTools/SDKs/MacOSX15.sdk/usr/lib;/Library/Developer/CommandLineTools/SDKs/MacOSX15.sdk/usr/lib/swift]
+        Framework search paths: [;/Library/Developer/CommandLineTools/SDKs/MacOSX15.sdk/System/Library/Frameworks]
+        remove lib [System]
+        collapse library dir [/opt/homebrew/Cellar/gcc/15.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin24/15] ==> [/opt/homebrew/Cellar/gcc/15.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin24/15]
+        collapse library dir [/opt/homebrew/Cellar/gcc/15.2.0_1/bin/../lib/gcc/current/gcc] ==> [/opt/homebrew/Cellar/gcc/15.2.0_1/lib/gcc/current/gcc]
+        collapse library dir [/opt/homebrew/Cellar/gcc/15.2.0_1/bin/../lib/gcc/current/gcc/aarch64-apple-darwin24/15/../../..] ==> [/opt/homebrew/Cellar/gcc/15.2.0_1/lib/gcc/current]
+        collapse library dir [/opt/homebrew/Cellar/gcc/15.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin24/15] ==> [/opt/homebrew/Cellar/gcc/15.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin24/15]
+        collapse library dir [/opt/homebrew/Cellar/gcc/15.2.0_1/lib/gcc/current/gcc] ==> [/opt/homebrew/Cellar/gcc/15.2.0_1/lib/gcc/current/gcc]
+        collapse library dir [/opt/homebrew/Cellar/gcc/15.2.0_1/lib/gcc/current] ==> [/opt/homebrew/Cellar/gcc/15.2.0_1/lib/gcc/current]
+        collapse library dir [/Library/Developer/CommandLineTools/SDKs/MacOSX15.sdk/usr/lib] ==> [/Library/Developer/CommandLineTools/SDKs/MacOSX15.sdk/usr/lib]
+        collapse library dir [/Library/Developer/CommandLineTools/SDKs/MacOSX15.sdk/usr/lib/swift] ==> [/Library/Developer/CommandLineTools/SDKs/MacOSX15.sdk/usr/lib/swift]
+        collapse framework dir [/Library/Developer/CommandLineTools/SDKs/MacOSX15.sdk/System/Library/Frameworks] ==> [/Library/Developer/CommandLineTools/SDKs/MacOSX15.sdk/System/Library/Frameworks]
+        implicit libs: [emutls_w;heapt_w;gcc]
+        implicit objs: []
+        implicit dirs: [/opt/homebrew/Cellar/gcc/15.2.0_1/lib/gcc/current/gcc/aarch64-apple-darwin24/15;/opt/homebrew/Cellar/gcc/15.2.0_1/lib/gcc/current/gcc;/opt/homebrew/Cellar/gcc/15.2.0_1/lib/gcc/current;/Library/Developer/CommandLineTools/SDKs/MacOSX15.sdk/usr/lib;/Library/Developer/CommandLineTools/SDKs/MacOSX15.sdk/usr/lib/swift]
+        implicit fwks: [/Library/Developer/CommandLineTools/SDKs/MacOSX15.sdk/System/Library/Frameworks]
+      
+      
+  -
+    kind: "message-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/Internal/CMakeDetermineLinkerId.cmake:38 (message)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerABI.cmake:299 (cmake_determine_linker_id)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeTestCCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt:7 (project)"
+    message: |
+      Running the C compiler's linker: "/usr/bin/ld" "-v"
+      @(#)PROGRAM:ld PROJECT:ld-1267
+      BUILD 18:30:29 Apr 22 2026
+      configured to support archs: armv6 armv7 armv7s arm64 arm64e arm64_32 i386 x86_64 x86_64h armv6m armv7k armv7m armv7em armv8m.main armv8.1m.main
+      will use ld-classic for: armv6 armv7 armv7s i386 armv6m armv7k armv7m armv7em
+      LTO support using: LLVM version 21.0.0 (static support for 30, runtime is 30)
+      TAPI support using: Apple TAPI version 21.0.0 (tapi-2100.0.2.6)
+...

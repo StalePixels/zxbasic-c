@@ -249,7 +249,9 @@ int main(int argc, char *argv[]) {
     {
         const char *arch = cs.opts.architecture ? cs.opts.architecture : "zx48k";
         char exe_dir[PATH_MAX];
-        char raw_path[PATH_MAX];
+        /* raw_path oversized: joining two PATH_MAX-class strings via
+         * "%s/../../../src/lib/arch/%s/..." trips gcc's -Wformat-truncation. */
+        char raw_path[PATH_MAX * 2 + 64];
         char real_path[PATH_MAX];
 
         if (get_executable_dir(argv[0], exe_dir, sizeof(exe_dir))) {

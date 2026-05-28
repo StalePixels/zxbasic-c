@@ -862,9 +862,9 @@ void z80h_immediate_float(double x, char *C, char *ED, char *LH) {
 
     /* C = "0"+bin2hex(E)+"h"; ED = "0"+b2h(M[8:16])+b2h(M[:8])+"h";
      * LH = "0"+b2h(M[24:])+b2h(M[16:24])+"h" */
-    snprintf(C,  8,  "0%sh", he);
-    snprintf(ED, 8,  "0%s%sh", hm0, hm1);
-    snprintf(LH, 8,  "0%s%sh", hm2, hm3);
+    snprintf(C,  16, "0%sh", he);
+    snprintf(ED, 16, "0%s%sh", hm0, hm1);
+    snprintf(LH, 16, "0%s%sh", hm2, hm3);
 }
 
 /* Python repr/str(float) — moved to pyfloat.c so the small test targets

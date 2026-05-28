@@ -1,0 +1,536 @@
+[
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/common",
+  "command": "/opt/homebrew/bin/gcc-15  -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbasic_common.dir/arena.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common/arena.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common/arena.c",
+  "output": "common/CMakeFiles/zxbasic_common.dir/arena.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/common",
+  "command": "/opt/homebrew/bin/gcc-15  -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbasic_common.dir/strbuf.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common/strbuf.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common/strbuf.c",
+  "output": "common/CMakeFiles/zxbasic_common.dir/strbuf.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/common",
+  "command": "/opt/homebrew/bin/gcc-15  -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbasic_common.dir/hashmap.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common/hashmap.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common/hashmap.c",
+  "output": "common/CMakeFiles/zxbasic_common.dir/hashmap.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/common",
+  "command": "/opt/homebrew/bin/gcc-15  -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbasic_common.dir/ya_getopt.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common/ya_getopt.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common/ya_getopt.c",
+  "output": "common/CMakeFiles/zxbasic_common.dir/ya_getopt.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/common",
+  "command": "/opt/homebrew/bin/gcc-15  -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbasic_common.dir/cwalk.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common/cwalk.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common/cwalk.c",
+  "output": "common/CMakeFiles/zxbasic_common.dir/cwalk.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/common",
+  "command": "/opt/homebrew/bin/gcc-15  -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbasic_common.dir/utils.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common/utils.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common/utils.c",
+  "output": "common/CMakeFiles/zxbasic_common.dir/utils.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/common",
+  "command": "/opt/homebrew/bin/gcc-15  -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbasic_common.dir/config_file.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common/config_file.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common/config_file.c",
+  "output": "common/CMakeFiles/zxbasic_common.dir/config_file.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/zxbpp",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbpp_lib.dir/preproc.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp/preproc.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp/preproc.c",
+  "output": "zxbpp/CMakeFiles/zxbpp_lib.dir/preproc.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/zxbpp",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbpp.dir/main.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp/main.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp/main.c",
+  "output": "zxbpp/CMakeFiles/zxbpp.dir/main.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/zxbasm",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbasm_lib.dir/asm_core.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm/asm_core.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm/asm_core.c",
+  "output": "zxbasm/CMakeFiles/zxbasm_lib.dir/asm_core.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/zxbasm",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbasm_lib.dir/asm_instr.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm/asm_instr.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm/asm_instr.c",
+  "output": "zxbasm/CMakeFiles/zxbasm_lib.dir/asm_instr.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/zxbasm",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbasm_lib.dir/basic.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm/basic.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm/basic.c",
+  "output": "zxbasm/CMakeFiles/zxbasm_lib.dir/basic.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/zxbasm",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbasm_lib.dir/expr.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm/expr.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm/expr.c",
+  "output": "zxbasm/CMakeFiles/zxbasm_lib.dir/expr.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/zxbasm",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbasm_lib.dir/gensnapshot.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm/gensnapshot.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm/gensnapshot.c",
+  "output": "zxbasm/CMakeFiles/zxbasm_lib.dir/gensnapshot.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/zxbasm",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbasm_lib.dir/lexer.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm/lexer.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm/lexer.c",
+  "output": "zxbasm/CMakeFiles/zxbasm_lib.dir/lexer.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/zxbasm",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbasm_lib.dir/memory.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm/memory.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm/memory.c",
+  "output": "zxbasm/CMakeFiles/zxbasm_lib.dir/memory.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/zxbasm",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbasm_lib.dir/outfmt_sna.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm/outfmt_sna.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm/outfmt_sna.c",
+  "output": "zxbasm/CMakeFiles/zxbasm_lib.dir/outfmt_sna.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/zxbasm",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbasm_lib.dir/outfmt_tap.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm/outfmt_tap.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm/outfmt_tap.c",
+  "output": "zxbasm/CMakeFiles/zxbasm_lib.dir/outfmt_tap.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/zxbasm",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbasm_lib.dir/outfmt_tzx.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm/outfmt_tzx.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm/outfmt_tzx.c",
+  "output": "zxbasm/CMakeFiles/zxbasm_lib.dir/outfmt_tzx.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/zxbasm",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbasm_lib.dir/outfmt_z80.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm/outfmt_z80.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm/outfmt_z80.c",
+  "output": "zxbasm/CMakeFiles/zxbasm_lib.dir/outfmt_z80.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/zxbasm",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbasm_lib.dir/parser.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm/parser.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm/parser.c",
+  "output": "zxbasm/CMakeFiles/zxbasm_lib.dir/parser.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/zxbasm",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbasm_lib.dir/z80_opcodes.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm/z80_opcodes.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm/z80_opcodes.c",
+  "output": "zxbasm/CMakeFiles/zxbasm_lib.dir/z80_opcodes.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/zxbasm",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbasm.dir/main.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm/main.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm/main.c",
+  "output": "zxbasm/CMakeFiles/zxbasm.dir/main.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/zxbc",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbc_parser_lib.dir/parser.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/parser.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/parser.c",
+  "output": "zxbc/CMakeFiles/zxbc_parser_lib.dir/parser.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/zxbc",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbc_parser_lib.dir/lexer.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/lexer.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/lexer.c",
+  "output": "zxbc/CMakeFiles/zxbc_parser_lib.dir/lexer.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/zxbc",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbc_parser_lib.dir/plyparser/ply_tables.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/plyparser/ply_tables.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/plyparser/ply_tables.c",
+  "output": "zxbc/CMakeFiles/zxbc_parser_lib.dir/plyparser/ply_tables.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/zxbc",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbc_parser_lib.dir/plyparser/ply_engine.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/plyparser/ply_engine.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/plyparser/ply_engine.c",
+  "output": "zxbc/CMakeFiles/zxbc_parser_lib.dir/plyparser/ply_engine.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/zxbc",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbc_parser_lib.dir/ast.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/ast.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/ast.c",
+  "output": "zxbc/CMakeFiles/zxbc_parser_lib.dir/ast.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/zxbc",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbc_parser_lib.dir/errmsg.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/errmsg.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/errmsg.c",
+  "output": "zxbc/CMakeFiles/zxbc_parser_lib.dir/errmsg.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/zxbc",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbc_parser_lib.dir/compiler.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/compiler.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/compiler.c",
+  "output": "zxbc/CMakeFiles/zxbc_parser_lib.dir/compiler.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/zxbc",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbc_parser_lib.dir/options.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/options.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/options.c",
+  "output": "zxbc/CMakeFiles/zxbc_parser_lib.dir/options.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/zxbc",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbc_parser_lib.dir/visitor.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/visitor.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/visitor.c",
+  "output": "zxbc/CMakeFiles/zxbc_parser_lib.dir/visitor.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/zxbc",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbc_parser_lib.dir/passes/functiongraph.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/passes/functiongraph.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/passes/functiongraph.c",
+  "output": "zxbc/CMakeFiles/zxbc_parser_lib.dir/passes/functiongraph.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/zxbc",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbc_parser_lib.dir/passes/unreachable.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/passes/unreachable.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/passes/unreachable.c",
+  "output": "zxbc/CMakeFiles/zxbc_parser_lib.dir/passes/unreachable.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/zxbc",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbc_parser_lib.dir/passes/optimizer.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/passes/optimizer.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/passes/optimizer.c",
+  "output": "zxbc/CMakeFiles/zxbc_parser_lib.dir/passes/optimizer.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/zxbc",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbc_parser_lib.dir/ic.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/ic.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/ic.c",
+  "output": "zxbc/CMakeFiles/zxbc_parser_lib.dir/ic.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/zxbc",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbc_parser_lib.dir/backend_common.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/backend_common.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/backend_common.c",
+  "output": "zxbc/CMakeFiles/zxbc_parser_lib.dir/backend_common.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/zxbc",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbc_parser_lib.dir/translator.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/translator.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/translator.c",
+  "output": "zxbc/CMakeFiles/zxbc_parser_lib.dir/translator.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/zxbc",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbc_parser_lib.dir/var_translator.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/var_translator.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/var_translator.c",
+  "output": "zxbc/CMakeFiles/zxbc_parser_lib.dir/var_translator.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/zxbc",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbc_parser_lib.dir/z80asm.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/z80asm.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/z80asm.c",
+  "output": "zxbc/CMakeFiles/zxbc_parser_lib.dir/z80asm.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/zxbc",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbc_parser_lib.dir/pyfloat.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/pyfloat.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/pyfloat.c",
+  "output": "zxbc/CMakeFiles/zxbc_parser_lib.dir/pyfloat.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/zxbc",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbc_parser_lib.dir/peephole/memcell.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/peephole/memcell.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/peephole/memcell.c",
+  "output": "zxbc/CMakeFiles/zxbc_parser_lib.dir/peephole/memcell.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/zxbc",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbc_parser_lib.dir/peephole/pattern.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/peephole/pattern.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/peephole/pattern.c",
+  "output": "zxbc/CMakeFiles/zxbc_parser_lib.dir/peephole/pattern.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/zxbc",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbc_parser_lib.dir/peephole/template.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/peephole/template.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/peephole/template.c",
+  "output": "zxbc/CMakeFiles/zxbc_parser_lib.dir/peephole/template.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/zxbc",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbc_parser_lib.dir/peephole/evaluator.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/peephole/evaluator.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/peephole/evaluator.c",
+  "output": "zxbc/CMakeFiles/zxbc_parser_lib.dir/peephole/evaluator.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/zxbc",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbc_parser_lib.dir/peephole/parser.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/peephole/parser.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/peephole/parser.c",
+  "output": "zxbc/CMakeFiles/zxbc_parser_lib.dir/peephole/parser.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/zxbc",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbc_parser_lib.dir/peephole/engine.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/peephole/engine.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/peephole/engine.c",
+  "output": "zxbc/CMakeFiles/zxbc_parser_lib.dir/peephole/engine.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/zxbc",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbc_parser_lib.dir/peephole/opts_embedded.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/peephole/opts_embedded.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/peephole/opts_embedded.c",
+  "output": "zxbc/CMakeFiles/zxbc_parser_lib.dir/peephole/opts_embedded.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/zxbc",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbc_parser_lib.dir/optimizer/omap.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/optimizer/omap.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/optimizer/omap.c",
+  "output": "zxbc/CMakeFiles/zxbc_parser_lib.dir/optimizer/omap.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/zxbc",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbc_parser_lib.dir/optimizer/opthelpers.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/optimizer/opthelpers.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/optimizer/opthelpers.c",
+  "output": "zxbc/CMakeFiles/zxbc_parser_lib.dir/optimizer/opthelpers.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/zxbc",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbc_parser_lib.dir/optimizer/optmemcell.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/optimizer/optmemcell.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/optimizer/optmemcell.c",
+  "output": "zxbc/CMakeFiles/zxbc_parser_lib.dir/optimizer/optmemcell.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/zxbc",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbc_parser_lib.dir/optimizer/cpustate.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/optimizer/cpustate.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/optimizer/cpustate.c",
+  "output": "zxbc/CMakeFiles/zxbc_parser_lib.dir/optimizer/cpustate.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/zxbc",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbc_parser_lib.dir/optimizer/labelsdict.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/optimizer/labelsdict.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/optimizer/labelsdict.c",
+  "output": "zxbc/CMakeFiles/zxbc_parser_lib.dir/optimizer/labelsdict.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/zxbc",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbc_parser_lib.dir/optimizer/basicblock.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/optimizer/basicblock.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/optimizer/basicblock.c",
+  "output": "zxbc/CMakeFiles/zxbc_parser_lib.dir/optimizer/basicblock.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/zxbc",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbc_parser_lib.dir/optimizer/flowgraph.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/optimizer/flowgraph.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/optimizer/flowgraph.c",
+  "output": "zxbc/CMakeFiles/zxbc_parser_lib.dir/optimizer/flowgraph.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/zxbc",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbc_parser_lib.dir/optimizer/optmain.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/optimizer/optmain.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/optimizer/optmain.c",
+  "output": "zxbc/CMakeFiles/zxbc_parser_lib.dir/optimizer/optmain.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/zxbc",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbc_parser_lib.dir/backend.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/backend.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/backend.c",
+  "output": "zxbc/CMakeFiles/zxbc_parser_lib.dir/backend.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/zxbc",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbc_parser_lib.dir/codegen.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/codegen.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/codegen.c",
+  "output": "zxbc/CMakeFiles/zxbc_parser_lib.dir/codegen.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/zxbc",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbc_parser_lib.dir/asm_bridge.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/asm_bridge.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/asm_bridge.c",
+  "output": "zxbc/CMakeFiles/zxbc_parser_lib.dir/asm_bridge.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/zxbc",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbc.dir/main.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/main.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/main.c",
+  "output": "zxbc/CMakeFiles/zxbc.dir/main.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/zxbc",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbc.dir/args.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/args.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/args.c",
+  "output": "zxbc/CMakeFiles/zxbc.dir/args.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/zxbc",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbc-ply-lexdump.dir/plyparser/ply_lexdump_harness.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/plyparser/ply_lexdump_harness.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/plyparser/ply_lexdump_harness.c",
+  "output": "zxbc/CMakeFiles/zxbc-ply-lexdump.dir/plyparser/ply_lexdump_harness.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/zxbc",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbc-ply-astcmp.dir/plyparser/ply_astcmp_harness.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/plyparser/ply_astcmp_harness.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/plyparser/ply_astcmp_harness.c",
+  "output": "zxbc/CMakeFiles/zxbc-ply-astcmp.dir/plyparser/ply_astcmp_harness.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/zxbc-ast-dump",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbpp -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbasm -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/zxbc-ast-dump.dir/main.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc-ast-dump/main.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc-ast-dump/main.c",
+  "output": "zxbc-ast-dump/CMakeFiles/zxbc-ast-dump.dir/main.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/tests",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/test_utils.dir/test_utils.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/tests/test_utils.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/tests/test_utils.c",
+  "output": "tests/CMakeFiles/test_utils.dir/test_utils.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/tests",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/test_config.dir/test_config.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/tests/test_config.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/tests/test_config.c",
+  "output": "tests/CMakeFiles/test_config.dir/test_config.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/tests",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/test_config.dir/__/zxbc/options.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/options.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/options.c",
+  "output": "tests/CMakeFiles/test_config.dir/__/zxbc/options.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/tests",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/test_types.dir/test_types.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/tests/test_types.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/tests/test_types.c",
+  "output": "tests/CMakeFiles/test_types.dir/test_types.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/tests",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/test_ast.dir/test_ast.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/tests/test_ast.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/tests/test_ast.c",
+  "output": "tests/CMakeFiles/test_ast.dir/test_ast.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/tests",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/test_ast.dir/__/zxbc/ast.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/ast.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/ast.c",
+  "output": "tests/CMakeFiles/test_ast.dir/__/zxbc/ast.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/tests",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/test_ast.dir/__/zxbc/compiler.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/compiler.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/compiler.c",
+  "output": "tests/CMakeFiles/test_ast.dir/__/zxbc/compiler.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/tests",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/test_ast.dir/__/zxbc/options.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/options.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/options.c",
+  "output": "tests/CMakeFiles/test_ast.dir/__/zxbc/options.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/tests",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/test_ast.dir/__/zxbc/errmsg.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/errmsg.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/errmsg.c",
+  "output": "tests/CMakeFiles/test_ast.dir/__/zxbc/errmsg.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/tests",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/test_ast.dir/__/zxbc/pyfloat.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/pyfloat.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/pyfloat.c",
+  "output": "tests/CMakeFiles/test_ast.dir/__/zxbc/pyfloat.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/tests",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/test_symboltable.dir/test_symboltable.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/tests/test_symboltable.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/tests/test_symboltable.c",
+  "output": "tests/CMakeFiles/test_symboltable.dir/test_symboltable.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/tests",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/test_symboltable.dir/__/zxbc/ast.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/ast.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/ast.c",
+  "output": "tests/CMakeFiles/test_symboltable.dir/__/zxbc/ast.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/tests",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/test_symboltable.dir/__/zxbc/compiler.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/compiler.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/compiler.c",
+  "output": "tests/CMakeFiles/test_symboltable.dir/__/zxbc/compiler.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/tests",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/test_symboltable.dir/__/zxbc/options.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/options.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/options.c",
+  "output": "tests/CMakeFiles/test_symboltable.dir/__/zxbc/options.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/tests",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/test_symboltable.dir/__/zxbc/errmsg.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/errmsg.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/errmsg.c",
+  "output": "tests/CMakeFiles/test_symboltable.dir/__/zxbc/errmsg.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/tests",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/test_symboltable.dir/__/zxbc/pyfloat.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/pyfloat.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/pyfloat.c",
+  "output": "tests/CMakeFiles/test_symboltable.dir/__/zxbc/pyfloat.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/tests",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/test_check.dir/test_check.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/tests/test_check.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/tests/test_check.c",
+  "output": "tests/CMakeFiles/test_check.dir/test_check.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/tests",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/test_check.dir/__/zxbc/ast.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/ast.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/ast.c",
+  "output": "tests/CMakeFiles/test_check.dir/__/zxbc/ast.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/tests",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/test_check.dir/__/zxbc/compiler.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/compiler.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/compiler.c",
+  "output": "tests/CMakeFiles/test_check.dir/__/zxbc/compiler.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/tests",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/test_check.dir/__/zxbc/options.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/options.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/options.c",
+  "output": "tests/CMakeFiles/test_check.dir/__/zxbc/options.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/tests",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/test_check.dir/__/zxbc/errmsg.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/errmsg.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/errmsg.c",
+  "output": "tests/CMakeFiles/test_check.dir/__/zxbc/errmsg.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/tests",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/test_check.dir/__/zxbc/pyfloat.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/pyfloat.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/pyfloat.c",
+  "output": "tests/CMakeFiles/test_check.dir/__/zxbc/pyfloat.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/tests",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/test_cmdline.dir/test_cmdline.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/tests/test_cmdline.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/tests/test_cmdline.c",
+  "output": "tests/CMakeFiles/test_cmdline.dir/test_cmdline.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/tests",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/test_cmdline.dir/__/zxbc/args.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/args.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/args.c",
+  "output": "tests/CMakeFiles/test_cmdline.dir/__/zxbc/args.c.o"
+},
+{
+  "directory": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/build-gcc/tests",
+  "command": "/opt/homebrew/bin/gcc-15 -DZXBASIC_C_VERSION=\\\"1.18.7+c3\\\" -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc -I/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/common -O3 -DNDEBUG -std=gnu11 -arch arm64 -Wall -Wextra -Wpedantic -Wno-unused-parameter -o CMakeFiles/test_cmdline.dir/__/zxbc/options.c.o -c /Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/options.c",
+  "file": "/Volumes/McFiver/u/GIT/ZX/NextPi/zxbasic-c/csrc/zxbc/options.c",
+  "output": "tests/CMakeFiles/test_cmdline.dir/__/zxbc/options.c.o"
+}
+]

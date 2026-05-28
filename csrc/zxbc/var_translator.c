@@ -416,7 +416,7 @@ int tr_default_value(Translator *tr, const TypeInfo *type_,
     if (bt == TYPE_float) {
         double dvf = (expr && expr->tag == AST_NUMBER) ? expr->u.number.value
                                                        : 0.0;
-        char Cs[8], DEs[8], HLs[8];
+        char Cs[16], DEs[16], HLs[16];
         z80h_immediate_float(dvf, Cs, DEs, HLs);
 
         /* C[:-1] (drop 'h') then [-2:] (last 2). "0XXh" -> "0XX" -> "XX". */
