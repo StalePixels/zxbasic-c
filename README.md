@@ -8,7 +8,7 @@
 [![zxbc full pipeline](https://img.shields.io/badge/zxbc_full--O0--O3-byte--identical_to_Python-brightgreen)](#-phase-3--compiler-frontend-byte-identical)
 [![Codegen probes](https://img.shields.io/badge/probes-129_GREEN_0_RED-brightgreen)](#probe-enumeration-meter)
 [![C unit tests](https://img.shields.io/badge/C_unit_tests-132_passing-blue)](#c-unit-test-suite)
-[![Port status](https://img.shields.io/badge/port-agentically_verified_complete-yellow)](docs/captures/zxbasic-c/port-completion-outcome.md)
+[![Port status](https://img.shields.io/badge/port-agentically_verified_complete-yellow)](#-port-complete--2026-05-28-agentically-verified-not-yet-user-verified)
 
 ZX BASIC — C Port 🚀
 ---------------------
@@ -18,14 +18,12 @@ originally written in Python by Jose Rodriguez-Rosa (a.k.a. Boriel).
 
 ## 🏁 Port Complete — 2026-05-28 *(agentically verified, not yet user-verified)*
 
-> ⚠️ **This is an agent's self-declaration of completion**, supported by an
-> agentic prose audit ([`docs/captures/zxbasic-c/readme-prose-audit.md`](docs/captures/zxbasic-c/readme-prose-audit.md))
-> alongside the automated meters. It has **not yet been independently verified
-> or signed off by [@Xalior](https://github.com/Xalior) (the human
-> maintainer)**. The meters are reproducible — anyone can run `make test` and
-> `make test-slow` and check — and the prose audit's findings are mechanically
-> grounded (`wc -l` / `grep` / file inspection). Human cold-read + real-world
-> build sign-off is still pending.
+> ⚠️ **This is an agent's self-declaration of completion**, supported by the
+> automated test meters. It has **not yet been independently verified or
+> signed off by [@Xalior](https://github.com/Xalior) (the human
+> maintainer)**. The meters are reproducible — anyone can run `make test`
+> and `make test-slow` and check. Human cold-read + real-world build
+> sign-off is still pending.
 
 Per the automated gates, the toolchain — `zxbpp` (preprocessor), `zxbasm`
 (assembler), `zxbc` (compiler) — is a **byte-for-byte drop-in replacement**
@@ -41,11 +39,6 @@ Single-command verification:
 make test       # ~5 min fast tier — routine green-light gate
 make test-slow  # ~18 min deep tier — full byte-for-byte equivalence sweep
 ```
-
-The cold-readable port-completion summary lives at
-[`docs/captures/zxbasic-c/port-completion-outcome.md`](docs/captures/zxbasic-c/port-completion-outcome.md):
-final bucket counts, Round-0 → completion delta, every documented SKIP with
-its justification, the read-only-invariant audit.
 
 ## 🎯 What was this?
 
