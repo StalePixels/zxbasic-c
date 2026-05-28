@@ -191,12 +191,14 @@ static void fg_pyset_order_inplace(Z80StrList *out) {
 
 /* set helpers shared shape with basicblock.c (kept local: TU-private). */
 static bool bv_has(const BBVec *v, BasicBlock *x) {
-    for (int i=0;i<v->len;i++) if (v->data[i]==x) return true; return false;
+    for (int i=0;i<v->len;i++) if (v->data[i]==x) return true;
+    return false;
 }
 static void bv_add(BBVec *v, BasicBlock *x) { if(!bv_has(v,x)) vec_push(*v,x); }
 
 static bool sl_has(const Z80StrList *v, const char *s) {
-    for (int i=0;i<v->len;i++) if (!strcmp(v->data[i],s)) return true; return false;
+    for (int i=0;i<v->len;i++) if (!strcmp(v->data[i],s)) return true;
+    return false;
 }
 
 /* _split_block (flow_graph.py:18-46) */

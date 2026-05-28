@@ -341,7 +341,8 @@ static const char *as_str(const EvVal *v) {
 }
 
 static bool in_lset(const char *x, const char *const *s, size_t n){
-    for(size_t i=0;i<n;i++) if(strcmp(x,s[i])==0) return true; return false;
+    for(size_t i=0;i<n;i++) if(strcmp(x,s[i])==0) return true;
+    return false;
 }
 
 static EvVal *apply_unary(Arena *a, FN op, const EvVal *xv,

@@ -121,11 +121,15 @@ static int re_label_end(const char *s, int *glen) {
 /* RE_PRAGMA = ^#[ \t]?pragma[ \t]opt[ \t]  (patterns.py:39) */
 static bool re_pragma(const char *s) {
     const char *p=s;
-    if (*p!='#') return false; p++;
+    if (*p!='#') return false;
+    p++;
     if (*p==' '||*p=='\t') p++;
-    if (strncmp(p,"pragma",6)!=0) return false; p+=6;
-    if (*p!=' '&&*p!='\t') return false; p++;
-    if (strncmp(p,"opt",3)!=0) return false; p+=3;
+    if (strncmp(p,"pragma",6)!=0) return false;
+    p+=6;
+    if (*p!=' '&&*p!='\t') return false;
+    p++;
+    if (strncmp(p,"opt",3)!=0) return false;
+    p+=3;
     return (*p==' '||*p=='\t');
 }
 static char *rstrip_ws(Arena *a, const char *s) {
