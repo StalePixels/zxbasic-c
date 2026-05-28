@@ -93,6 +93,9 @@ add_subdirectory(zxbc)
 # consumer of zxbc_parser_lib; not part of the production toolchain).
 add_subdirectory(zxbc-ast-dump)
 
+# Multicall — single-binary build of zxbpp + zxbasm + zxbc.
+add_subdirectory(multicall)
+
 # Test harness
 enable_testing()
 add_subdirectory(tests)

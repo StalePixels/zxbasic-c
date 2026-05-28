@@ -20,5 +20,6 @@ target_link_libraries(zxbpp_lib PUBLIC zxbasic_common)
 add_executable(zxbpp
     main.c
 )
+target_compile_definitions(zxbpp PRIVATE ZXBASIC_STANDALONE)
 
 target_link_libraries(zxbpp PRIVATE zxbpp_lib)

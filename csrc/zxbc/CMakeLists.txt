@@ -72,6 +72,7 @@ add_executable(zxbc
     main.c
     args.c
 )
+target_compile_definitions(zxbc PRIVATE ZXBASIC_STANDALONE)
 
 target_link_libraries(zxbc PRIVATE zxbc_parser_lib)
 

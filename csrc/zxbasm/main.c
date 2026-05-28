@@ -65,7 +65,7 @@ static char *default_output(const char *input, const char *ext)
     return out;
 }
 
-int main(int argc, char *argv[])
+int zxbasm_main(int argc, char *argv[])
 {
     cwk_path_set_style(CWK_STYLE_UNIX);
 
@@ -333,3 +333,7 @@ int main(int argc, char *argv[])
     free(default_out);
     return exit_code;
 }
+
+#ifdef ZXBASIC_STANDALONE
+int main(int argc, char *argv[]) { return zxbasm_main(argc, argv); }
+#endif

@@ -18,7 +18,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-int main(int argc, char *argv[]) {
+int zxbc_main(int argc, char *argv[]) {
     CompilerState cs;
     compiler_init(&cs);
 
@@ -607,3 +607,7 @@ int main(int argc, char *argv[]) {
     compiler_destroy(&cs);
     return rc;
 }
+
+#ifdef ZXBASIC_STANDALONE
+int main(int argc, char *argv[]) { return zxbc_main(argc, argv); }
+#endif

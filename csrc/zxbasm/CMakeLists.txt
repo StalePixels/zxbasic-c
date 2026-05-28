@@ -46,5 +46,6 @@ endif()
 add_executable(zxbasm
     main.c
 )
+target_compile_definitions(zxbasm PRIVATE ZXBASIC_STANDALONE)
 
 target_link_libraries(zxbasm PRIVATE zxbasm_lib)

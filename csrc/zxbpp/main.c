@@ -28,7 +28,7 @@ static void usage(const char *progname)
     fprintf(stderr, "  -h, --help           Show this help\n");
 }
 
-int main(int argc, char *argv[])
+int zxbpp_main(int argc, char *argv[])
 {
     cwk_path_set_style(CWK_STYLE_UNIX);
 
@@ -203,3 +203,7 @@ int main(int argc, char *argv[])
     preproc_destroy(&pp);
     return exit_code;
 }
+
+#ifdef ZXBASIC_STANDALONE
+int main(int argc, char *argv[]) { return zxbpp_main(argc, argv); }
+#endif
