@@ -38,6 +38,10 @@ target_include_directories(zxbasm_lib PUBLIC
 
 target_link_libraries(zxbasm_lib PUBLIC zxbasic_common zxbpp_lib)
 
+if(UNIX)
+    target_link_libraries(zxbasm_lib PUBLIC m)
+endif()
+
 # Standalone assembler binary — entry point only; links the lib.
 add_executable(zxbasm
     main.c
