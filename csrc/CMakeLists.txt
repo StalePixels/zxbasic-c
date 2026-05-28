@@ -45,6 +45,26 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release" OR
         if(HAVE_FLTO)
             add_compile_options(-flto)
             set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -flto")
+            # Static archives produced under LTO must be indexed by the
+            # gcc/clang wrapper, not plain `ar`/`ranlib` — otherwise the
+            # LTO objects in the archive are invisible to the linker and
+            # every cross-TU reference becomes "undefined reference"
+            # (gcc 6.3 on Raspbian stretch reproduces this hard).
+            if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+                find_program(GCC_AR     NAMES gcc-ar     gcc-ar-15 gcc-ar-14 gcc-ar-13 gcc-ar-12 gcc-ar-11 gcc-ar-10 gcc-ar-9 gcc-ar-8 gcc-ar-7 gcc-ar-6)
+                find_program(GCC_RANLIB NAMES gcc-ranlib gcc-ranlib-15 gcc-ranlib-14 gcc-ranlib-13 gcc-ranlib-12 gcc-ranlib-11 gcc-ranlib-10 gcc-ranlib-9 gcc-ranlib-8 gcc-ranlib-7 gcc-ranlib-6)
+                if(GCC_AR AND GCC_RANLIB)
+                    set(CMAKE_AR     "${GCC_AR}"     CACHE FILEPATH "" FORCE)
+                    set(CMAKE_RANLIB "${GCC_RANLIB}" CACHE FILEPATH "" FORCE)
+                endif()
+            elseif(CMAKE_C_COMPILER_ID MATCHES "Clang")
+                find_program(LLVM_AR     NAMES llvm-ar     llvm-ar-18 llvm-ar-17 llvm-ar-16 llvm-ar-15 llvm-ar-14)
+                find_program(LLVM_RANLIB NAMES llvm-ranlib llvm-ranlib-18 llvm-ranlib-17 llvm-ranlib-16 llvm-ranlib-15 llvm-ranlib-14)
+                if(LLVM_AR AND LLVM_RANLIB)
+                    set(CMAKE_AR     "${LLVM_AR}"     CACHE FILEPATH "" FORCE)
+                    set(CMAKE_RANLIB "${LLVM_RANLIB}" CACHE FILEPATH "" FORCE)
+                endif()
+            endif()
         endif()
     endif()
 endif()
