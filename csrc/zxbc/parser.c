@@ -144,17 +144,6 @@ static void skip_newlines(Parser *p) {
     while (check(p, BTOK_NEWLINE)) advance(p);
 }
 
-/* Consume a newline or EOF */
-static void consume_newline(Parser *p) {
-    if (check(p, BTOK_EOF)) return;
-    if (check(p, BTOK_NEWLINE)) {
-        advance(p);
-        return;
-    }
-    zxbc_error(p->cs, p->current.lineno, "Expected newline or end of statement");
-    p->had_error = true;
-}
-
 /* Check if current token can be used as a name (keyword-as-identifier) */
 static bool is_name_token(Parser *p) {
     BTokenType t = p->current.type;
@@ -1296,21 +1285,6 @@ static AstNode *make_asm_node(Parser *p, const char *code, int lineno) {
     return n;
 }
 
-/* Add statement to a block, creating/extending as needed */
-static AstNode *block_append(Parser *p, AstNode *block, AstNode *stmt) {
-    if (!stmt || stmt->tag == AST_NOP) return block;
-    if (!block) return stmt;
-
-    if (block->tag != AST_BLOCK) {
-        AstNode *b = make_block_node(p, block->lineno);
-        ast_add_child(p->cs, b, block);
-        ast_add_child(p->cs, b, stmt);
-        return b;
-    }
-    ast_add_child(p->cs, block, stmt);
-    return block;
-}
-
 /* ----------------------------------------------------------------
  * Type helpers
  * ---------------------------------------------------------------- */
@@ -1442,7 +1416,6 @@ static AstNode *make_call_node(Parser *p, const char *name, int lineno,
                                bool addressof_ctx, bool next_is_lp);
 static AstNode *make_builtin_node(Parser *p, AstNode *n, AstNode *arg,
                                   BTokenType kw, int lineno);
-static AstNode *parse_arglist(Parser *p);
 
 /* Forward decls used by the SymbolARRAYACCESS.offset port (computed at
  * ARRAYACCESS-node construction, defined alongside the BOUND helpers). */

@@ -79,36 +79,6 @@ static void vt_ic_label(Translator *tr, const char *label) {
     tr_emit_quad(tr, "label", 1, args);
 }
 
-/* Translator.traverse_const, NUMBER/CONST leaf only (translator_visitor.py
- * :177-184) — the S5.3/S5.4/S5.5 scalar behaviour, kept BYTE-IDENTICAL.
- * Scalar callers (DIM AT / DIM = CONSTEXPR) only ever pass NUMBER/CONST
- * leaves in the landed slices; UNARY/BINARY here is out-of-scalar-scope —
- * fail loud past the leaf (unchanged from S5.5). S5.6's array-init path
- * uses vt_traverse_const_expr (below) instead, so this stays scoped to
- * non-array constructs and cannot regress DIM-AT/scalar fixtures. */
-static const char *vt_traverse_const(Translator *tr, AstNode *node) {
-    if (!node) return "";
-    if (node->tag == AST_NUMBER || node->tag == AST_CONSTEXPR) {
-        /* node.t — for NUMBER == str(value); set lazily like visit_NUMBER */
-        if (node->t == NULL && node->tag == AST_NUMBER) {
-            double value = node->u.number.value;
-            char b[64];
-            if (value == (double)(int64_t)value)
-                snprintf(b, sizeof(b), "%lld", (long long)(int64_t)value);
-            else
-                snprintf(b, sizeof(b), "%g", value);
-            node->t = arena_strdup(&tr->cs->arena, b);
-        }
-        return node->t ? node->t : "";
-    }
-    if (node->tag == AST_ID) /* CONST entry: traverse_const returns node.t */
-        return node->t ? node->t : "";
-    fprintf(stderr,
-            "zxbc: traverse_const non-leaf (tag=%d) not in scalar scope\n",
-            (int)node->tag);
-    return node->t ? node->t : "";
-}
-
 /* str(value) for a NUMBER (visit_NUMBER / Symbol.t lazy form, ast.c:71-77). */
 static const char *vt_number_str(Translator *tr, AstNode *node) {
     if (node->t == NULL) {

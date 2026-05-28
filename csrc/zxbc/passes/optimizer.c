@@ -617,10 +617,6 @@ static bool opt_bound_status_helper_changed(AstNode *node) {
     return changed;
 }
 
-static void opt_bound_status_helper(AstNode *node) {
-    (void)opt_bound_status_helper_changed(node);
-}
-
 /* ----------------------------------------------------------------
  * visit_FUNCCALL (optimize.py:298-301) / visit_CALL (303-306):
  * recurse into node.args ONLY (children[1], the ARGLIST) — not the

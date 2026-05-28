@@ -78,15 +78,6 @@ static void parser_advance(Parser *p)
 
 static void asm_unexpected(Parser *p);
 
-static bool parser_match(Parser *p, TokenType type)
-{
-    if (p->cur.type == type) {
-        parser_advance(p);
-        return true;
-    }
-    return false;
-}
-
 static bool parser_expect(Parser *p, TokenType type)
 {
     if (p->cur.type == type) {
@@ -311,14 +302,6 @@ static void asm_unexpected(Parser *p) {
  * Matches Python precedence from asmparse.py
  * ---------------------------------------------------------------- */
 static Expr *parse_expr(Parser *p);
-static Expr *parse_pexpr(Parser *p);
-
-/* Check if current token can start an expression */
-static bool is_expr_start(TokenType t)
-{
-    return t == TOK_INTEGER || t == TOK_ID || t == TOK_ADDR ||
-           t == TOK_LP || t == TOK_LB || t == TOK_PLUS || t == TOK_MINUS;
-}
 
 /* Primary expression: integer, label, $, (expr), [expr] */
 static Expr *parse_primary(Parser *p)
@@ -454,18 +437,6 @@ static Expr *parse_bitwise(Parser *p)
 static Expr *parse_expr(Parser *p)
 {
     return parse_bitwise(p);
-}
-
-/* Parse parenthesized expression: (expr) */
-static Expr *parse_pexpr(Parser *p)
-{
-    if (p->cur.type == TOK_LP) {
-        parser_advance(p);
-        Expr *e = parse_expr(p);
-        parser_expect(p, TOK_RP);
-        return e;
-    }
-    return parse_expr(p);
 }
 
 /* Parse an expression that might be parenthesized.
