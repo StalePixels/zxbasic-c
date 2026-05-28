@@ -19,6 +19,36 @@ elseif(MSVC)
     add_definitions(-D_CRT_SECURE_NO_WARNINGS)
 endif()
 
+# Size optimisations for Release builds. NextPi deployment is UART-bound
+# (~11.5 KB/s), so binary size dominates upload time.
+if(CMAKE_BUILD_TYPE STREQUAL "Release" OR
+   CMAKE_BUILD_TYPE STREQUAL "MinSizeRel" OR
+   "${CMAKE_BUILD_TYPE}" STREQUAL "")
+    if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
+        # Emit each function/data symbol into its own section so the linker
+        # can garbage-collect unreferenced ones at link time.
+        add_compile_options(-ffunction-sections -fdata-sections)
+        if(APPLE)
+            # macOS ld: dead-strip + strip debug + strip non-global symbols.
+            set(CMAKE_EXE_LINKER_FLAGS
+                "${CMAKE_EXE_LINKER_FLAGS} -Wl,-dead_strip -Wl,-x")
+        else()
+            # GNU ld / lld: --gc-sections + strip-all.
+            set(CMAKE_EXE_LINKER_FLAGS
+                "${CMAKE_EXE_LINKER_FLAGS} -Wl,--gc-sections -Wl,-s")
+        endif()
+
+        # LTO across translation units. Probe with CheckCCompilerFlag —
+        # older toolchains (gcc 4.x on ancient distros) may lack it.
+        include(CheckCCompilerFlag)
+        check_c_compiler_flag(-flto HAVE_FLTO)
+        if(HAVE_FLTO)
+            add_compile_options(-flto)
+            set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -flto")
+        endif()
+    endif()
+endif()
+
 # Flex and bison will be needed for later phases (assembler, compiler).
 # The preprocessor uses a hand-written recursive-descent approach.
 # find_package(FLEX REQUIRED)
