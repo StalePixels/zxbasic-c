@@ -8,7 +8,7 @@
 [![zxbc full pipeline](https://img.shields.io/badge/zxbc_full--O0--O3-byte--identical_to_Python-brightgreen)](#-phase-3--compiler-frontend-byte-identical)
 [![Codegen probes](https://img.shields.io/badge/probes-129_GREEN_0_RED-brightgreen)](#probe-enumeration-meter)
 [![C unit tests](https://img.shields.io/badge/C_unit_tests-132_passing-blue)](#c-unit-test-suite)
-[![Port status](https://img.shields.io/badge/port-agentically_declared_complete-yellow)](docs/captures/zxbasic-c/port-completion-outcome.md)
+[![Port status](https://img.shields.io/badge/port-agentically_verified_complete-yellow)](docs/captures/zxbasic-c/port-completion-outcome.md)
 
 ZX BASIC — C Port 🚀
 ---------------------
@@ -16,14 +16,16 @@ ZX BASIC — C Port 🚀
 A **C language port** of the [Boriel ZX BASIC compiler](https://github.com/boriel-basic/zxbasic),
 originally written in Python by Jose Rodriguez-Rosa (a.k.a. Boriel).
 
-## 🏁 Port Complete — 2026-05-28 *(agentically declared, not yet user-verified)*
+## 🏁 Port Complete — 2026-05-28 *(agentically verified, not yet user-verified)*
 
-> ⚠️ **This is an agent's self-declaration of completion**, based on every
-> automated meter the port exposes returning green. It has **not yet been
-> independently verified or signed off by [@Xalior](https://github.com/Xalior)
-> (the human maintainer)**. The meters are reproducible — anyone can run
-> `make test` and `make test-slow` and check — but a human cold-read of the
-> close-out doc + a real-world build is still pending.
+> ⚠️ **This is an agent's self-declaration of completion**, supported by an
+> agentic prose audit ([`docs/captures/zxbasic-c/readme-prose-audit.md`](docs/captures/zxbasic-c/readme-prose-audit.md))
+> alongside the automated meters. It has **not yet been independently verified
+> or signed off by [@Xalior](https://github.com/Xalior) (the human
+> maintainer)**. The meters are reproducible — anyone can run `make test` and
+> `make test-slow` and check — and the prose audit's findings are mechanically
+> grounded (`wc -l` / `grep` / file inspection). Human cold-read + real-world
+> build sign-off is still pending.
 
 Per the automated gates, the toolchain — `zxbpp` (preprocessor), `zxbasm`
 (assembler), `zxbc` (compiler) — is a **byte-for-byte drop-in replacement**
@@ -75,7 +77,7 @@ Native C binaries sidestep the problem entirely.
 | 4 | **Optimizer + IR generation (AST → Quads)** | byte-identical -O1/-O2/-O3 to Python | ✅ Complete |
 | 5 | **Z80 backend (Quads → Assembly + peephole)** | zx48k 895/886/886 stages GREEN; zxnext 197/197/197 GREEN | ✅ Complete |
 | 6 | Full integration + all output formats (.tap/.tzx/.sna/.z80) | exercised by stage validation | ✅ Complete |
-| 7 | Full-equivalence umbrella + `make test` / `make test-slow` | FULL-EQUAL 888 / 0 DIFF; 129 probe GREEN / 0 RED | ✅ **agentically declared complete** (pending user verification) |
+| 7 | Full-equivalence umbrella + `make test` / `make test-slow` | FULL-EQUAL 888 / 0 DIFF; 129 probe GREEN / 0 RED | ✅ **agentically verified complete** (pending user sign-off) |
 
 ### 🔬 Phase 3 — Compiler Frontend: Byte-Identical
 
@@ -105,7 +107,7 @@ CHANGELOG; C compiles them correctly).
 #### Probe Enumeration Meter
 
 In addition to the inherited corpus, the C port has its own probe series —
-~90 hand-authored fixtures (`csrc/tests/codegen_probes/`) that deliberately
+129 hand-authored fixtures (`csrc/tests/codegen_probes/`) that deliberately
 drive codepaths the inherited corpus is silent on. The probe runner compares
 the FULL contract per fixture (exit, stderr, Stage-1 ASM, end-to-end binary)
 against the Python oracle. **129 probes GREEN, 0 RED** across 10
@@ -162,25 +164,25 @@ verifying internal APIs match the Python test suites (`tests/api/`, `tests/symbo
 
 ### 🔬 Phase 2 — Assembler: Done!
 
-The `zxbasm` C binary is a **verified drop-in replacement** for the Python original:
+The `zxbasm` C binary is an **agentically-verified drop-in replacement** for the Python original (pending user sign-off — see top banner):
 
 - ✅ **61/61 tests passing** — zero failures, byte-for-byte identical binary output
-- ✅ **61/61 Python comparison** — confirmed by running both side-by-side
+- ✅ **61/61 Python comparison** — confirmed by automated side-by-side harness
 - ✅ Full Z80 instruction set (827 opcodes) including ZX Next extensions
 - ✅ Two-pass assembly: labels, forward references, expressions, temporaries
 - ✅ PROC/ENDP scoping, LOCAL labels, PUSH/POP NAMESPACE
 - ✅ `#init` directive, EQU/DEFL, ORG, ALIGN, INCBIN
-- ✅ Hand-written recursive-descent parser (~1,750 lines of C)
+- ✅ Hand-written recursive-descent parser (~2,200 lines of C)
 - ✅ Preprocessor integration (reuses the C zxbpp binary)
 
 ### 🔬 Phase 1 — Preprocessor: Done!
 
-The `zxbpp` C binary is a **verified drop-in replacement** for the Python original:
+The `zxbpp` C binary is an **agentically-verified drop-in replacement** for the Python original (pending user sign-off — see top banner):
 
 - ✅ **96/96 tests passing** (91 normal + 5 error tests) — zero skipped
-- ✅ **91/91 outputs identical to Python** — confirmed by running both side-by-side
+- ✅ **91/91 outputs identical to Python** — confirmed by automated side-by-side harness
 - ✅ All preprocessor features: `#define`, `#include`, `#ifdef`/`#if`, macro expansion, token pasting, stringizing, block comments, ASM mode, line continuation, `#pragma`/`#require`/`#init`/`#error`/`#warning`, architecture-specific includes
-- ✅ Hand-written recursive-descent parser (~1,600 lines of C)
+- ✅ Hand-written recursive-descent parser (~3,000 lines of C)
 
 ## 🧪 Try It Yourself
 
@@ -408,9 +410,10 @@ Here's how we get there, one step at a time:
  Phase 7  ✅  Full-equivalence umbrella — `make test` / `make test-slow`
     │         FULL-EQUAL 888 / 0 DIFF; 129 probes GREEN; 132 unit tests GREEN
     │
-    🏁  PORT AGENTICALLY DECLARED COMPLETE — every automated meter green,
-        pending user verification. Native C binaries, drop-in for Python,
-        suitable for NextPi and any embedded platform — no Python needed.
+    🏁  PORT AGENTICALLY VERIFIED COMPLETE — every automated meter green,
+        prose audit grounded, pending user sign-off. Native C binaries,
+        drop-in for Python, suitable for NextPi and any embedded platform —
+        no Python needed.
 ```
 
 Each phase was independently useful — you didn't have to wait for the whole
