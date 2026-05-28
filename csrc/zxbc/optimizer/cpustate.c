@@ -206,7 +206,7 @@ static void set_flag_bit(CPUState *s, int *slot, int val,
     *slot = val;
     const char *f = regs_get(s, "f");
     if (val != FLAG_NONE && is_number(f)) {
-        long fv; getv_internal(s, "f", &fv);
+        long fv = 0; getv_internal(s, "f", &fv);
         regs_set(s, "f", cs_fmt_int(s->a, (fv & mask) | (val << shift)));
     } else {
         regs_set(s, "f", z80h_new_tmp_val(s->a));
@@ -434,7 +434,7 @@ static void cpu_set(CPUState *s, const char *r0, const char *orig_val) {
         regs_set(s, r, nv);
         const char *hl = map16(r);
         if (hl == NULL) return;
-        const char *h8,*l8; map8(hl,&h8,&l8);
+        const char *h8 = NULL, *l8 = NULL; map8(hl,&h8,&l8);
         const char *h_=regs_get(s,h8), *l_=regs_get(s,l8);
         if (is_number(h_) && is_number(l_)) {
             long hh,ll; valnum(h_,&hh); valnum(l_,&ll);
@@ -549,11 +549,11 @@ static void cpu_inc(CPUState *s, const char *r) {
         }
         return;
     }
-    { long v; if (getv_internal(s,r,&v)) cpu_set_int(s,r,v+1); else cpu_set_none(s,r); }
+    { long v = 0; if (getv_internal(s,r,&v)) cpu_set_int(s,r,v+1); else cpu_set_none(s,r); }
     if (!strcmp(r,"ix")||!strcmp(r,"iy")) shift_idx_regs_refs(s,r,1);
     if (!is_8bit_oper_register(r)) return;
     if (is_unknown(regs_get(s,r))) { cpu_set_flag(s,NULL); return; }
-    { long v; getv_internal(s,r,&v); set_Z(s,(int)(v==0)); set_C(s,(int)(v==0)); }
+    { long v = 0; getv_internal(s,r,&v); set_Z(s,(int)(v==0)); set_C(s,(int)(v==0)); }
 }
 static void cpu_dec(CPUState *s, const char *r) {
     if (!is_register(r)) {
@@ -569,17 +569,17 @@ static void cpu_dec(CPUState *s, const char *r) {
         mem_write8(s, cpustate_get(s,r_), cs_fmt_int(s->a,nv));
         return;
     }
-    { long v; if (getv_internal(s,r,&v)) cpu_set_int(s,r,v-1); else cpu_set_none(s,r); }
+    { long v = 0; if (getv_internal(s,r,&v)) cpu_set_int(s,r,v-1); else cpu_set_none(s,r); }
     if (!strcmp(r,"ix")||!strcmp(r,"iy")) shift_idx_regs_refs(s,r,-1);
     if (!is_8bit_oper_register(r)) return;
     if (is_unknown(regs_get(s,r))) { cpu_set_flag(s,NULL); return; }
-    { long v; getv_internal(s,r,&v); set_Z(s,(int)(v==0)); set_C(s,(int)(v==0xFF)); }
+    { long v = 0; getv_internal(s,r,&v); set_Z(s,(int)(v==0)); set_C(s,(int)(v==0xFF)); }
 }
 
 /* rrc/rr/rlc/rl (cpustate.py:578-622) */
 static void cpu_rrc(CPUState *s, const char *r) {
     if (!is_number(regs_get(s,r))) { cpu_set_none(s,r); cpu_set_flag(s,NULL); return; }
-    long v; getv_internal(s, regs_get(s,r), &v); v &= 0xFF;
+    long v = 0; getv_internal(s, regs_get(s,r), &v); v &= 0xFF;
     regs_set(s, r, cs_fmt_int(s->a, (v>>1)|((v&1)<<7)));
 }
 static void cpu_rr(CPUState *s, const char *r) {
@@ -587,13 +587,13 @@ static void cpu_rr(CPUState *s, const char *r) {
         cpu_set_none(s,r); cpu_set_flag(s,NULL); return; }
     cpu_rrc(s,r);
     int tmp = s->flags0.C;
-    long v; getv_internal(s, regs_get(s,r), &v);
+    long v = 0; getv_internal(s, regs_get(s,r), &v);
     set_C(s, (int)(v>>7));
     regs_set(s, r, cs_fmt_int(s->a, (v&0x7F)|(tmp<<7)));
 }
 static void cpu_rlc(CPUState *s, const char *r) {
     if (!is_number(regs_get(s,r))) { cpu_set_none(s,r); cpu_set_flag(s,NULL); return; }
-    long v; getv_internal(s, regs_get(s,r), &v); v &= 0xFF;
+    long v = 0; getv_internal(s, regs_get(s,r), &v); v &= 0xFF;
     cpu_set_int(s, r, ((v<<1)&0xFF)|(v>>7));
 }
 static void cpu_rl(CPUState *s, const char *r) {
@@ -601,7 +601,7 @@ static void cpu_rl(CPUState *s, const char *r) {
         cpu_set_none(s,r); cpu_set_flag(s,NULL); return; }
     cpu_rlc(s,r);
     int tmp = s->flags0.C;
-    long v; getv_internal(s, regs_get(s,r), &v);
+    long v = 0; getv_internal(s, regs_get(s,r), &v);
     set_C(s, (int)(v&1));
     regs_set(s, r, cs_fmt_int(s->a, (v&0xFE)|tmp));
 }
@@ -631,7 +631,7 @@ void cpustate_execute(CPUState *s, const char *asm_code) {
     if (!strcmp(i,"push")) {
         long sp;
         if (valnum(regs_get(s,"sp"),&sp)) {
-            long v; getv_internal(s,"sp",&v); cpu_set_int(s,"sp",(v-2)%0xFFFF);
+            long v = 0; getv_internal(s,"sp",&v); cpu_set_int(s,"sp",(v-2)%0xFFFF);
         } else cpu_set_none(s,"sp");
         vec_push(s->stack, (char*)regs_get(s,O(0)));
         goto done;
@@ -642,7 +642,7 @@ void cpustate_execute(CPUState *s, const char *asm_code) {
         else cpu_set_none(s,O(0));
         long sp;
         if (valnum(regs_get(s,"sp"),&sp) && sp) {
-            long v; getv_internal(s,"sp",&v); cpu_set_int(s,"sp",(v+2)%0xFFFF);
+            long v = 0; getv_internal(s,"sp",&v); cpu_set_int(s,"sp",(v+2)%0xFFFF);
         } else cpu_set_none(s,"sp");
         goto done;
     }

@@ -112,7 +112,7 @@ void *ply_parse(PlyParser *p) {
     /* yacc.py:314-318 start state (0, $end) */
     push_state(&stk, 0);
     {
-        PlySym end;
+        PlySym end = {0};
         end.type = PLY_END_ID;
         end.lineno = 0;
         end.value = NULL;
@@ -214,7 +214,7 @@ void *ply_parse(PlyParser *p) {
                         stk.nstates -= plen;
                         /* symstack.append(sym); state = goto[...][pname] */
                         push_sym(&stk, sym);
-                        int g;
+                        int g = 0;
                         row_get(&ply_goto[stk.states[stk.nstates - 1]], pname, &g);
                         state = g;
                         push_state(&stk, state);
@@ -260,7 +260,7 @@ void *ply_parse(PlyParser *p) {
                         sym.value = result_value;
                         sym.lineno = result_lineno;
                         push_sym(&stk, sym);
-                        int g;
+                        int g = 0;
                         row_get(&ply_goto[stk.states[stk.nstates - 1]], pname, &g);
                         state = g;
                         push_state(&stk, state);
