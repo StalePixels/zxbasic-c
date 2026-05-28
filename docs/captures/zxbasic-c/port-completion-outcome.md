@@ -1,7 +1,7 @@
 # zxbasic-c — port completion outcome
 
 **Snapshot:** 2026-05-28
-**Final inner HEAD:** `<S7.3-FINAL-SHA>` (filled by S7.3 close-out bank)
+**Final inner HEAD:** `107232e4` (S7.3 close-out — `make test` umbrella wiring).
 **Pinned upstream:** zxbasic-c/src/ at `9c0693f8` (current Boriel HEAD as of port-completion ≈ 2026-03-07; verified against `_ref/zxbasic-upstream/` at HEAD `2b6fecc8` per `docs/plans/zxbasic-c/research/stage-03-upstream-verification.md`).
 
 ## Headline
