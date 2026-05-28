@@ -8,6 +8,7 @@
 [![zxbc full pipeline](https://img.shields.io/badge/zxbc_full--O0--O3-byte--identical_to_Python-brightgreen)](#-phase-3--compiler-frontend-byte-identical)
 [![Codegen probes](https://img.shields.io/badge/probes-129_GREEN_0_RED-brightgreen)](#probe-enumeration-meter)
 [![C unit tests](https://img.shields.io/badge/C_unit_tests-132_passing-blue)](#c-unit-test-suite)
+[![Port status](https://img.shields.io/badge/port-agentically_declared_complete-yellow)](docs/captures/zxbasic-c/port-completion-outcome.md)
 
 ZX BASIC — C Port 🚀
 ---------------------
@@ -15,20 +16,53 @@ ZX BASIC — C Port 🚀
 A **C language port** of the [Boriel ZX BASIC compiler](https://github.com/boriel-basic/zxbasic),
 originally written in Python by Jose Rodriguez-Rosa (a.k.a. Boriel).
 
-## 🎯 What is this?
+## 🏁 Port Complete — 2026-05-28 *(agentically declared, not yet user-verified)*
 
-This is an **agentic porting experiment** — a test of whether an AI coding assistant can
-systematically port a non-trivial compiler (~38,500 lines of Python) to C, producing a
-drop-in replacement with **byte-for-byte identical output**.
+> ⚠️ **This is an agent's self-declaration of completion**, based on every
+> automated meter the port exposes returning green. It has **not yet been
+> independently verified or signed off by [@Xalior](https://github.com/Xalior)
+> (the human maintainer)**. The meters are reproducible — anyone can run
+> `make test` and `make test-slow` and check — but a human cold-read of the
+> close-out doc + a real-world build is still pending.
 
-The toolchain being ported — `zxbc` (compiler), `zxbasm` (assembler), and `zxbpp`
-(preprocessor) — is validated stage by stage against the original's comprehensive test
-suite of 1,285+ functional tests.
+Per the automated gates, the toolchain — `zxbpp` (preprocessor), `zxbasm`
+(assembler), `zxbc` (compiler) — is a **byte-for-byte drop-in replacement**
+for the Python original across every measured surface: the full
+`tests/functional/` corpus at every optimization level, all 132 internal-API
+unit tests, all 129 hand-authored probe fixtures, and the gated 3-stage codegen
+pipeline on both `zx48k` and `zxnext` archs. CI green on Linux x86_64 /
+Linux arm64 / macOS arm64 / Windows x86_64.
 
-The practical end-goal: a C implementation of the compiler suitable for **embedding on
-[NextPi](https://www.specnext.com/)** and similar resource-constrained platforms. The
-NextPi ships with a lightweight Python 2 install, but ZX BASIC requires Python 3.11+ —
-far too heavy for the hardware. Native C binaries sidestep the problem entirely.
+Single-command verification:
+
+```bash
+make test       # ~5 min fast tier — routine green-light gate
+make test-slow  # ~18 min deep tier — full byte-for-byte equivalence sweep
+```
+
+The cold-readable port-completion summary lives at
+[`docs/captures/zxbasic-c/port-completion-outcome.md`](docs/captures/zxbasic-c/port-completion-outcome.md):
+final bucket counts, Round-0 → completion delta, every documented SKIP with
+its justification, the read-only-invariant audit.
+
+## 🎯 What was this?
+
+An **agentic porting experiment** — a test of whether an AI coding assistant
+could systematically port a non-trivial compiler (~38,500 lines of Python) to
+C, producing a drop-in replacement with byte-for-byte identical output. The
+answer turned out to be yes, with the discipline scaffolding documented in the
+close-out doc above.
+
+The toolchain was validated stage by stage against the original's comprehensive
+test suite of 1,285+ functional tests, plus an additional 129-fixture probe
+series authored alongside the port to catch codepaths the inherited corpus is
+silent on.
+
+The practical end-goal: a C implementation of the compiler suitable for
+**embedding on [NextPi](https://www.specnext.com/)** and similar
+resource-constrained platforms. The NextPi ships with a lightweight Python 2
+install, but ZX BASIC requires Python 3.11+ — far too heavy for the hardware.
+Native C binaries sidestep the problem entirely.
 
 ## 📊 Current Status
 
@@ -41,7 +75,7 @@ far too heavy for the hardware. Native C binaries sidestep the problem entirely.
 | 4 | **Optimizer + IR generation (AST → Quads)** | byte-identical -O1/-O2/-O3 to Python | ✅ Complete |
 | 5 | **Z80 backend (Quads → Assembly + peephole)** | zx48k 895/886/886 stages GREEN; zxnext 197/197/197 GREEN | ✅ Complete |
 | 6 | Full integration + all output formats (.tap/.tzx/.sna/.z80) | exercised by stage validation | ✅ Complete |
-| 7 | Full-equivalence umbrella + `make test` / `make test-slow` | FULL-EQUAL 888 / 0 DIFF; 129 probe GREEN / 0 RED | ✅ **PORT COMPLETE** |
+| 7 | Full-equivalence umbrella + `make test` / `make test-slow` | FULL-EQUAL 888 / 0 DIFF; 129 probe GREEN / 0 RED | ✅ **agentically declared complete** (pending user verification) |
 
 ### 🔬 Phase 3 — Compiler Frontend: Byte-Identical
 
@@ -124,8 +158,7 @@ verifying internal APIs match the Python test suites (`tests/api/`, `tests/symbo
 | `test_symboltable` | 22 | `tests/api/test_symbolTable.py` (18 + 4 C extras) |
 | `test_check` | 4 | `tests/api/test_check.py` |
 | `test_cmdline` | 15 | `tests/cmdline/test_zxb.py` + `test_arg_parser.py` |
-| `run_cmdline_tests.sh` | 4 | `tests/cmdline/test_zxb.py` (exit-code) |
-| **Total** | **136** | |
+| **Total** | **132** | |
 
 ### 🔬 Phase 2 — Assembler: Done!
 
@@ -316,11 +349,13 @@ cmp py.tap c.tap && echo "✅ byte-identical"
 Across the 1,036-file `tests/functional/arch/zx48k` corpus and the 198-file
 `tests/functional/arch/zxnext` corpus, this comparison passes for every file
 except the three documented Python-optimizer-bug fixtures. The custom probe
-series (`csrc/tests/codegen_probes/`, ~94 fixtures across 8 categories) covers
-codepaths the inherited corpus doesn't reach — 84+ probes GREEN, hand-authored
-to enforce no silent drift on subtle semantics (typecast cross-products,
-loop-stack EXIT/CONTINUE checks, `@`-address-of in constant contexts, class
-mismatches with proper "a VAR"/"an ARRAY" article handling, etc.).
+series (`csrc/tests/codegen_probes/`, **129 fixtures across 10 categories** —
+arithmetic, arrays, controlflow, errors, preprocessor, strings, switches,
+typecast, warnings, zxbasm) covers codepaths the inherited corpus doesn't
+reach — **129/129 GREEN**, hand-authored to enforce no silent drift on subtle
+semantics (typecast cross-products, loop-stack EXIT/CONTINUE checks,
+`@`-address-of in constant contexts, class mismatches with proper "a VAR"/"an
+ARRAY" article handling, etc.).
 
 ### Embed in your build pipeline
 
@@ -367,15 +402,20 @@ Here's how we get there, one step at a time:
  Phase 5  ✅  Z80 Backend — Quads → Assembly + peephole
     │         zx48k 895/886/886 + zxnext 197/197/197 stages ALL GREEN
     │
- Phase 6  🔨  Integration — All output formats (.tap, .tzx, .sna, .z80)
-    │         Full CLI compatibility (you are here! 📍)
+ Phase 6  ✅  Integration — All output formats (.tap, .tzx, .sna, .z80, .bin, .ir)
+    │         Full CLI compatibility (every upstream flag accepted)
     │
-    🏁  Native binaries for NextPi and embedded platforms — no Python needed
+ Phase 7  ✅  Full-equivalence umbrella — `make test` / `make test-slow`
+    │         FULL-EQUAL 888 / 0 DIFF; 129 probes GREEN; 132 unit tests GREEN
+    │
+    🏁  PORT AGENTICALLY DECLARED COMPLETE — every automated meter green,
+        pending user verification. Native C binaries, drop-in for Python,
+        suitable for NextPi and any embedded platform — no Python needed.
 ```
 
-Each phase is independently useful — you don't have to wait for the whole thing.
-After Phase 2, you can preprocess and assemble entirely in C. After Phase 6,
-Python is no longer needed at all. 🎯
+Each phase was independently useful — you didn't have to wait for the whole
+thing. After Phase 2, you can preprocess and assemble entirely in C. After
+Phase 7, Python is no longer needed at all. 🎯
 
 ## 🤖 Who is doing this?
 
