@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.7.2)
 
 # Read version from VERSION file
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" ZXBASIC_C_VERSION)
@@ -16,7 +16,7 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
 elseif(MSVC)
     add_compile_options(/W3)
     # Suppress MSVC warnings about fopen, sprintf, etc.
-    add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
+    add_definitions(-D_CRT_SECURE_NO_WARNINGS)
 endif()
 
 # Flex and bison will be needed for later phases (assembler, compiler).
@@ -28,7 +28,7 @@ endif()
 add_subdirectory(common)
 
 # Pass version to all targets
-add_compile_definitions(ZXBASIC_C_VERSION="${ZXBASIC_C_VERSION}")
+add_definitions(-DZXBASIC_C_VERSION="${ZXBASIC_C_VERSION}")
 
 # Preprocessor (zxbpp)
 add_subdirectory(zxbpp)
