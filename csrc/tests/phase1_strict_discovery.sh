@@ -9,7 +9,7 @@
 set -uo pipefail
 
 PYTHON="${PYTHON:-/opt/homebrew/bin/python3.12}"
-ZXBPP_C="${ZXBPP_C:-csrc/build/zxbpp/zxbpp}"
+ZXBPP_C="${ZXBPP_C:-csrc/build/bin/zxbpp}"
 TEST_DIR="${TEST_DIR:-tests/functional/zxbpp}"
 OUT_MD="${1:-../docs/captures/zxbasic-c/phase1-strict-divergences.md}"
 

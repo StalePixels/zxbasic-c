@@ -10,7 +10,7 @@
 # Usage:
 #   run_zxbc_omatrix.sh <c-zxbc-binary> [<test-dir>]
 #
-#   <c-zxbc-binary>  path to the built C zxbc (e.g. csrc/build/zxbc/zxbc)
+#   <c-zxbc-binary>  path to the built C zxbc (e.g. csrc/build/bin/zxbc)
 #   <test-dir>       fixture corpus; default tests/functional/arch/zx48k.
 #                    Pass tests/functional/arch/zxnext for the Next sweep.
 #

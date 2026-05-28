@@ -4,7 +4,7 @@
 #
 # For each top-level .bas program under _ref/NextBuild/Sources/, compiles it
 # with BOTH:
-#   1. our C zxbc (csrc/build/zxbc/zxbc)            via nextbuild-c.py
+#   1. our C zxbc (csrc/build/bin/zxbc)             via nextbuild-c.py
 #   2. pinned upstream Python (zxbasic-c/src/)      via nextbuild-c.py + NEXTBUILD_BACKEND=oracle
 # and compares the resulting binaries.
 #

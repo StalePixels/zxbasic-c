@@ -3,7 +3,7 @@
 #
 # For each .bas:
 #   1. Run csrc/tests/dump_python_ast.py → py_ast.json
-#   2. Run csrc/build/zxbc-ast-dump/zxbc-ast-dump → c_ast.json
+#   2. Run csrc/build/bin/zxbc-ast-dump → c_ast.json
 #   3. Run csrc/tests/diff_ast_json.py → EQUAL or DIFF: <count> sites
 #
 # Five buckets:

@@ -222,7 +222,7 @@ make test-zxbc-stages
 
 # Same meter — zxnext
 ./csrc/tests/run_zxbc_stage_validation.sh \
-    ./csrc/build/zxbc/zxbc ./csrc/build/zxbasm/zxbasm \
+    ./csrc/build/bin/zxbc ./csrc/build/bin/zxbasm \
     tests/functional/arch/zxnext
 
 # Cross-component equivalence guards

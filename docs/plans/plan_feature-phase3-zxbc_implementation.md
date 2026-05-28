@@ -18,7 +18,7 @@ Phase 3 is complete when `zxbc --parse-only` is a **drop-in replacement** for th
 # The ground truth: compare C exit code against Python exit code for every .bas file
 for f in tests/functional/arch/zx48k/*.bas; do
     c_rc=0; p_rc=0
-    ./csrc/build/zxbc/zxbc --parse-only "$f" >/dev/null 2>&1 || c_rc=1
+    ./csrc/build/bin/zxbc --parse-only "$f" >/dev/null 2>&1 || c_rc=1
     python3.12 ... --parse-only "$f" >/dev/null 2>&1 || p_rc=1
     [ "$c_rc" != "$p_rc" ] && echo "MISMATCH: $(basename $f)"
 done

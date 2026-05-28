@@ -79,12 +79,12 @@ esac
 # ---- interpreters: pinned Python oracle + the built C binaries ----
 PY=/opt/homebrew/bin/python3.12
 [ -x "$PY" ] || { echo "ERROR: required interpreter $PY not present (no silent fallback to system python3)." >&2; exit 2; }
-ZXBC_C="$ROOT/csrc/build/zxbc/zxbc"
-ZXBASM_C="$ROOT/csrc/build/zxbasm/zxbasm"
+ZXBC_C="$ROOT/csrc/build/bin/zxbc"
+ZXBASM_C="$ROOT/csrc/build/bin/zxbasm"
 if [ "$MODE" = "zxbc" ]; then
-    [ -x "$ZXBC_C" ] || { echo "ERROR: C zxbc not built at $ZXBC_C — build it (cmake --build csrc/build --target zxbc) first." >&2; exit 2; }
+    [ -x "$ZXBC_C" ] || { echo "ERROR: C zxbc not built at $ZXBC_C — build it (cmake --build csrc/build) first." >&2; exit 2; }
 else
-    [ -x "$ZXBASM_C" ] || { echo "ERROR: C zxbasm not built at $ZXBASM_C — build it (cmake --build csrc/build --target zxbasm) first." >&2; exit 2; }
+    [ -x "$ZXBASM_C" ] || { echo "ERROR: C zxbasm not built at $ZXBASM_C — build it (cmake --build csrc/build) first." >&2; exit 2; }
 fi
 
 # ---- normalisation: strip the absolute project root from TEXT streams only ----
