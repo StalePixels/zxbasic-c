@@ -22,7 +22,7 @@ set -uo pipefail
 ZXBPP_C="${1:?Usage: $0 <c-zxbpp-binary> <test-dir>}"
 TEST_DIR="${2:?Usage: $0 <c-zxbpp-binary> <test-dir>}"
 
-. "$(dirname "$0")/_find_python312.sh"
+. "$(dirname "$0")/_find_python.sh"
 
 ZXBPP_C=$(cd "$(dirname "$ZXBPP_C")" && pwd)/$(basename "$ZXBPP_C")
 TEST_DIR=$(cd "$TEST_DIR" && pwd)

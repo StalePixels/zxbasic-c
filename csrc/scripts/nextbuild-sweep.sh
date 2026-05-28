@@ -36,7 +36,7 @@ NEXTBUILD_DIR="$(cd "$NEXTBUILD_DIR" 2>/dev/null && pwd)" || {
 }
 SOURCES_DIR="$NEXTBUILD_DIR/Sources"
 
-. "$ZXBASIC_C_DIR/csrc/tests/_find_python312.sh"
+. "$ZXBASIC_C_DIR/csrc/tests/_find_python.sh"
 DRIVER="$SCRIPT_DIR/nextbuild-c.py"
 
 FILTER="${1-}"

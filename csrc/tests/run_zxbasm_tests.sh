@@ -34,7 +34,7 @@ set -uo pipefail
 ZXBASM_C="${1:?Usage: $0 <zxbasm-binary> <test-dir>}"
 TEST_DIR="${2:?Usage: $0 <zxbasm-binary> <test-dir>}"
 
-. "$(dirname "$0")/_find_python312.sh"
+. "$(dirname "$0")/_find_python.sh"
 
 ZXBASM_C=$(cd "$(dirname "$ZXBASM_C")" && pwd)/$(basename "$ZXBASM_C")
 TEST_DIR=$(cd "$TEST_DIR" && pwd)
