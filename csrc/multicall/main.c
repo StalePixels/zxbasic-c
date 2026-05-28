@@ -6,22 +6,27 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <libgen.h>
+#include "cwalk.h"
 
 int zxbpp_main(int argc, char *argv[]);
 int zxbasm_main(int argc, char *argv[]);
 int zxbc_main(int argc, char *argv[]);
 
 static const char *applet_name(const char *argv0) {
-    /* basename() on macOS/glibc may mutate its argument; work on a copy. */
     static char buf[256];
-    strncpy(buf, argv0, sizeof(buf) - 1);
-    buf[sizeof(buf) - 1] = '\0';
-    char *name = basename(buf);
-    /* Strip a trailing .exe (Windows). */
-    char *dot = strrchr(name, '.');
-    if (dot && strcmp(dot, ".exe") == 0) *dot = '\0';
-    return name;
+    const char *base_ptr;
+    size_t base_len;
+    cwk_path_get_basename(argv0, &base_ptr, &base_len);
+    if (!base_ptr || base_len == 0) {
+        base_ptr = argv0;
+        base_len = strlen(argv0);
+    }
+    if (base_len >= sizeof(buf)) base_len = sizeof(buf) - 1;
+    memcpy(buf, base_ptr, base_len);
+    buf[base_len] = '\0';
+    char *dot = strrchr(buf, '.');
+    if (dot && (strcmp(dot, ".exe") == 0 || strcmp(dot, ".EXE") == 0)) *dot = '\0';
+    return buf;
 }
 
 int main(int argc, char *argv[]) {
