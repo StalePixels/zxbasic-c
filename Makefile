@@ -1,33 +1,45 @@
-# Top-level Makefile for the C port. Round 0 close-out (Sprint 11):
-# the strict harnesses replace the legacy fuzzy ones under canonical
-# names; per-phase calibration assertions are gone (their job — proving
-# the rebuild changed verdicts — is done now that the fuzzy harnesses
-# they compared against have been deleted).
+# Top-level Makefile for the C port — port-completion umbrella
+# (S7.3f / CR#5). Two-tier design:
 #
-# `make test` is the aggregator: builds, runs every strict harness,
-# reports each surface's bucket count.
+#   make test       — fast tier (≈5 min), the routine green-light gate.
+#   make test-slow  — deep tier (≈18 min) including byte-for-byte
+#                     full-corpus + 3-stage gated pipeline + -O matrix
+#                     on both archs.
+#
+# See the `test:` target below for the wiring detail and exit semantics.
 
 CMAKE       ?= cmake
 BUILD_DIR   ?= csrc/build
 BUILD_TYPE  ?= Release
 
-ZXBPP_C         = $(BUILD_DIR)/zxbpp/zxbpp
-ZXBPP_TESTS     = tests/functional/zxbpp
-ZXBASM_C        = $(BUILD_DIR)/zxbasm/zxbasm
-ZXBASM_TESTS    = tests/functional/asm
-ZXBC_C          = $(BUILD_DIR)/zxbc/zxbc
-ZXBC_TESTS      = tests/functional/arch/zx48k
-ZXBC_AST_DUMP_C = $(BUILD_DIR)/zxbc-ast-dump/zxbc-ast-dump
-PY_AST_DUMP     = csrc/tests/dump_python_ast.py
-PY_AST_DIFF     = csrc/tests/diff_ast_json.py
+ZXBPP_C            = $(BUILD_DIR)/zxbpp/zxbpp
+ZXBPP_TESTS        = tests/functional/zxbpp
+ZXBASM_C           = $(BUILD_DIR)/zxbasm/zxbasm
+ZXBASM_TESTS       = tests/functional/asm
+ZXBC_C             = $(BUILD_DIR)/zxbc/zxbc
+ZXBC_TESTS         = tests/functional/arch/zx48k
+ZXBC_TESTS_ZXNEXT  = tests/functional/arch/zxnext
+ZXBC_AST_DUMP_C    = $(BUILD_DIR)/zxbc-ast-dump/zxbc-ast-dump
+PY_AST_DUMP        = csrc/tests/dump_python_ast.py
+PY_AST_DIFF        = csrc/tests/diff_ast_json.py
+CHECK_METER        = csrc/tests/check_meter_green.sh
+PROBE_RUN          = csrc/tests/codegen_probes/run_probes.sh
+# Ten hand-authored probe categories under csrc/tests/codegen_probes/.
+# _coverage/ is tooling (the in-process cov driver), not a test category.
+PROBE_CATEGORIES   = arithmetic arrays controlflow errors preprocessor \
+                     strings switches typecast warnings zxbasm
 
 .PHONY: build clean \
-        test test-zxbpp test-zxbasm test-zxbc-parse test-zxbc-ast-equiv \
+        test test-fast test-slow \
+        test-zxbpp test-zxbasm test-zxbc-parse test-zxbc-ast-equiv \
         test-semantic-fidelity verify-phase1-calibration \
         test-zxbc-codegen verify-phase5-calibration \
         test-zxbc-outfmt verify-phase6-calibration \
         test-zxbc-full verify-phase7-calibration \
-        test-zxbc-stages \
+        test-zxbc-stages test-zxbc-stages-zxnext \
+        test-zxbc-omatrix test-zxbc-omatrix-zxnext \
+        test-codegen-probes \
+        test-unit \
         test-cmdline-parity \
         sweep-asm-zero-byte regenerate-zxbc-baselines
 
@@ -38,25 +50,98 @@ build:
 clean:
 	rm -rf $(BUILD_DIR) Testing
 
-# Aggregator: build, then run every strict harness across its full
-# surface. Each harness reports its own bucket count to stdout; the
-# aggregate `make test` exits non-zero iff any sub-harness exits
-# non-zero. AST-equiv is exit-zero (it's a measurement, not a verifier).
-test: build
-	@echo "================== make test =================="
-	@echo "[1/4] zxbpp strict harness"
-	./csrc/tests/run_zxbpp_tests.sh $(ZXBPP_C) $(ZXBPP_TESTS) || true
+# Aggregator (port-completion gate, S7.3f / CR#5). Two tiers:
+#
+#   make test       — the FAST tier, the routine green-light gate.
+#                     zxbpp, zxbasm, zxbc parse, zxbc codegen, the 10
+#                     codegen-probe categories, the C unit tests. Each
+#                     exits non-zero (or, for the exit-0-always
+#                     measurement harnesses, is wrapped by
+#                     csrc/tests/check_meter_green.sh) so `make test`
+#                     itself exits non-zero on any regression. Wall-clock
+#                     ≈ 5 min on a recent-vintage workstation, dominated
+#                     by the codegen meter (3m15s).
+#
+#   make test-slow  — `make test` PLUS the deep byte-for-byte meters:
+#                     zxbc full corpus (zx48k), the gated 3-stage
+#                     validation (zx48k + zxnext), and the -O matrix
+#                     sweep (zx48k + zxnext). Wall-clock dominated by
+#                     the stage-validation harness's 3× pipeline runs.
+#                     Run pre-bank for the final close-out and as part
+#                     of CI's nightly / pre-release gate.
+#
+# NOT in either tier:
+#   csrc/scripts/nextbuild-sweep.sh — local-only discovery harness,
+#     depends on `_ref/NextBuild/` checkout which CI doesn't have.
+#     Documented in docs/captures/zxbasic-c/port-completion-outcome.md.
+#
+# Wiring rule: every harness that exits 0 regardless of divergences
+# (zxbc-full, zxbc-stages, zxbc-omatrix, codegen probes) goes through
+# csrc/tests/check_meter_green.sh, which parses the printed bucket
+# summary and exits non-zero iff any divergence bucket is non-zero.
+# Harnesses that already exit non-zero on FAIL (zxbpp, zxbasm,
+# zxbc-parse, zxbc-codegen, the unit tests) are invoked directly.
+
+test: test-fast
+
+test-fast: build
+	@echo "================== make test (fast tier) =================="
+	@start=$$(date +%s); \
+	./csrc/tests/run_zxbpp_tests.sh $(ZXBPP_C) $(ZXBPP_TESTS) && \
+	echo && \
+	./csrc/tests/run_zxbasm_tests.sh $(ZXBASM_C) $(ZXBASM_TESTS) && \
+	echo && \
+	./csrc/tests/run_zxbc_tests.sh $(ZXBC_C) $(ZXBC_TESTS) && \
+	echo && \
+	./csrc/tests/run_zxbc_codegen_tests.sh $(ZXBC_C) $(ZXBC_TESTS) && \
+	echo && \
+	$(MAKE) --no-print-directory test-codegen-probes && \
+	echo && \
+	$(MAKE) --no-print-directory test-unit && \
+	echo && \
+	end=$$(date +%s); \
+	elapsed=$$((end - start)); \
+	echo "================== make test (fast tier) GREEN — $${elapsed}s =================="
+
+test-slow: test-fast
 	@echo
-	@echo "[2/4] zxbasm strict harness"
-	./csrc/tests/run_zxbasm_tests.sh $(ZXBASM_C) $(ZXBASM_TESTS) || true
-	@echo
-	@echo "[3/4] zxbc --parse-only strict harness"
-	./csrc/tests/run_zxbc_tests.sh $(ZXBC_C) $(ZXBC_TESTS) || true
-	@echo
-	@echo "[4/4] zxbc AST-equivalence harness"
-	./csrc/tests/run_zxbc_ast_equiv.sh $(ZXBC_AST_DUMP_C) $(PY_AST_DUMP) $(PY_AST_DIFF) $(ZXBC_TESTS)
-	@echo
-	@echo "================== make test done =============="
+	@echo "================== make test-slow (deep tier) =================="
+	@start=$$(date +%s); \
+	$(CHECK_METER) zxbc-full full -- \
+	    ./csrc/tests/run_zxbc_full_tests.sh $(ZXBC_C) $(ZXBC_TESTS) && \
+	echo && \
+	$(CHECK_METER) zxbc-stages-zx48k stages -- \
+	    ./csrc/tests/run_zxbc_stage_validation.sh $(ZXBC_C) $(ZXBASM_C) $(ZXBC_TESTS) && \
+	echo && \
+	$(CHECK_METER) zxbc-stages-zxnext stages -- \
+	    ./csrc/tests/run_zxbc_stage_validation.sh $(ZXBC_C) $(ZXBASM_C) $(ZXBC_TESTS_ZXNEXT) && \
+	echo && \
+	$(CHECK_METER) zxbc-omatrix-zx48k omatrix-zx48k -- \
+	    ./csrc/tests/run_zxbc_omatrix.sh $(ZXBC_C) $(ZXBC_TESTS) && \
+	echo && \
+	$(CHECK_METER) zxbc-omatrix-zxnext omatrix-zxnext -- \
+	    ./csrc/tests/run_zxbc_omatrix.sh $(ZXBC_C) $(ZXBC_TESTS_ZXNEXT) && \
+	echo && \
+	end=$$(date +%s); \
+	elapsed=$$((end - start)); \
+	echo "================== make test-slow GREEN — deep tier $${elapsed}s =================="
+
+# Codegen probes — 10 hand-authored probe categories. Each category is
+# its own bucket sub-meter; the per-category script exits 0 always so
+# we wrap each in check_meter_green.sh (kind=probes) to gate on
+# PROBE-DIFF-* non-zero. Loop is shell-driven so first RED stops the
+# umbrella with a non-zero exit.
+test-codegen-probes: $(ZXBC_C) $(ZXBASM_C) $(ZXBPP_C)
+	@for cat in $(PROBE_CATEGORIES); do \
+	    $(CHECK_METER) "probes-$$cat" probes -- $(PROBE_RUN) "$$cat" || exit 1; \
+	    echo; \
+	done
+
+# C unit tests (test_utils, test_config, test_types, test_ast,
+# test_symboltable, test_check, test_cmdline) — all CTest-registered.
+# Drive via ctest from the build dir so the same harness CI uses runs.
+test-unit: build
+	@cd $(BUILD_DIR) && ctest --output-on-failure
 
 test-zxbpp: $(ZXBPP_C)
 	./csrc/tests/run_zxbpp_tests.sh $(ZXBPP_C) $(ZXBPP_TESTS)
@@ -141,6 +226,19 @@ verify-phase7-calibration: $(ZXBC_C)
 # impossible. Port-complete requires every stage green, gated.
 test-zxbc-stages: $(ZXBC_C) $(ZXBASM_C)
 	./csrc/tests/run_zxbc_stage_validation.sh $(ZXBC_C) $(ZXBASM_C) $(ZXBC_TESTS)
+
+# zxnext stage-validation companion. Same harness, the Spectrum Next
+# corpus. Gated GREEN at port-completion (197/197/197). Standalone
+# target — wired into `make test-slow`, not `make test`.
+test-zxbc-stages-zxnext: $(ZXBC_C) $(ZXBASM_C)
+	./csrc/tests/run_zxbc_stage_validation.sh $(ZXBC_C) $(ZXBASM_C) $(ZXBC_TESTS_ZXNEXT)
+
+# -O matrix sweep (S7.3d-9 harness). Both corpora.
+test-zxbc-omatrix: $(ZXBC_C)
+	./csrc/tests/run_zxbc_omatrix.sh $(ZXBC_C) $(ZXBC_TESTS)
+
+test-zxbc-omatrix-zxnext: $(ZXBC_C)
+	./csrc/tests/run_zxbc_omatrix.sh $(ZXBC_C) $(ZXBC_TESTS_ZXNEXT)
 
 # S7.2g end-to-end CLI parity gate. Mechanises the C-vs-Python flag
 # equivalence hand-verified per sub-slice across S7.2a–f (zxbc/zxbpp/

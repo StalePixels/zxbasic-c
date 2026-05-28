@@ -40,7 +40,8 @@ far too heavy for the hardware. Native C binaries sidestep the problem entirely.
 | 3 | **Compiler frontend (`zxbc`)** | **1033/1033** parse-only PASS / **0 false-positives** | ✅ Byte-identical except 3 known upstream Python bugs |
 | 4 | **Optimizer + IR generation (AST → Quads)** | byte-identical -O1/-O2/-O3 to Python | ✅ Complete |
 | 5 | **Z80 backend (Quads → Assembly + peephole)** | zx48k 895/886/886 stages GREEN; zxnext 197/197/197 GREEN | ✅ Complete |
-| 6 | Full integration + all output formats (.tap/.tzx/.sna/.z80) | exercised by stage validation | 🔨 Final polish |
+| 6 | Full integration + all output formats (.tap/.tzx/.sna/.z80) | exercised by stage validation | ✅ Complete |
+| 7 | Full-equivalence umbrella + `make test` / `make test-slow` | FULL-EQUAL 888 / 0 DIFF; 129 probe GREEN / 0 RED | ✅ **PORT COMPLETE** |
 
 ### 🔬 Phase 3 — Compiler Frontend: Byte-Identical
 
@@ -164,20 +165,32 @@ This builds `csrc/build/zxbpp/zxbpp`, `csrc/build/zxbasm/zxbasm`, and `csrc/buil
 
 ### Running the Tests
 
+The umbrella entry point is the top-level `Makefile`:
+
 ```bash
-# Run all 96 preprocessor tests:
+# Fast tier — the routine green-light gate (~5 min on a recent workstation).
+# zxbpp + zxbasm + zxbc parse + zxbc codegen + 129-fixture probe series +
+# the C unit tests. Exits non-zero on any regression.
+make test
+
+# Deep tier — `make test` PLUS the byte-for-byte equivalence meters:
+# full corpus, 3-stage gated pipeline (zx48k + zxnext), -O matrix sweep
+# (zx48k + zxnext). Used pre-bank / nightly / pre-release. Wall-clock
+# dominated by the gated stage harness.
+make test-slow
+```
+
+Individual harnesses can still be driven directly:
+
+```bash
+# Preprocessor tests (91 success + 5 error):
 ./csrc/tests/run_zxbpp_tests.sh ./csrc/build/zxbpp/zxbpp tests/functional/zxbpp
 
-# Run all 61 assembler tests (binary-exact):
+# Assembler tests (60 success + 32 error, binary-exact):
 ./csrc/tests/run_zxbasm_tests.sh ./csrc/build/zxbasm/zxbasm tests/functional/asm
 
-# Run 132 C unit tests:
-cd csrc/build && ./tests/test_utils && ./tests/test_config && ./tests/test_types \
-  && ./tests/test_ast && ./tests/test_symboltable && ./tests/test_check && cd ../..
-./csrc/build/tests/test_cmdline
-
-# Run 4 zxbc command-line tests:
-./csrc/tests/run_cmdline_tests.sh ./csrc/build/zxbc/zxbc tests/cmdline
+# C unit tests via CTest:
+cd csrc/build && ctest --output-on-failure
 ```
 
 ### 🐍 Python Ground-Truth Comparison
