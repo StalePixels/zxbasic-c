@@ -1,0 +1,7 @@
+# Third-party program bytes are NEVER committed. Only the manifest
+# (URLs + sha256), the harness, fixups, and results are tracked.
+#
+# `fetch.sh` repopulates these from the captured archives / upstream URLs.
+cache/
+work/
+results/

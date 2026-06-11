@@ -148,6 +148,19 @@ corpus-pass alone doesn't prove the port has every Python check; the probe
 meter does. Every new oversight surfaced from real-world compilation gets
 a RED probe first, GREEN fix second.
 
+#### Released-Program Corpus — real-world meter
+
+[`csrc/tests/released_corpus/`](csrc/tests/released_corpus/) compiles **real
+shipped ZX BASIC programs** (games/demos/utils from the upstream
+released-programs list) through both compilers with the same first-divergence
+contract as the probes. Third-party bytes are never committed — only a
+sha256-pinned manifest plus our `fixups/`. As of 2026-06-11 (first run):
+**29 programs — 1 BINARY-EQUAL, 10 FRONTEND-EQUAL, and 18 open `DIFF-*`
+findings** (2 DIFF-EXIT: `o-trix` C-side memory overflow, `retrobsesion`
+C treats a warning-only run as fatal; 16 DIFF-STDERR diagnostic divergences).
+Local/manual only — not wired into `make test` or CI while its findings are
+open; see its [README](csrc/tests/released_corpus/README.md).
+
 #### Compiler infrastructure
 - ✅ **Faithful PLY/LALR(1) parser port** — the default `zxbc` parser is a
   byte-for-byte port of Python's own PLY-generated tables + parse engine,

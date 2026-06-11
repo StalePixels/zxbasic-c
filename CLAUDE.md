@@ -180,6 +180,21 @@ The Python project has unit and integration tests beyond the functional `.bas`/`
 - **When you fix a class of divergence, write a probe for it.** Probes are additive — every new C codepath that diverges (or did diverge) earns a probe so the gap can't silently regress.
 - **Don't loosen the probe runner.** It's deliberately strict on byte-cmp; failures classify by the EARLIEST divergence so the bucket is diagnostic. Adding skip switches or tolerance to make a probe pass is the wrong fix — the probe is right; the C is wrong.
 
+### Released-program corpus — the real-world meter (`csrc/tests/released_corpus/`)
+
+Parity meter over real shipped ZX BASIC programs (games/demos/utils from
+zxbasic.readthedocs.io/released_programs). Same 4-part first-divergence
+contract as the probe runner; always exits 0 (diagnostic). `./fetch.sh`
+captures sha256-pinned archives into a gitignored `cache/` (third-party bytes
+are never committed), `./run_corpus.sh` runs the meter, `--diff <id>` dumps a
+program's first divergence. Read its `README.md` for tiers (BINARY-EQUAL /
+FRONTEND-EQUAL), the drift guard, and the `fixups/` flyby-fix mechanism.
+**Local/manual only — not in `make test` or CI** (by-design not green while
+DIFF-* findings are open; fetch needs network). Same discipline as the probes:
+don't loosen the runner, don't re-pin a manifest sha to silence DRIFT without
+confirming the new bytes. As of 2026-06-11: 29 programs — 1 BINARY-EQUAL,
+10 FRONTEND-EQUAL, 2 DIFF-EXIT, 16 DIFF-STDERR (18 open findings).
+
 ## Keeping Things Up To Date
 
 This project has several living documents and CI artefacts that MUST stay in sync with the code. When you add features, fix bugs, or complete phases:

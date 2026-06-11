@@ -1,0 +1,13 @@
+--- souls.bas
++++ souls.bas
+@@ -2,8 +2,8 @@
+ :rem                                              DECLARACION DE VARIABLES
+ :rem ==============================================================================================================================================
+ 
+-#include <c:/programacion/souls/sprites.bas>
+-#include <c:/programacion/souls/mapas.bas>
++#include "sprites.bas"
++#include "mapas.bas"
+ #PRAGMA org=24000
+ 
+ DIM iniUDGS,ani,anisube,anienem,frames,t,contestamina,topcontestamina AS UINTEGER
