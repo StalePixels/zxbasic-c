@@ -39,8 +39,16 @@ originally written in Python by Jose Rodriguez-Rosa (a.k.a. Boriel).
 > (`zxbc -f tap --autorun --BASIC hello.bas`) — captured as **2 RED
 > parity cases** (`s7.2h-default-out-bin`/`-tap` in
 > `make test-cmdline-parity`). Every internal harness passes `-o`, which
-> is why all meters were green over it. Both pending fix; all
-> pre-existing meters remain green.
+> is why all meters were green over it. Both pending fix.
+>
+> 🟡 Also surfaced (NOT a C defect): the omatrix meter is flaky at `-O3`
+> on `while.bas` — **upstream Python is hash-seed nondeterministic**
+> there (one byte flips between runs; 6/6 stable under
+> `PYTHONHASHSEED=0`, and the C output matches the seeded Python
+> exactly — C is the deterministic side). The 2026-05-28 omatrix green
+> was seed luck. Candidate fix: pin `PYTHONHASHSEED=0` in the
+> comparison harnesses. All other deep meters re-verified GREEN
+> 2026-06-11 (full corpus 888/0, stages zx48k + zxnext).
 
 Per the automated gates, the toolchain — `zxbpp` (preprocessor), `zxbasm`
 (assembler), `zxbc` (compiler) — is a **byte-for-byte drop-in replacement**
