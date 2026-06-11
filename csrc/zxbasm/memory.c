@@ -450,8 +450,16 @@ void mem_add_instruction(AsmState *as, AsmInstr *instr)
 
     m->slot_used = true;   /* set_memory_slot() — memory_bytes non-empty */
 
-    /* Ensure memory slot exists at current org */
-    if (!m->byte_set[m->index]) {
+    /* Ensure memory slot exists at current org.
+     * Guard the index: the per-byte emission guards below error at
+     * `>= MAX_MEM`, so the location counter can legitimately come to rest
+     * AT MAX_MEM after the final in-bounds byte of the previous
+     * instruction. Touching m->byte_set[m->index] / m->bytes[m->index]
+     * here without a bound would then read/write one past the image.
+     * Python's sparse dict has no such array edge; mirror its tolerance by
+     * letting the emission guard below raise the overflow error instead of
+     * faulting on this slot-init. */
+    if (m->index < MAX_MEM && !m->byte_set[m->index]) {
         m->bytes[m->index] = 0;
         m->byte_set[m->index] = true;
     }

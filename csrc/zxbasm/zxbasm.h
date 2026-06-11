@@ -243,7 +243,34 @@ int asm_defs_resolve(AsmState *as, AsmInstr *instr, uint8_t *fill_out);
 /* ----------------------------------------------------------------
  * Memory model
  * ---------------------------------------------------------------- */
-#define MAX_MEM 65536
+/* Size of the flat memory image / location-counter ceiling.
+ *
+ * Python's assembler (src/zxbasm/memory.py) has NO ceiling on byte
+ * emission: Memory.__set_byte (memory.py:81-89) writes into a sparse
+ * dict keyed by `org` and just increments `index` — the location counter
+ * can run past 65535 without error, and Memory.dump (memory.py:179)
+ * iterates `range(org, max(memory_bytes)+1)` so those high bytes are
+ * emitted in the output binary. Only an explicit `ORG` directive is
+ * range-checked to [0..65535] (memory.py:51-52, mirrored at
+ * memory.c:mem_set_org which still uses the literal 65535 — bumping this
+ * macro does NOT relax that gate).
+ *
+ * Real shipped programs do exceed 64K of emitted image: o-trix
+ * (released_corpus) ORGs at 0x8000 and emits 38126 bytes -> top address
+ * 70893 (0x114AD). Python assembles it fine and exits 0; the C port,
+ * whose memory image was a flat 65536-entry array, raised a spurious
+ * "Memory overflow at address 65536" and exited 5 — a DIFF-EXIT finding
+ * on identical stage-1 ASM (the ASM was byte-for-byte equal; only the
+ * assembler's verdict diverged). retrobsesion hit the same class.
+ *
+ * A fixed array can't be truly unbounded like Python's dict, so we size
+ * it to the practical Z80 reach: a maximum ORG of 65535 plus a full 64K
+ * of emission lands at most at ~131070, so 0x20000 (131072) is the
+ * tight upper bound for any single program. The emission overflow guards
+ * (memory.c) keep `>= MAX_MEM` as a genuine safety net, now at a bound
+ * Python could only exceed with a >64K-from-max-ORG image that no
+ * Spectrum program produces. */
+#define MAX_MEM 0x20000  /* 131072 — see note above; was 65536 */
 
 /* An org block: instructions at a given origin */
 typedef struct OrgBlock {
