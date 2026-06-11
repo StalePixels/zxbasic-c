@@ -212,6 +212,62 @@ int zxbc_main(int argc, char *argv[]) {
         return 2;
     }
 
+    /* Default output filename when -o is ABSENT.
+     * Faithful port of args_config.py:164-169:
+     *   OPTIONS.input_filename = os.path.basename(args[0])
+     *   if not OPTIONS.output_filename:
+     *       OPTIONS.output_filename = (
+     *           os.path.splitext(os.path.basename(OPTIONS.input_filename))[0]
+     *           + os.path.extsep + OPTIONS.output_file_type)
+     *
+     * Python takes basename twice (input_filename is already a basename),
+     * strips the extension via os.path.splitext (split on the LAST '.',
+     * but a leading dot — hidden file — is NOT an extension), and appends
+     * "." + output_file_type. The result lands in the CWD (no directory
+     * component), exactly as Python's relative name does. output_file_type
+     * defaults to "bin" (options.c:24), so this is never NULL.
+     *
+     * Placed AFTER the post-parse validation cluster (matching Python's
+     * line 166, after all parser.error checks), before the -e error-file
+     * open. Allocated in cs.arena so it lives the whole run. */
+    if (!cs.opts.output_filename) {
+        const char *base = NULL;
+        size_t base_len = 0;
+        cwk_path_get_basename(cs.opts.input_filename, &base, &base_len);
+        if (!base || base_len == 0) {
+            /* Defensive: a path with no basename (e.g. trailing slash).
+             * Fall back to the whole input_filename, mirroring how
+             * os.path.basename would yield "" only for dir-like paths;
+             * the compile would already have failed to read it. */
+            base = cs.opts.input_filename;
+            base_len = strlen(base);
+        }
+        /* os.path.splitext stem: scan for the LAST '.' that is not the
+         * leading char of the basename (Python skips leading dots, so
+         * ".bashrc" has no extension). */
+        size_t stem_len = base_len;
+        {
+            size_t lead = 0;
+            while (lead < base_len && base[lead] == '.')
+                lead++;
+            for (size_t i = base_len; i > lead; i--) {
+                if (base[i - 1] == '.') {
+                    stem_len = i - 1;
+                    break;
+                }
+            }
+        }
+        const char *oft = cs.opts.output_file_type
+                              ? cs.opts.output_file_type : "bin";
+        size_t oft_len = strlen(oft);
+        char *derived = arena_alloc(&cs.arena, stem_len + 1 + oft_len + 1);
+        memcpy(derived, base, stem_len);
+        derived[stem_len] = '.';
+        memcpy(derived + stem_len + 1, oft, oft_len);
+        derived[stem_len + 1 + oft_len] = '\0';
+        cs.opts.output_filename = derived;
+    }
+
     /* Open error file if specified */
     if (cs.opts.stderr_filename) {
         cs.opts.stderr_f = fopen(cs.opts.stderr_filename, "w");
