@@ -81,10 +81,26 @@ TEST(test_number_type_integer) {
     free_cs(cs);
 }
 
-TEST(test_number_type_float) {
-    /* NUMBER(3.14) => float */
+TEST(test_number_type_fixed) {
+    /* NUMBER(3.14) => fixed. Faithful to Python SymbolNUMBER.__init__
+     * (src/symbols/number.py:41-44): a float value in (-32768.0, 32767)
+     * types as TYPE.fixed, NOT float. (This test previously asserted
+     * TYPE_float, encoding the 2026-06-11 fixed-retype bug — corrected
+     * alongside the ast.c fix; the oracle confirms 3.14 is fixed.) */
     CompilerState *cs = new_cs();
     AstNode *n = ast_number(cs, 3.14, 1);
+    ASSERT_EQ(n->type_->basic_type, TYPE_fixed);
+    free_cs(cs);
+}
+
+TEST(test_number_type_float) {
+    /* NUMBER(40000.0) => float. A fractional/non-integral float value
+     * OUTSIDE the f16 range (-32768.0 < v < 32767) falls through to
+     * TYPE.float_ (src/symbols/number.py:45). 40000.5 is non-integral
+     * (so it stays a float, not re-typed to an int class) and > 32767,
+     * so it is the float branch. */
+    CompilerState *cs = new_cs();
+    AstNode *n = ast_number(cs, 40000.5, 1);
     ASSERT_EQ(n->type_->basic_type, TYPE_float);
     free_cs(cs);
 }
@@ -973,6 +989,7 @@ int main(void) {
     RUN_TEST(test_number_type_byte);
     RUN_TEST(test_number_type_uinteger);
     RUN_TEST(test_number_type_integer);
+    RUN_TEST(test_number_type_fixed);
     RUN_TEST(test_number_type_float);
     RUN_TEST(test_number_t);
     RUN_TEST(test_number_t_integer);

@@ -66,7 +66,22 @@ AstNode *ast_number(CompilerState *cs, double value, int lineno) {
         else
             n->type_ = st->basic_types[TYPE_float];
     } else {
-        n->type_ = st->basic_types[TYPE_float];
+        /* Non-integer float value. Python (src/symbols/number.py:41-45):
+         *   elif isinstance(value, float):
+         *       if -32768.0 < value < 32767:
+         *           self.type_ = TYPE.fixed
+         *       else:
+         *           self.type_ = TYPE.float_
+         * i.e. a fractional value in the open/half-open f16 range is FIXED,
+         * not FLOAT. The C port previously hard-typed every non-int value
+         * as float, diverging on e.g. `3.14` -> the constant-fold result
+         * type (and the W100 implicit type) came out 'float' vs Python's
+         * 'fixed'. Range bounds match Python exactly: lower is strict
+         * (-32768.0 <), upper is strict (< 32767). */
+        if (value > -32768.0 && value < 32767.0)
+            n->type_ = st->basic_types[TYPE_fixed];
+        else
+            n->type_ = st->basic_types[TYPE_float];
     }
 
     /* Set t to string representation of value (Python str(value)).
