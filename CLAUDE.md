@@ -192,8 +192,13 @@ FRONTEND-EQUAL), the drift guard, and the `fixups/` flyby-fix mechanism.
 **Local/manual only — not in `make test` or CI** (by-design not green while
 DIFF-* findings are open; fetch needs network). Same discipline as the probes:
 don't loosen the runner, don't re-pin a manifest sha to silence DRIFT without
-confirming the new bytes. As of 2026-06-11: 29 programs — 1 BINARY-EQUAL,
-10 FRONTEND-EQUAL, 2 DIFF-EXIT, 16 DIFF-STDERR (18 open findings).
+confirming the new bytes. As of 2026-06-11 (after the DIFF-EXIT fix): 29
+programs — 2 BINARY-EQUAL, 10 FRONTEND-EQUAL, 0 DIFF-EXIT, 17 DIFF-STDERR
+(17 open findings). The two DIFF-EXIT findings (o-trix, retrobsesion) were the
+C assembler's flat-64K memory image aborting on a >64K emission where Python's
+sparse-dict model tolerates it — fixed via `csrc/zxbasm/zxbasm.h MAX_MEM =
+0x20000` (o-trix is now BINARY-EQUAL; retrobsesion's overflow is gone but a
+deeper string-array-constant codegen divergence keeps it at DIFF-STDERR).
 
 ## Keeping Things Up To Date
 

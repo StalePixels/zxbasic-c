@@ -6,7 +6,7 @@
 [![zxbpp tests](https://img.shields.io/badge/zxbpp_tests-96%2F96_passing-brightgreen)](#-phase-1--preprocessor-done)
 [![zxbasm tests](https://img.shields.io/badge/zxbasm_tests-61%2F61_passing-brightgreen)](#-phase-2--assembler-done)
 [![zxbc full pipeline](https://img.shields.io/badge/zxbc_full--O0--O3-byte--identical_to_Python-brightgreen)](#-phase-3--compiler-frontend-byte-identical)
-[![Codegen probes](https://img.shields.io/badge/probes-129_GREEN_2_RED-red)](#probe-enumeration-meter)
+[![Codegen probes](https://img.shields.io/badge/probes-132_GREEN_0_RED-brightgreen)](#probe-enumeration-meter)
 [![C unit tests](https://img.shields.io/badge/C_unit_tests-132_passing-blue)](#c-unit-test-suite)
 [![Port status](https://img.shields.io/badge/port-agentically_verified_complete-yellow)](#-port-complete--2026-05-28-agentically-verified-not-yet-user-verified)
 
@@ -25,39 +25,56 @@ originally written in Python by Jose Rodriguez-Rosa (a.k.a. Boriel).
 > and `make test-slow` and check. Human cold-read + real-world build
 > sign-off is still pending.
 >
-> 🔴 **2026-06-11 verification update:** an independent ad-hoc sweep found
-> two divergence classes the corpus, probes, and parity harness were all
-> silent on. **(1) Fixed-retype constant fold:** float-literal arithmetic
-> (e.g. the one-liner `PRINT 3.14 * 2`) stays FLOAT in C where Python
-> re-derives the folded constant as FIXED (`src/symbols/number.py:40-44`)
-> and f16-quantizes through the typecast — captured as **2 RED probes**
-> (`arithmetic/ar_fold_float_literal_retype_fixed`,
-> `typecast/tc_let_folded_float_literal`). **(2) No default output
-> filename:** without `-o`, Python derives `<input-stem>.<format>`
-> (`src/zxbc/args_config.py:166-169`); C never sets it and dies rc=5 —
-> silently for `-f tap`. This breaks the upstream README quickstart
-> (`zxbc -f tap --autorun --BASIC hello.bas`) — captured as **2 RED
-> parity cases** (`s7.2h-default-out-bin`/`-tap` in
-> `make test-cmdline-parity`). Every internal harness passes `-o`, which
-> is why all meters were green over it. Both pending fix.
+> 🔴 **2026-06-11 verification update (fixes landed):** an independent
+> ad-hoc sweep found divergence classes the corpus, probes, and parity
+> harness were all silent on. All of the items below are now **fixed**;
+> the probe + parity meters are GREEN over them again.
 >
-> 🟡 Also surfaced (NOT a C defect): the omatrix meter is flaky at `-O3`
+> - ✅ **(1) Fixed-retype constant fold** — float-literal arithmetic
+>   (e.g. `PRINT 3.14 * 2`) stayed FLOAT in C where Python re-derives the
+>   folded constant as FIXED (`src/symbols/number.py:40-44`). Root cause:
+>   `ast_number` hard-typed every non-integer value FLOAT instead of FIXED
+>   for values in the f16 range `(-32768.0, 32767)`. Fixed in
+>   `csrc/zxbc/ast.c`; the value-based re-typing + f16 quantization now
+>   flow through the fold. The 2 driver probes
+>   (`arithmetic/ar_fold_float_literal_retype_fixed`,
+>   `typecast/tc_let_folded_float_literal`) are PROBE-EQUAL.
+> - ✅ **(2) Default output filename** — without `-o`, Python derives
+>   `<input-stem>.<format>` (`src/zxbc/args_config.py:166-169`); C never
+>   set it and died rc=5 (silently for `-f tap`), breaking the upstream
+>   README quickstart `zxbc -f tap --autorun --BASIC hello.bas`. Fixed in
+>   `csrc/zxbc/main.c` (derive the default into the CWD). The 2 driver
+>   parity cases (`s7.2h-default-out-bin`/`-tap`) pass; cmdline parity is
+>   **38 / 0**.
+> - ✅ **(3) Assembler 64K-emission ceiling** — real shipped programs
+>   (`o-trix`, `retrobsesion` in the released corpus) emit a >64K image;
+>   Python's sparse-dict memory model tolerates it, the C port's flat 64K
+>   array aborted with a spurious `Memory overflow at address 65536` on
+>   byte-identical stage-1 ASM. Fixed by sizing the assembler image to the
+>   practical Z80 reach (`csrc/zxbasm/zxbasm.h` `MAX_MEM = 0x20000`); only
+>   an explicit `ORG` is still range-checked to `[0..65535]`, faithful to
+>   `src/zxbasm/memory.py`. New probe `zxbasm/over_64k_emission.asm`.
+>   `o-trix` is now BINARY-EQUAL.
+>
+> 🟡 Also surfaced (NOT a C defect): the omatrix meter was flaky at `-O3`
 > on `while.bas` — **upstream Python is hash-seed nondeterministic**
 > there (one byte flips between runs; 6/6 stable under
 > `PYTHONHASHSEED=0`, and the C output matches the seeded Python
 > exactly — C is the deterministic side). The 2026-05-28 omatrix green
-> was seed luck. Candidate fix: pin `PYTHONHASHSEED=0` in the
-> comparison harnesses. All other deep meters re-verified GREEN
+> was seed luck. **Fixed by pinning `PYTHONHASHSEED=0`** in every
+> Python-oracle harness invocation (`csrc/tests/*.sh`,
+> `codegen_probes/run_probes.sh`, `released_corpus/run_corpus.sh`); the
+> meter is now seed-stable. All other deep meters re-verified GREEN
 > 2026-06-11 (full corpus 888/0, stages zx48k + zxnext).
 
 Per the automated gates, the toolchain — `zxbpp` (preprocessor), `zxbasm`
 (assembler), `zxbc` (compiler) — is a **byte-for-byte drop-in replacement**
 for the Python original across every measured surface: the full
 `tests/functional/` corpus at every optimization level, all 132 internal-API
-unit tests, 129 of the 131 hand-authored probe fixtures (2 RED — see the
-verification update above), and the gated 3-stage codegen
-pipeline on both `zx48k` and `zxnext` archs. CI green on Linux x86_64 /
-Linux arm64 / macOS arm64 / Windows x86_64.
+unit tests, all 132 hand-authored probe fixtures (the 2026-06-11 RED probes
+fixed and re-greened; see the verification update above), and the gated
+3-stage codegen pipeline on both `zx48k` and `zxnext` archs. CI green on
+Linux x86_64 / Linux arm64 / macOS arm64 / Windows x86_64.
 
 Single-command verification:
 
@@ -75,7 +92,7 @@ answer turned out to be yes, with the discipline scaffolding documented in the
 close-out doc above.
 
 The toolchain was validated stage by stage against the original's comprehensive
-test suite of 1,285+ functional tests, plus an additional 131-fixture probe
+test suite of 1,285+ functional tests, plus an additional 132-fixture probe
 series authored alongside the port to catch codepaths the inherited corpus is
 silent on.
 
@@ -96,7 +113,7 @@ Native C binaries sidestep the problem entirely.
 | 4 | **Optimizer + IR generation (AST → Quads)** | byte-identical -O1/-O2/-O3 to Python | ✅ Complete |
 | 5 | **Z80 backend (Quads → Assembly + peephole)** | zx48k 895/886/886 stages GREEN; zxnext 197/197/197 GREEN | ✅ Complete |
 | 6 | Full integration + all output formats (.tap/.tzx/.sna/.z80) | exercised by stage validation | ✅ Complete |
-| 7 | Full-equivalence umbrella + `make test` / `make test-slow` | FULL-EQUAL 888 / 0 DIFF; 129 probe GREEN / **2 RED** | 🔴 **user verification found a divergence** (fixed-retype constant fold, 2026-06-11) |
+| 7 | Full-equivalence umbrella + `make test` / `make test-slow` | FULL-EQUAL 888 / 0 DIFF; **132 probe GREEN / 0 RED**; cmdline-parity 38/0 | 🟡 2026-06-11 verification fixes landed (constant fold, default output, 64K assembler ceiling, hash-seed pin); **17 released-corpus DIFF-STDERR findings still open** — pending user sign-off |
 
 ### 🔬 Phase 3 — Compiler Frontend: Byte-Identical
 
@@ -126,15 +143,16 @@ CHANGELOG; C compiles them correctly).
 #### Probe Enumeration Meter
 
 In addition to the inherited corpus, the C port has its own probe series —
-131 hand-authored fixtures (`csrc/tests/codegen_probes/`) that deliberately
+132 hand-authored fixtures (`csrc/tests/codegen_probes/`) that deliberately
 drive codepaths the inherited corpus is silent on. The probe runner compares
 the FULL contract per fixture (exit, stderr, Stage-1 ASM, end-to-end binary)
-against the Python oracle. **129 probes GREEN, 2 RED** (the 2026-06-11
-fixed-retype constant-fold divergence:
-`arithmetic/ar_fold_float_literal_retype_fixed` PROBE-DIFF-ASM,
-`typecast/tc_let_folded_float_literal` PROBE-DIFF-STDERR) across 10
+against the Python oracle. **132 probes GREEN, 0 RED** across 10
 categories (typecast, warnings, errors, arithmetic, strings, arrays, controlflow,
-switches, preprocessor, zxbasm). Wave-4 closed three more legacy
+switches, preprocessor, zxbasm). The 2026-06-11 fixed-retype constant-fold
+divergence is fixed and re-greened
+(`arithmetic/ar_fold_float_literal_retype_fixed`,
+`typecast/tc_let_folded_float_literal` now PROBE-EQUAL), and the assembler's
+64K-emission ceiling fix is locked by `zxbasm/over_64k_emission.asm`. Wave-4 closed three more legacy
 zxbasm Error-FAIL fixtures via additive probes: `ldix2` (reject the
 malformed `LP IX LP ...` shape so `Unexpected token ')' [RP]` is
 emitted), `preprocerr2` (PLY p_error(None) footer for NEWLINE-only
@@ -154,12 +172,17 @@ a RED probe first, GREEN fix second.
 shipped ZX BASIC programs** (games/demos/utils from the upstream
 released-programs list) through both compilers with the same first-divergence
 contract as the probes. Third-party bytes are never committed — only a
-sha256-pinned manifest plus our `fixups/`. As of 2026-06-11 (first run):
-**29 programs — 1 BINARY-EQUAL, 10 FRONTEND-EQUAL, and 18 open `DIFF-*`
-findings** (2 DIFF-EXIT: `o-trix` C-side memory overflow, `retrobsesion`
-C treats a warning-only run as fatal; 16 DIFF-STDERR diagnostic divergences).
-Local/manual only — not wired into `make test` or CI while its findings are
-open; see its [README](csrc/tests/released_corpus/README.md).
+sha256-pinned manifest plus our `fixups/`. As of 2026-06-11 (after the
+DIFF-EXIT fix): **29 programs — 2 BINARY-EQUAL, 10 FRONTEND-EQUAL, and 17 open
+`DIFF-STDERR` findings** (0 DIFF-EXIT). The 2 DIFF-EXIT findings — `o-trix` and
+`retrobsesion`, both the C assembler aborting on a >64K emission where Python's
+sparse-dict memory model emits past 64K freely — are fixed (`zxbasm.h MAX_MEM =
+0x20000`); `o-trix` is now BINARY-EQUAL. The remaining 17 DIFF-STDERR rows are
+open diagnostic-divergence findings (error-recovery position drift, divergent
+post-error recovery, include-filename-case attribution, and an upstream-Python
+`file not found` line-0 quirk). Local/manual only — not wired into `make test`
+or CI while its findings are open; see its
+[README](csrc/tests/released_corpus/README.md).
 
 #### Compiler infrastructure
 - ✅ **Faithful PLY/LALR(1) parser port** — the default `zxbc` parser is a
