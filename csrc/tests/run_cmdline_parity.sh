@@ -474,6 +474,21 @@ case_out s7.2f-opt-size  zxbc out.asm --opt-strategy size  --output-format=asm -
 case_out s7.2f-opt-speed zxbc out.asm --opt-strategy speed --output-format=asm -o out.asm "$PBAS"
 case_out s7.2f-opt-auto  zxbc out.asm --opt-strategy auto  --output-format=asm -o out.asm "$PBAS"
 
+# --- S7.2h: default output filename when -o is ABSENT (RED 2026-06-11)
+# Python derives <input-stem>.<output_file_type> into the CWD when -o
+# is not given (src/zxbc/args_config.py:166-169). The C port only ever
+# sets output_filename from -o (csrc/zxbc/args.c) and never derives a
+# default: the default-.bin path dies rc=5 with `Cannot open output
+# file: (null)`, and the -f tap path dies rc=5 with NO stderr at all.
+# This is the upstream README quickstart invocation
+# (`zxbc -f tap --autorun --BASIC hello.bas` -> hello.tap), found by
+# user verification — every internal harness always passes -o, so all
+# meters were blind to it. The s7.2b-E comment above ("needs -o or C
+# errs rc=5") was the same hole showing through. Left RED deliberately
+# as the fix driver; do NOT add -o to make these pass.
+case_out s7.2h-default-out-bin zxbc p.bin "$PBAS"
+case_out s7.2h-default-out-tap zxbc p.tap -f tap --autorun --BASIC "$PBAS"
+
 # ===================================================================
 # zxbpp  (S7.2d-ii / S7.2e)
 # ===================================================================
