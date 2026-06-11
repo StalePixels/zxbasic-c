@@ -35,6 +35,10 @@ if [ ! -x "$PYTHON" ]; then
     echo "ERROR: no python at .venv/bin/python or /opt/homebrew/bin/python3.12" >&2
     exit 2
 fi
+# Pin Python hash seed: upstream Python is hash-seed nondeterministic at -O3
+# (while.bas byte-flip; see README + zxbc_python_bugs.txt). Seed 0 stabilises
+# the oracle so the meter measures a real C-vs-Python delta.
+export PYTHONHASHSEED=0
 
 cd "$PROJECT_ROOT"
 

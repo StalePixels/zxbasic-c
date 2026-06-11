@@ -17,6 +17,10 @@ if [ ! -x "$PYTHON" ]; then
     echo "ERROR: python3.12 not found at $PYTHON" >&2
     exit 1
 fi
+# Pin Python hash seed: upstream Python is hash-seed nondeterministic at -O3
+# (while.bas byte-flip; see README + zxbc_python_bugs.txt). Seed 0 stabilises
+# the oracle so the comparison measures a real C-vs-Python delta.
+export PYTHONHASHSEED=0
 if [ ! -x "$ZXBPP_C" ]; then
     echo "ERROR: C zxbpp binary not built at $ZXBPP_C — run 'make build' first" >&2
     exit 1

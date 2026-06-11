@@ -47,6 +47,10 @@ else
     echo "ERROR: no python3.12 found at .venv/bin/python or /opt/homebrew/bin/python3.12" >&2
     exit 2
 fi
+# Pin Python hash seed: upstream Python is hash-seed nondeterministic at -O3
+# (while.bas byte-flip; see README + zxbc_python_bugs.txt). Seed 0 stabilises
+# the oracle so regenerated baselines are seed-stable.
+export PYTHONHASHSEED=0
 
 REAL_PROJECT_ROOT=$(cd "$PROJECT_ROOT" && pwd -P)
 TEST_DIR="$PROJECT_ROOT/tests/functional/arch/zx48k"

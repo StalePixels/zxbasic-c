@@ -49,3 +49,13 @@ if [ -z "${PYTHON:-}" ] || ! _py_ok "$PYTHON"; then
     exit 2
 fi
 unset -f _py_ok
+
+# Pin the Python hash seed for every oracle invocation. Upstream Python is
+# hash-seed nondeterministic at -O3 on at least one fixture
+# (tests/functional/arch/zx48k/while.bas — one output byte flips between
+# unseeded runs; see README "Upstream Python -O3 hash-seed flake" and
+# zxbc_python_bugs.txt). PYTHONHASHSEED=0 makes the oracle 6/6 stable and
+# the C output matches it byte-for-byte, so the parity meters measure a
+# real C-vs-Python delta instead of the oracle's own seed luck. Exported
+# so it reaches every child `$PYTHON -c ...` invocation.
+export PYTHONHASHSEED=0

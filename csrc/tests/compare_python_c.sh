@@ -32,6 +32,10 @@ if [ -z "$PYTHON" ]; then
     echo "ERROR: Python 3.11+ not found."
     exit 1
 fi
+# Pin Python hash seed: upstream Python is hash-seed nondeterministic at -O3
+# (while.bas byte-flip; see README + zxbc_python_bugs.txt). Seed 0 stabilises
+# the oracle so the comparison measures a real C-vs-Python delta.
+export PYTHONHASHSEED=0
 
 # Normalize paths
 ZXBPP_C=$(cd "$(dirname "$ZXBPP_C")" && echo "$(pwd)/$(basename "$ZXBPP_C")")

@@ -84,6 +84,10 @@ PROJECT_ROOT_ARG="${4:?Usage: $0 <c-zxbc> <c-zxbpp> <c-zxbasm> <project-root>}"
 # Hard-required interpreter — mirror run_zxbpp_tests.sh:25-29. No silent
 # fallback to system python3.
 PYTHON=/opt/homebrew/bin/python3.12
+# Pin Python hash seed: upstream Python is hash-seed nondeterministic at
+# -O3 (while.bas byte-flip; see README + zxbc_python_bugs.txt). Seed 0 makes
+# the oracle stable and byte-matches C, so the meter measures a real delta.
+export PYTHONHASHSEED=0
 if [ ! -x "$PYTHON" ]; then
     echo "ERROR: required interpreter $PYTHON not present." >&2
     echo "       Parity harness will not silently fall back to system python3." >&2

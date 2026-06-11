@@ -79,6 +79,10 @@ esac
 # ---- interpreters: pinned Python oracle + the built C binaries ----
 PY=/opt/homebrew/bin/python3.12
 [ -x "$PY" ] || { echo "ERROR: required interpreter $PY not present (no silent fallback to system python3)." >&2; exit 2; }
+# Pin Python hash seed: upstream Python is hash-seed nondeterministic at -O3
+# (while.bas byte-flip; see README + zxbc_python_bugs.txt). Seed 0 makes the
+# oracle stable and byte-matches C, so the probe meter measures a real delta.
+export PYTHONHASHSEED=0
 ZXBC_C="$ROOT/csrc/build/bin/zxbc"
 ZXBASM_C="$ROOT/csrc/build/bin/zxbasm"
 if [ "$MODE" = "zxbc" ]; then

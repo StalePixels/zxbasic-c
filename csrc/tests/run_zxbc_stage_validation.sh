@@ -28,6 +28,10 @@ ZXBASM_C="${2:?usage: $0 <zxbc-c> <zxbasm-c> <test-dir>}"
 TEST_DIR="${3:?usage: $0 <zxbc-c> <zxbasm-c> <test-dir>}"
 PY=/opt/homebrew/bin/python3.12
 [ -x "$PY" ] || { echo "ERROR: required interpreter $PY not present." >&2; exit 2; }
+# Pin Python hash seed: upstream Python is hash-seed nondeterministic at -O3
+# (while.bas byte-flip; see README + zxbc_python_bugs.txt). Seed 0 stabilises
+# the oracle so the stage meter measures a real C-vs-Python delta.
+export PYTHONHASHSEED=0
 ZXBC_C=$(cd "$(dirname "$ZXBC_C")" && pwd)/$(basename "$ZXBC_C")
 ZXBASM_C=$(cd "$(dirname "$ZXBASM_C")" && pwd)/$(basename "$ZXBASM_C")
 TEST_DIR=$(cd "$TEST_DIR" && pwd)

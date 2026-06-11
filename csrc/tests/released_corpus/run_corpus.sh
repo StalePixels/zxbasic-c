@@ -60,6 +60,10 @@ if [ ! -x "$PY" ]; then
     for c in python3.12 python3.11 python3; do command -v "$c" >/dev/null 2>&1 && { PY=$(command -v "$c"); break; }; done
 fi
 [ -x "$PY" ] || { echo "ERROR: no python3.12+ oracle found." >&2; exit 2; }
+# Pin Python hash seed: upstream Python is hash-seed nondeterministic at -O3
+# (while.bas byte-flip; see README + zxbc_python_bugs.txt). Seed 0 makes the
+# oracle stable and byte-matches C, so the corpus meter measures a real delta.
+export PYTHONHASHSEED=0
 ZXBC_C="$ROOT/csrc/build/bin/zxbc"
 [ -x "$ZXBC_C" ] || { echo "ERROR: C zxbc not built at $ZXBC_C (cmake --build csrc/build)." >&2; exit 2; }
 
