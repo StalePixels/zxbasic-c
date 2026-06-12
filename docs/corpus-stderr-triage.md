@@ -17,18 +17,18 @@ of `PROBE_CATEGORIES`, so no meter runs them).
 
 | Row | flags (abbrev) | Class(es) | Verdict |
 |-----|----------------|-----------|---------|
-| 3-reyes-magos | -O2 | parser-recovery-cascade | MATTERS |
-| abydos | -O2 | parser-recovery-cascade | MATTERS |
+| 3-reyes-magos | -O2 | parser-recovery-cascade | FIXED-PARTIAL (cap-line residual) |
+| abydos | -O2 | parser-recovery-cascade | FIXED-PARTIAL (cap-line residual) |
 | ad-lunam | -O3 … | data-label-in-sub | FIXED |
 | ad-lunam-plus | -O3 … | include-lineno-zero | DEFERRED-PYTHON-SIDE |
-| berksman | -O2 | parser-recovery-cascade | MATTERS |
+| berksman | -O2 | parser-recovery-cascade | FIXED-PARTIAL (cap-line residual) |
 | breakspace | -O2 … | include-lineno-zero | DEFERRED-PYTHON-SIDE |
 | knights-demons-dx | -O3 … | include-lineno-zero (1st) + crlf-continuation (2nd) | DEFERRED-PYTHON-SIDE / MATTERS |
-| looking-for-csscgc2012 | -O2 | parser-recovery-cascade | MATTERS |
+| looking-for-csscgc2012 | -O2 | parser-recovery-cascade | FIXED-PARTIAL (fully promoted) |
 | maritrini | -O2 | include-filename-attribution (W150) + diagnostic-ordering | MATTERS / SHELVE |
 | pixel-quest | -O3 … | include-lineno-zero | DEFERRED-PYTHON-SIDE |
 | pixel-quest-2000 | -O3 … | include-lineno-zero | DEFERRED-PYTHON-SIDE |
-| souls | -O2 | parser-recovery-cascade | MATTERS |
+| souls | -O2 | parser-recovery-cascade | FIXED-PARTIAL (cap-line residual) |
 | zen | -O2 … | include-lineno-zero (1st) + w520-whitespace-quirk (2nd) | DEFERRED-PYTHON-SIDE |
 | zen-ii | -O2 … | include-lineno-zero (1st) + w520-whitespace-quirk (2nd) | DEFERRED-PYTHON-SIDE |
 
@@ -95,7 +95,47 @@ design.
 
 ---
 
-## CLASS 2 — parser-recovery-cascade  *(MATTERS)*
+## CLASS 2 — parser-recovery-cascade  *(FIXED-PARTIAL)*
+
+**Status: FIXED-PARTIAL** (commit `fix(zxbc): parser-recovery p_function_error
+secondary diagnostic`). The bounded partial recommended below — porting the
+single `p_function_error` reduce-action diagnostic — was implemented. The C
+parser is the faithful PLY-engine port (NOT hand-written recursive-descent as the
+original C-attribution note below states): the error production
+`function_declaration : function_header program_co END error` is already present
+in the C LALR tables as **`case 331`** in `pd_action`
+(`csrc/zxbc/parser.c`), but its reduce action was a **no-op** (`r = NULL`) that
+silently dropped the secondary error. The fix emits the
+`Unexpected token 'END'. Expected 'END FUNCTION' or 'END SUB' instead.` diagnostic
+from that action via `zxbc_error` at the `END` token's lineno (`PD_LINENO(3)`,
+the C analogue of Python's `p.lineno(3)`), guarded by `emit_errors` mode. Because
+the emit routes through the same `zxbc_error` that mirrors Python's
+`errmsg.error` (errmsg.py:43-57), the two-line emission ORDER and the
+`Too many errors. Giving up!` cap-counter interaction reproduce Python's exactly.
+Probe `codegen_probes/errors/err_function_recovery_end.bas` RED before
+(`PROBE-DIFF-STDERR`, C emitted only the primary "Syntax Error" line), GREEN
+after.
+
+**Outcome per member row:**
+- **looking-for-csscgc2012** → fully promoted to `FRONTEND-EQUAL` (the two missing
+  `Expected END FUNCTION/SUB` lines were its only divergence).
+- **souls, berksman** → their missing `p_function_error` secondary-error lines are
+  now byte-identical (souls.bas:136; BerksMan.bas:422, :462), but **both retain a
+  `Too many errors. Giving up!` cap-line drift** (souls 279 vs 273, berksman 576
+  vs 575) that the larger missing-error divergence previously masked. They remain
+  `DIFF-STDERR` on the cap-line residual only.
+- **3-reyes-magos, abydos** → unchanged (cap-line drift only, as predicted below;
+  the partial does not touch them).
+
+**What remains open for the class (cap-line drift).** The
+`Too many errors. Giving up!` line fires at a different source position between
+Python and C on souls, berksman, 3-reyes-magos, abydos. Root cause is unchanged
+from the analysis below: the two recoveries consume a *different span* of tokens
+after the cap-tripping error, so the `(max_syntax_errors+1)`-th `error()` call —
+which `src/api/errmsg.py:48-55` rewrites to "Too many errors" while keeping that
+call's lineno — fires at a different line. Closing it needs fuller recovery
+parity (matching exactly how far each `error`-token production resyncs), which is
+the herculean rework the bounded scope explicitly excludes. Left open.
 
 **Member rows:** souls, berksman, looking-for-csscgc2012, 3-reyes-magos, abydos.
 
@@ -468,10 +508,14 @@ Ordered by value-per-risk against the IDE-highlighting bar:
    `case 157` p_data label creation through the declare/collision path (mirroring
    `label_define`) and reordered make_label before the FUNCTION_LEVEL guard to
    match Python. DATA-bearing BINARY-EQUAL rows verified unchanged.
-4. **CLASS 2 — parser-recovery-cascade** — herculean; do last and only if
-   error-stream parity on malformed legacy dialect is wanted. A partial
-   `p_function_error`-equivalent covers souls/berksman/looking-for; full parity
-   (incl. the 3-reyes-magos/abydos cap-line drift) is a large recovery rework.
+4. **CLASS 2 — parser-recovery-cascade** — ✅ **FIXED-PARTIAL.** The bounded
+   `p_function_error`-equivalent partial was implemented (wired the existing
+   `case 331` reduce action to emit its secondary diagnostic via `zxbc_error`).
+   looking-for-csscgc2012 fully promoted to FRONTEND-EQUAL; souls/berksman had
+   their missing secondary-error lines restored but retain a `Too many errors`
+   cap-line drift residual (same class as 3-reyes-magos/abydos). Full parity on
+   the cap-line drift remains a large recovery rework — explicitly out of scope,
+   left open.
 5. **CLASS 1 — include-lineno-zero** and **CLASS 6 — w520-whitespace-quirk** —
    *do not fix C.* DEFERRED-PYTHON-SIDE; both are upstream PLY/Python defects and
    the C output is the more correct one. Revisit only at the upstream-resync

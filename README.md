@@ -6,7 +6,7 @@
 [![zxbpp tests](https://img.shields.io/badge/zxbpp_tests-96%2F96_passing-brightgreen)](#-phase-1--preprocessor-done)
 [![zxbasm tests](https://img.shields.io/badge/zxbasm_tests-61%2F61_passing-brightgreen)](#-phase-2--assembler-done)
 [![zxbc full pipeline](https://img.shields.io/badge/zxbc_full--O0--O3-byte--identical_to_Python-brightgreen)](#-phase-3--compiler-frontend-byte-identical)
-[![Codegen probes](https://img.shields.io/badge/probes-137_GREEN_0_RED-brightgreen)](#probe-enumeration-meter)
+[![Codegen probes](https://img.shields.io/badge/probes-138_GREEN_0_RED-brightgreen)](#probe-enumeration-meter)
 [![C unit tests](https://img.shields.io/badge/C_unit_tests-132_passing-blue)](#c-unit-test-suite)
 [![Port status](https://img.shields.io/badge/port-agentically_verified_complete-yellow)](#-port-complete--2026-05-28-agentically-verified-not-yet-user-verified)
 
@@ -29,7 +29,7 @@ Per the automated gates, the toolchain — `zxbpp` (preprocessor), `zxbasm`
 (assembler), `zxbc` (compiler) — is a **byte-for-byte drop-in replacement**
 for the Python original across every measured surface: the full
 `tests/functional/` corpus at every optimization level, all 132 internal-API
-unit tests, all 137 hand-authored probe fixtures, and the gated
+unit tests, all 138 hand-authored probe fixtures, and the gated
 3-stage codegen pipeline on both `zx48k` and `zxnext` archs. CI green on
 Linux x86_64 / Linux arm64 / macOS arm64 / Windows x86_64.
 
@@ -49,7 +49,7 @@ answer turned out to be yes, with the discipline scaffolding documented in the
 close-out doc above.
 
 The toolchain was validated stage by stage against the original's comprehensive
-test suite of 1,285+ functional tests, plus an additional 137-fixture probe
+test suite of 1,285+ functional tests, plus an additional 138-fixture probe
 series authored alongside the port to catch codepaths the inherited corpus is
 silent on.
 
@@ -70,7 +70,7 @@ Native C binaries sidestep the problem entirely.
 | 4 | **Optimizer + IR generation (AST → Quads)** | byte-identical -O1/-O2/-O3 to Python | ✅ Complete |
 | 5 | **Z80 backend (Quads → Assembly + peephole)** | zx48k 895/886/886 stages GREEN; zxnext 197/197/197 GREEN | ✅ Complete |
 | 6 | Full integration + all output formats (.tap/.tzx/.sna/.z80) | exercised by stage validation | ✅ Complete |
-| 7 | Full-equivalence umbrella + `make test` / `make test-slow` | FULL-EQUAL 888 / 0 DIFF; **137 probe GREEN / 0 RED**; cmdline-parity 38/0 | 🟡 13 released-corpus diagnostic findings open — pending user sign-off |
+| 7 | Full-equivalence umbrella + `make test` / `make test-slow` | FULL-EQUAL 888 / 0 DIFF; **138 probe GREEN / 0 RED**; cmdline-parity 38/0 | 🟡 12 released-corpus diagnostic findings open — pending user sign-off |
 
 ### 🔬 Phase 3 — Compiler Frontend: Byte-Identical
 
@@ -100,10 +100,10 @@ CHANGELOG; C compiles them correctly).
 #### Probe Enumeration Meter
 
 In addition to the inherited corpus, the C port has its own probe series —
-137 hand-authored fixtures (`csrc/tests/codegen_probes/`) that deliberately
+138 hand-authored fixtures (`csrc/tests/codegen_probes/`) that deliberately
 drive codepaths the inherited corpus is silent on. The probe runner compares
 the FULL contract per fixture (exit, stderr, Stage-1 ASM, end-to-end binary)
-against the Python oracle. **137 probes GREEN, 0 RED** across 10
+against the Python oracle. **138 probes GREEN, 0 RED** across 10
 categories (typecast, warnings, errors, arithmetic, strings, arrays, controlflow,
 switches, preprocessor, zxbasm). This is the enumeration-completeness check —
 corpus-pass alone doesn't prove the port has every Python check; the probe
@@ -119,7 +119,7 @@ shipped ZX BASIC programs** (games/demos/utils from the upstream
 released-programs list) through both compilers with the same first-divergence
 contract as the probes. Third-party bytes are never committed — only a
 sha256-pinned manifest plus our `fixups/`. Current standing: **29 programs —
-5 BINARY-EQUAL, 11 FRONTEND-EQUAL, 13 open `DIFF-STDERR` findings**
+5 BINARY-EQUAL, 12 FRONTEND-EQUAL, 12 open `DIFF-STDERR` findings**
 (0 DIFF-EXIT, 0 DIFF-ASM, 0 DIFF-BIN). The open findings are diagnostics-only
 divergences, triaged by class in the corpus
 [README](csrc/tests/released_corpus/README.md). Local/manual only — not wired
@@ -297,7 +297,7 @@ The umbrella entry point is the top-level `Makefile`:
 
 ```bash
 # Fast tier — the routine green-light gate (~5 min on a recent workstation).
-# zxbpp + zxbasm + zxbc parse + zxbc codegen + 137-fixture probe series +
+# zxbpp + zxbasm + zxbc parse + zxbc codegen + 138-fixture probe series +
 # the C unit tests. Exits non-zero on any regression.
 make test
 
@@ -444,10 +444,10 @@ cmp py.tap c.tap && echo "✅ byte-identical"
 Across the 1,036-file `tests/functional/arch/zx48k` corpus and the 198-file
 `tests/functional/arch/zxnext` corpus, this comparison passes for every file
 except the three documented Python-optimizer-bug fixtures. The custom probe
-series (`csrc/tests/codegen_probes/`, **137 fixtures across 10 categories** —
+series (`csrc/tests/codegen_probes/`, **138 fixtures across 10 categories** —
 arithmetic, arrays, controlflow, errors, preprocessor, strings, switches,
 typecast, warnings, zxbasm) covers codepaths the inherited corpus doesn't
-reach — **137/137 GREEN**, hand-authored to enforce no silent drift on subtle
+reach — **138/138 GREEN**, hand-authored to enforce no silent drift on subtle
 semantics (typecast cross-products, loop-stack EXIT/CONTINUE checks,
 `@`-address-of in constant contexts, class mismatches with proper "a VAR"/"an
 ARRAY" article handling, etc.).
@@ -490,7 +490,7 @@ Here's how we get there, one step at a time:
     │         zxbpp + zxbasm work without Python!
     │
  Phase 3  ✅  BASIC Frontend — faithful PLY/LALR(1) port
-    │         1033/1033 parse-only PASS, 0 false-positives, 137 probes GREEN
+    │         1033/1033 parse-only PASS, 0 false-positives, 138 probes GREEN
     │
  Phase 4  ✅  Optimizer + IR — byte-identical to Python at -O1/-O2/-O3
     │
@@ -501,7 +501,7 @@ Here's how we get there, one step at a time:
     │         Full CLI compatibility (every upstream flag accepted)
     │
  Phase 7  ✅  Full-equivalence umbrella — `make test` / `make test-slow`
-    │         FULL-EQUAL 888 / 0 DIFF; 137 probes GREEN; 132 unit tests GREEN
+    │         FULL-EQUAL 888 / 0 DIFF; 138 probes GREEN; 132 unit tests GREEN
     │
     🏁  PORT AGENTICALLY VERIFIED COMPLETE — every automated meter green,
         prose audit grounded, pending user sign-off. Native C binaries,

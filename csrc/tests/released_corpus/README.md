@@ -140,12 +140,12 @@ fixtures and noted as such.
 | verdict | count | meaning |
 |---------|------:|---------|
 | `BINARY-EQUAL` | 5 | full end-to-end byte parity |
-| `FRONTEND-EQUAL` | 10 | parse/codegen parity (both stop identically) |
+| `FRONTEND-EQUAL` | 12 | parse/codegen parity (both stop identically) |
 | `DIFF-EXIT` | 0 | — |
-| `DIFF-STDERR` | 14 | **C-port finding**: diagnostics diverge |
+| `DIFF-STDERR` | 12 | **C-port finding**: diagnostics diverge |
 | `DIFF-ASM` / `DIFF-BIN` | 0 | — |
 
-→ **14 open divergences surfaced on real shipped programs**, 15 at parity.
+→ **12 open divergences surfaced on real shipped programs**, 17 at parity.
 
 **`BINARY-EQUAL` (5):** fourspriter, o-trix, **retrobsesion**, **saltarin**,
 **walking-around-porto** (the last three newly fixed 2026-06-12 — see below).
@@ -170,28 +170,47 @@ locks it.
   diverged on the same embedded-NUL class; the fix took both to full
   **BINARY-EQUAL** (22348 B / 11891 B). Windfall of the retrobsesion fix.
 
-**`DIFF-STDERR` (14):** 3-reyes-magos, abydos, ad-lunam, ad-lunam-plus, berksman,
-breakspace, knights-demons-dx, looking-for-csscgc2012, maritrini, pixel-quest,
-pixel-quest-2000, souls, zen, zen-ii. Both compilers reach the same exit code but
-emit different diagnostics. These cluster into a few still-open classes:
-error-recovery position drift (`Too many errors. Giving up!` at a different
-line — 3-reyes-magos, abydos), divergent recovery errors after a first error
-(ad-lunam, berksman), and `file not found` line-number quirks (zen, breakspace —
-note the line-0 form is on the *Python* side and is itself an upstream PLY-lexer
-quirk). See `--diff <id>` for each.
+**`DIFF-STDERR` (12):** 3-reyes-magos, abydos, ad-lunam-plus, berksman,
+breakspace, knights-demons-dx, maritrini, pixel-quest, pixel-quest-2000, souls,
+zen, zen-ii. Both compilers reach the same exit code but emit different
+diagnostics. These cluster into a few still-open classes: error-recovery position
+drift (`Too many errors. Giving up!` at a different line — 3-reyes-magos, abydos,
+and the residual on souls/berksman after their `p_function_error` secondary-error
+gap was closed 2026-06-12, see below), and `file not found` line-number quirks
+(zen, breakspace — note the line-0 form is on the *Python* side and is itself an
+upstream PLY-lexer quirk). See `--diff <id>` for each.
 
-**`FRONTEND-EQUAL` (10) — genuine parity, both fail the same way:** bacaball,
-bacachase, chessboard-attack, escape-from-cnossus, ratul-zeki, retrobsesion-ii,
-solitario, spectral-dungeons, stela, vade-retro. Mostly old-dialect syntax both
-versions now reject (single-line `IF`, `ELSEIF`, `ELSE`) or undefined
-symbols/missing data files — not cheap flyby-fixes.
+**parser-recovery `p_function_error` fix (2026-06-12):** when a syntax error
+inside a SUB/FUNCTION body left the parser in recovery and it reduced the error
+production `function_declaration : function_header program_co END error`
+(src/zxbc/zxbparser.py:3007), Python's reduce action emits a secondary
+`Unexpected token 'END'. Expected 'END FUNCTION' or 'END SUB' instead.` keyed on
+the `END` token's line. The C PLY-engine port carried that production in its
+tables but its `case 331` reduce action was a no-op, so the secondary error was
+dropped. Now wired to emit via `zxbc_error` (csrc/zxbc/parser.c), reproducing
+Python's two-line emission order and its `Too many errors` cap-counter
+interaction. Probe `codegen_probes/errors/err_function_recovery_end.bas` locks
+it. **looking-for-csscgc2012** promoted to `FRONTEND-EQUAL`; **souls** and
+**berksman** had their missing secondary-error lines restored (visible errors now
+byte-identical) but retain a deeper `Too many errors. Giving up!` cap-line drift
+(souls 279 vs 273, berksman 576 vs 575) — same residual class as 3-reyes-magos/
+abydos, out of scope for the partial.
+
+**`FRONTEND-EQUAL` (12) — genuine parity, both fail the same way:** ad-lunam,
+bacaball, bacachase, chessboard-attack, escape-from-cnossus,
+looking-for-csscgc2012, ratul-zeki, retrobsesion-ii, solitario,
+spectral-dungeons, stela, vade-retro. Mostly old-dialect syntax both versions now
+reject (single-line `IF`, `ELSEIF`, `ELSE`) or undefined symbols/missing data
+files — not cheap flyby-fixes. (ad-lunam and looking-for-csscgc2012 reached parity
+via the DATA-label-in-sub and parser-recovery fixes respectively.)
 
 **Flyby fixes applied (1):** `souls` had hardcoded Windows absolute include
 paths (`#include <c:/programacion/souls/...>`) for files that ship in the
 archive. The [`fixups/souls/`](fixups/souls/) overlay de-Windowses them; this
 promoted souls past the path error and **exposed a real error-recovery
-divergence** (Python flags `souls.bas:136`, C flags `souls.bas:279`) — now a
-`DIFF-STDERR` finding instead of a trivial file-not-found.
+divergence** (Python flagged a `souls.bas:136` secondary `Expected END FUNCTION/
+SUB` error C dropped) — now closed by the `p_function_error` fix (2026-06-12);
+souls retains only a `Too many errors` cap-line drift residual.
 
 **Not run (recorded in manifest comments):**
 - 13 released programs have **no downloadable `.bas` source** (binary-only

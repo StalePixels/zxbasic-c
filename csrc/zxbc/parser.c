@@ -9487,13 +9487,30 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
 
     /* ---- error-token productions (Phase C-full, p[0]=None) ----
      * These fire only AFTER the engine synthesised an `error` token during
-     * recovery — pd_error already emitted the message. The action just yields
-     * None (zxbparser.py p_function_header_error / p_function_error /
-     * p_param_decl_errpr). Return NULL without flagging unwired (the p_error
-     * path already marked the file in astcmp mode). */
+     * recovery. p_function_header_error / p_param_decl_errpr emit no message
+     * of their own (pd_error already emitted the "Syntax Error" line during
+     * recovery); they just yield None. Return NULL without flagging unwired
+     * (the p_error path already marked the file in astcmp mode). */
     case 328: case 329: /* function_header : function_def error CO|NEWLINE */
-    case 331:           /* function_declaration : function_header program_co END error */
     case 340:           /* param_decl : LP error RP */
+        r = NULL;
+        break;
+
+    /* function_declaration : function_header program_co END error
+     * (zxbparser.py:3007 p_function_error). Unlike the other error productions,
+     * this one emits its OWN diagnostic in the reduce action — the secondary
+     * "Expected 'END FUNCTION' or 'END SUB'" error keyed on the END token's
+     * lineno (p.lineno(3)). It fires AFTER pd_error has emitted the primary
+     * "Syntax Error. Unexpected token …" line for the construct that triggered
+     * recovery, reproducing Python's two-line emission order. Going through
+     * zxbc_error keeps the "Too many errors. Giving up!" cap-counter in step
+     * with Python's errmsg.error (errmsg.py:48-57). Only emit in error-emit
+     * mode; the astcmp meter runs pd_action with emit_errors=false. */
+    case 331:           /* function_declaration : function_header program_co END error */
+        if (c->emit_errors) {
+            zxbc_error(p->cs, PD_LINENO(3),
+                       "Unexpected token 'END'. Expected 'END FUNCTION' or 'END SUB' instead.");
+        }
         r = NULL;
         break;
 
