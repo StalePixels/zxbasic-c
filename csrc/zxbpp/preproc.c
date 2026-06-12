@@ -1525,24 +1525,41 @@ static void handle_include(PreprocState *pp, const char *rest)
 
         strbuf_append_n(&inc_linebuf, line_start, line_len);
 
+        /* Backslash continuation tolerant of CRLF (mirror of Python's
+         * r"[\\_]\r?\n", here backslash-only as the include loop has no
+         * lexer-state tracking). The marker may sit one char before a trailing
+         * CR; the CR is preserved in the join (Python keeps it). */
         const char *cur = strbuf_cstr(&inc_linebuf);
         int curlen = (int)strlen(cur);
         bool continued = false;
+        bool inc_had_cr = (curlen > 0 && cur[curlen - 1] == '\r');
+        int inc_mpos = inc_had_cr ? curlen - 2 : curlen - 1;
 
-        if (curlen > 0 && cur[curlen - 1] == '\\') {
+        if (inc_mpos >= 0 && cur[inc_mpos] == '\\') {
             continued = true;
             if (pp->in_asm) {
-                inc_linebuf.len--;
+                if (inc_had_cr) {
+                    inc_linebuf.data[inc_mpos] = '\r';
+                    inc_linebuf.len = inc_mpos + 1;
+                } else {
+                    inc_linebuf.len = inc_mpos;
+                }
                 inc_linebuf.data[inc_linebuf.len] = '\0';
             } else {
-                inc_linebuf.data[inc_linebuf.len - 1] = '\n';
+                inc_linebuf.data[inc_mpos] = inc_had_cr ? '\r' : '\n';
+                if (inc_had_cr) {
+                    inc_linebuf.data[inc_mpos + 1] = '\n';
+                    inc_linebuf.len = inc_mpos + 2;
+                    inc_linebuf.data[inc_linebuf.len] = '\0';
+                }
             }
         }
 
         if (!continued) {
             char *complete_line = arena_strdup(&pp->arena, strbuf_cstr(&inc_linebuf));
             int clen = (int)strlen(complete_line);
-            if (clen > 0 && complete_line[clen-1] == '\r')
+            pp->line_had_cr = (clen > 0 && complete_line[clen-1] == '\r');
+            if (pp->line_had_cr)
                 complete_line[clen-1] = '\0';
             process_line(pp, complete_line);
             strbuf_clear(&inc_linebuf);
@@ -1561,7 +1578,8 @@ static void handle_include(PreprocState *pp, const char *rest)
     if (inc_linebuf.len > 0) {
         char *complete_line = arena_strdup(&pp->arena, strbuf_cstr(&inc_linebuf));
         int clen = (int)strlen(complete_line);
-        if (clen > 0 && complete_line[clen-1] == '\r')
+        pp->line_had_cr = (clen > 0 && complete_line[clen-1] == '\r');
+        if (pp->line_had_cr)
             complete_line[clen-1] = '\0';
         process_line(pp, complete_line);
     }
@@ -1920,8 +1938,14 @@ static void process_directive(PreprocState *pp, const char *directive)
 
     if (strnicmp_local(p, "define", (size_t)dlen) == 0 && dlen == 6) {
         handle_define(pp, rest);
-        /* First define in file: blank line. Subsequent: #line directive. */
+        /* First define in file: blank line. Subsequent: #line directive.
+         * The first-define blank mirrors Python's `program : define NEWLINE`
+         * (zxbpp.py:326), which emits the NEWLINE token VALUE verbatim — so a
+         * CRLF source line yields "\r\n". The subsequent-define `#line`
+         * (zxbpp.py:354) is a hardcoded "\n", CR-agnostic. */
         if (!pp->has_output) {
+            if (pp->line_had_cr)
+                strbuf_append_char(&pp->output, '\r');
             strbuf_append_char(&pp->output, '\n');
         } else {
             strbuf_printf(&pp->output, "#line %d \"%s\"\n",
@@ -2810,31 +2834,52 @@ int preproc_file(PreprocState *pp, const char *filename)
         /* Handle line continuation (backslash at end, or underscore for BASIC) */
         strbuf_append_n(&linebuf, line_start, line_len);
 
-        /* Check for line continuation */
+        /* Continuation marker detection tolerant of CRLF. Python's rules use
+         * r"[\\_]\r?\n" (src/zxbpp/zxbpplex.py:101/129/205), so the marker may
+         * be followed by an optional CR before the newline; the matched token's
+         * value is `value[1:]` — the marker is dropped but the trailing CR (if
+         * any) is PRESERVED in the joined stream. With CRLF the byte just before
+         * '\n' is '\r', so we look one char further back for the marker and keep
+         * the CR. `mpos` is the index of the continuation marker (or -1). */
         const char *cur = strbuf_cstr(&linebuf);
         int curlen = (int)strbuf_cstr(&linebuf)[0] ? (int)strlen(strbuf_cstr(&linebuf)) : 0;
         bool continued = false;
+        bool had_cr = (curlen > 0 && cur[curlen - 1] == '\r');
+        int mpos = had_cr ? curlen - 2 : curlen - 1;  /* marker candidate index */
 
-        if (curlen > 0) {
-            char last = cur[curlen - 1];
+        if (mpos >= 0) {
+            char last = cur[mpos];
             /* Backslash continuation (for #define and ASM lines) */
             if (last == '\\') {
                 continued = true;
                 if (pp->in_asm) {
-                    /* In ASM mode, join lines by removing the backslash */
-                    linebuf.len--;
+                    /* In ASM mode, join lines by removing the backslash;
+                     * preserve any trailing CR (Python keeps it). */
+                    if (had_cr) {
+                        linebuf.data[mpos] = '\r';
+                        linebuf.len = mpos + 1;
+                    } else {
+                        linebuf.len = mpos;
+                    }
                     linebuf.data[linebuf.len] = '\0';
                 } else {
-                    /* Replace backslash with newline to preserve line structure */
-                    linebuf.data[linebuf.len - 1] = '\n';
+                    /* Replace backslash with newline to preserve line structure;
+                     * keep the trailing CR before it (CRLF → "\r\n"). */
+                    linebuf.data[mpos] = had_cr ? '\r' : '\n';
+                    if (had_cr) {
+                        linebuf.data[mpos + 1] = '\n';
+                        linebuf.len = mpos + 2;
+                        linebuf.data[linebuf.len] = '\0';
+                    }
                 }
             }
             /* Underscore continuation (BASIC line continuation).
              * Only when _ is at end of line AND is not part of an identifier.
              * i.e., preceded by non-identifier char or is the only char. */
-            else if (last == '_' && (curlen == 1 || !is_id_char(cur[curlen - 2]))) {
+            else if (last == '_' && (mpos == 0 || !is_id_char(cur[mpos - 1]))) {
                 continued = true;
-                /* Keep the _ and append \n */
+                /* Keep the _ (and the trailing CR, if any, already in buffer)
+                 * and append '\n' — Python's value is "_" + "\r?\n". */
                 strbuf_append_char(&linebuf, '\n');
             }
         }
@@ -2842,9 +2887,11 @@ int preproc_file(PreprocState *pp, const char *filename)
         if (!continued) {
             /* Process the complete line */
             char *complete_line = arena_strdup(&pp->arena, strbuf_cstr(&linebuf));
-            /* Remove trailing \r */
+            /* Remove trailing \r (record it so a CRLF #define blank matches
+             * Python's NEWLINE-token-value emission). */
             int clen = (int)strlen(complete_line);
-            if (clen > 0 && complete_line[clen-1] == '\r')
+            pp->line_had_cr = (clen > 0 && complete_line[clen-1] == '\r');
+            if (pp->line_had_cr)
                 complete_line[clen-1] = '\0';
 
             process_line(pp, complete_line);
@@ -2895,22 +2942,35 @@ int preproc_string(PreprocState *pp, const char *input, const char *filename)
 
         strbuf_append_n(&linebuf, line_start, line_len);
 
-        /* Check for line continuation */
+        /* Continuation marker detection tolerant of CRLF (mirror of Python's
+         * r"[\\_]\r?\n"; the CR before '\n' is preserved in the join). */
         const char *cur = strbuf_cstr(&linebuf);
         int curlen = (int)strlen(cur);
         bool continued = false;
+        bool had_cr = (curlen > 0 && cur[curlen - 1] == '\r');
+        int mpos = had_cr ? curlen - 2 : curlen - 1;
 
-        if (curlen > 0) {
-            char last = cur[curlen - 1];
+        if (mpos >= 0) {
+            char last = cur[mpos];
             if (last == '\\') {
                 continued = true;
                 if (pp->in_asm) {
-                    linebuf.len--;
+                    if (had_cr) {
+                        linebuf.data[mpos] = '\r';
+                        linebuf.len = mpos + 1;
+                    } else {
+                        linebuf.len = mpos;
+                    }
                     linebuf.data[linebuf.len] = '\0';
                 } else {
-                    linebuf.data[linebuf.len - 1] = '\n';
+                    linebuf.data[mpos] = had_cr ? '\r' : '\n';
+                    if (had_cr) {
+                        linebuf.data[mpos + 1] = '\n';
+                        linebuf.len = mpos + 2;
+                        linebuf.data[linebuf.len] = '\0';
+                    }
                 }
-            } else if (last == '_' && (curlen == 1 || !is_id_char(cur[curlen - 2]))) {
+            } else if (last == '_' && (mpos == 0 || !is_id_char(cur[mpos - 1]))) {
                 continued = true;
                 strbuf_append_char(&linebuf, '\n');
             }
@@ -2919,7 +2979,8 @@ int preproc_string(PreprocState *pp, const char *input, const char *filename)
         if (!continued) {
             char *complete_line = arena_strdup(&pp->arena, strbuf_cstr(&linebuf));
             int clen = (int)strlen(complete_line);
-            if (clen > 0 && complete_line[clen-1] == '\r')
+            pp->line_had_cr = (clen > 0 && complete_line[clen-1] == '\r');
+            if (pp->line_had_cr)
                 complete_line[clen-1] = '\0';
             process_line(pp, complete_line);
             strbuf_clear(&linebuf);

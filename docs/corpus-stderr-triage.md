@@ -167,7 +167,25 @@ deliberately-malformed legacy sources.
 
 ---
 
-## CLASS 3 — crlf-continuation  *(MATTERS)*
+## CLASS 3 — crlf-continuation  *(FIXED)*
+
+**Status: FIXED** (commit `fix(zxbpp): CRLF-tolerant line-continuation`). The
+three zxbpp pre-tokenisation join loops (`preproc_file` top-level,
+`preproc_string`, and the include loop) now detect the `\\`/`_` continuation
+marker one byte before an optional trailing CR and preserve that CR in the join,
+mirroring Python's `r"[\\_]\r?\n"`. The first-`#define` blank-line emission was
+also made CR-aware (Python's `program : define NEWLINE`, zxbpp.py:326, emits the
+NEWLINE token value verbatim, so a CRLF source yields `\r\n`). Probe
+`preprocessor/define_crlf_line_continuation.bas` (committed with CRLF via the
+repo-root `.gitattributes` `*.bas -crlf`) was RED (`PROBE-DIFF-EXIT`, Py=0 C=1)
+before the fix, PROBE-EQUAL after. knights-demons-dx's two `illegal preprocessor
+character '\'` stderr lines are gone from its `--diff`; only its deferred
+include-lineno-zero first divergence (CLASS 1) remains, keeping the row
+DIFF-STDERR by design. Verified: the C zxbc/zxbasm lexers already tolerate CRLF
+(forward-scan, not look-one-back), so no change was needed there. The underscore
+`_`-CRLF *hole* is closed too (lines now join), but a separate, pre-existing
+`_`-rendering divergence (Python strips the `_`, C keeps it) remains and is
+identical on LF — out of scope for this CRLF class.
 
 **Member rows:** knights-demons-dx (secondary divergence, behind its
 include-lineno-zero first divergence).
@@ -415,8 +433,10 @@ Ordered by value-per-risk against the IDE-highlighting bar:
    low-risk, high payoff (wrong *file* attributed). Extended the existing
    W170/W190 fix to the var-translator VARDECL/ARRAYDECL and optimizer
    LET/LETARRAY W150 emit sites. Was done first, as recommended.
-2. **CLASS 3 — crlf-continuation** — small, low-risk; clears spurious errors on
-   common CRLF sources (knights-demons-dx). Narrow predicate change.
+2. **CLASS 3 — crlf-continuation** — ✅ **FIXED.** small, low-risk; cleared the
+   spurious `illegal preprocessor character '\'` errors on common CRLF sources
+   (knights-demons-dx). Narrow predicate change in the three zxbpp join loops
+   plus a CR-aware first-`#define` blank.
 3. **CLASS 4 — data-label-in-sub** — small–medium; reroute DATA label creation
    through the declare/collision path. Verify DATA-bearing BINARY-EQUAL rows.
 4. **CLASS 2 — parser-recovery-cascade** — herculean; do last and only if

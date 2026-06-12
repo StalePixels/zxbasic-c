@@ -111,6 +111,13 @@ typedef struct PreprocState {
     /* ASM mode: inside asm..end asm block, comment char is ; not ' */
     bool in_asm;
 
+    /* True when the source line currently handed to process_line was
+     * terminated by CRLF (its trailing '\r' was stripped before the call).
+     * Python's NEWLINE token value is `\r?\n` and the first-#define grammar
+     * production emits that token verbatim, so a CRLF source yields a `\r\n`
+     * blank line; the C define-blank emission consults this to match. */
+    bool line_had_cr;
+
     /* true only for the zxbc 2nd-pass whole-file ASM re-filter — zxbc.py
      * setMode(PreprocMode.ASM)/filter_; mirrors src/zxbpp/zxbasmpplex.py:
      * emit comments + whitespace + asm body verbatim, process only
