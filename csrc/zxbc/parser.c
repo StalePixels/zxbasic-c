@@ -12158,23 +12158,45 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
                  * node — Python never sets p[0]); the per-item static/FUNCPTR
                  * split + gl.DATAS append via the shared data_build. */
         AstNode *al = (AstNode *)rhs[1].value;
-        if (!al || al->child_count == 0) { r = NULL; break; }  /* p[2] None */
-        /* :1742-1745  DATA not allowed within Functions nor Subs. */
-        if (p->cs->function_level.len > 0) {
-            zxbc_error(p->cs, PD_LINENO(1),
-                       "DATA not allowed within Functions nor Subs");
-            r = NULL;
-            break;
-        }
         int ln = PD_LINENO(1);
-        /* :1734  label_ = make_label(DATA_PTR_CURRENT); record data_labels. */
+        /* :1734  label_ = make_label(DATA_PTR_CURRENT); record data_labels.
+         * make_label runs BEFORE the FUNCTION_LEVEL guard (:1742) and the
+         * `p[2] is None` early-out (:1738) — Python's p_data creates the
+         * label unconditionally first. Order matters: for DATA inside a
+         * SUB/FUNCTION the guard returns without advancing
+         * data_ptr_current, so consecutive in-sub DATA statements reuse
+         * the same auto-label name and the 2nd+ collide in declare_label,
+         * which (symboltable.py:592-595) raises
+         * "Label '...' already used at <file>:<line>" -- emitted BEFORE
+         * the guard's "DATA not allowed". Mirror declare_label's collision
+         * check (as label_define does) on the access_label result. */
         char *label_name = p->cs->data_ptr_current ? p->cs->data_ptr_current
                                                    : current_data_label(p->cs);
         AstNode *label_entry =
             symboltable_access_label(p->cs->symbol_table, p->cs, label_name, ln);
+        if (label_entry && label_entry->u.id.class_ == CLASS_label) {
+            if (label_entry->u.id.declared) {
+                zxbc_error(p->cs, ln, "Label '%s' already used at %s:%d",
+                           label_name, p->cs->current_file,
+                           label_entry->lineno);
+            }
+            label_entry->u.id.declared = true;
+            /* declare_label (symboltable.py:627): entry.type_ = PTR_TYPE. */
+            label_entry->type_ =
+                p->cs->symbol_table->basic_types[TYPE_uinteger];
+        }
         if (label_entry)
             hashmap_set(&p->cs->data_labels, label_name,
                         p->cs->data_ptr_current ? p->cs->data_ptr_current : "");
+        /* :1738-1740  if p[2] is None: p[0]=None; return  (after make_label). */
+        if (!al || al->child_count == 0) { r = NULL; break; }  /* p[2] None */
+        /* :1742-1745  DATA not allowed within Functions nor Subs. */
+        if (p->cs->function_level.len > 0) {
+            zxbc_error(p->cs, ln,
+                       "DATA not allowed within Functions nor Subs");
+            r = NULL;
+            break;
+        }
         /* Unwrap each ARGUMENT to its value expr (Python reads d.value). */
         int n = al->child_count;
         AstNode **vals = arena_alloc(&p->cs->arena, (size_t)n * sizeof(AstNode *));

@@ -19,7 +19,7 @@ of `PROBE_CATEGORIES`, so no meter runs them).
 |-----|----------------|-----------|---------|
 | 3-reyes-magos | -O2 | parser-recovery-cascade | MATTERS |
 | abydos | -O2 | parser-recovery-cascade | MATTERS |
-| ad-lunam | -O3 … | data-label-in-sub | MATTERS |
+| ad-lunam | -O3 … | data-label-in-sub | FIXED |
 | ad-lunam-plus | -O3 … | include-lineno-zero | DEFERRED-PYTHON-SIDE |
 | berksman | -O2 | parser-recovery-cascade | MATTERS |
 | breakspace | -O2 … | include-lineno-zero | DEFERRED-PYTHON-SIDE |
@@ -234,7 +234,34 @@ same shape and would want the same treatment.
 
 ---
 
-## CLASS 4 — data-label-in-sub  *(MATTERS)*
+## CLASS 4 — data-label-in-sub  *(FIXED)*
+
+**Status: FIXED** (commit `fix(zxbc): DATA-in-sub label collision cascade`).
+The C `p_data` reduce
+action (`case 157` in `csrc/zxbc/parser.c` — the live table-driven path, NOT the
+parallel `parse_statement` BTOK_DATA branch at :4628, which is dead code for the
+DATA construct under the table-driven parser) now mirrors Python's
+order-of-operations exactly: `make_label(DATA_PTR_CURRENT)` runs FIRST
+(zxbparser.py:1734), with the `declare_label` collision check
+(symboltable.py:592-595) applied to the `symboltable_access_label` result (the
+same check `label_define` already performs for `<label>:` sites), THEN the
+`p[2] is None` early-out (:1738), THEN the `FUNCTION_LEVEL` guard (:1742). For
+consecutive in-SUB DATA the guard returns without advancing `DATA_PTR_CURRENT`,
+so the 2nd+ DATA re-declares the same auto-label and now emits
+`Label '.DATA.__DATA__N' already used at <file>:<line>` BEFORE the
+`DATA not allowed within Functions nor Subs` error — byte-identical to Python.
+Probe `errors/err_data_label_in_sub.bas` RED (`PROBE-DIFF-STDERR`) before, GREEN
+after. ad-lunam promoted DIFF-STDERR → FRONTEND-EQUAL (this was its only
+divergence). Top-level DATA and the DATA-bearing BINARY-EQUAL rows (fourspriter)
+verified unchanged.
+
+**Original triage C-location note:** the triage placed the C site at
+`csrc/zxbc/parser.c:4631-4643`. That was imprecise — that `parse_statement`
+branch is dead code for DATA; the live reduce action is `case 157`. The fix
+landed there. (Sibling check: the only other `declare_label` callers are the
+label-definition productions, already covered by `label_define`'s collision
+check; `check_and_make_label` callers — RESTORE/GOTO/GOSUB — are references, not
+declarations, and correctly skip the check. p_data was the sole divergent site.)
 
 **Member rows:** ad-lunam.
 
@@ -437,8 +464,10 @@ Ordered by value-per-risk against the IDE-highlighting bar:
    spurious `illegal preprocessor character '\'` errors on common CRLF sources
    (knights-demons-dx). Narrow predicate change in the three zxbpp join loops
    plus a CR-aware first-`#define` blank.
-3. **CLASS 4 — data-label-in-sub** — small–medium; reroute DATA label creation
-   through the declare/collision path. Verify DATA-bearing BINARY-EQUAL rows.
+3. **CLASS 4 — data-label-in-sub** — ✅ **FIXED.** small–medium; routed the
+   `case 157` p_data label creation through the declare/collision path (mirroring
+   `label_define`) and reordered make_label before the FUNCTION_LEVEL guard to
+   match Python. DATA-bearing BINARY-EQUAL rows verified unchanged.
 4. **CLASS 2 — parser-recovery-cascade** — herculean; do last and only if
    error-stream parity on malformed legacy dialect is wanted. A partial
    `p_function_error`-equivalent covers souls/berksman/looking-for; full parity
