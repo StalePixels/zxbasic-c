@@ -117,8 +117,20 @@ static AstNode *uc_visit_funcdecl(Visitor *v, AstNode *node) {
                                       kind_is(last, "RETURN"));
         if (n == 0 || !ends_terminal) {
             int lineno = (n == 0) ? node->lineno : last->lineno;
+            /* Python: errmsg.warning_function_should_return_a_value(
+             *   lineno, node.name, node.filename) (optimize.py:105) —
+             * the W190 attributes to the file that was #line-active when
+             * the FUNCTION was declared (stamped on the ID node at first
+             * creation, _id.py:58), NOT the file active at optimize-emit
+             * time. Swap cs->current_file for the duration of the emit
+             * (the same fname= analogue used by the R11 emit in
+             * compiler.c), then restore. */
+            char *saved_file = v->cs->current_file;
+            if (idn->u.id.filename)
+                v->cs->current_file = idn->u.id.filename;
             warn_function_should_return(
                 v->cs, lineno, idn->u.id.name ? idn->u.id.name : "");
+            v->cs->current_file = saved_file;
             /* String functions must always return a value: append the
              * sentinel ASM (codegen-only, Phase 5; meter-neutral here).
              * AST_ASM has no is_sentinel field — Phase-5 follow-up. */

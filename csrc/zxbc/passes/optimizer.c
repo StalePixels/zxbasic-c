@@ -651,8 +651,20 @@ static AstNode *opt_visit_funcdecl(Visitor *v, AstNode *node) {
 
     if (v->cs->opts.optimization_level > 1 && entry &&
         !entry->u.id.accessed) {
+        /* Python: errmsg.warning_func_is_never_called(
+         *   node.entry.lineno, node.entry.name, fname=node.entry.filename)
+         * (optimize.py:310) — the W170 attributes to the file that was
+         * #line-active when the function was DECLARED (stamped on the ID
+         * node at first creation, _id.py:58), NOT the file active at
+         * optimize-emit time. Swap cs->current_file for the emit (the
+         * same fname= analogue used by the R11 emit in compiler.c),
+         * then restore. */
+        char *saved_file = v->cs->current_file;
+        if (entry->u.id.filename)
+            v->cs->current_file = entry->u.id.filename;
         warn_func_never_called(v->cs, entry->lineno,
                                entry->u.id.name ? entry->u.id.name : "");
+        v->cs->current_file = saved_file;
         return c->nop;
     }
 
