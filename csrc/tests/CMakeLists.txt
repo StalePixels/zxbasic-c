@@ -110,3 +110,14 @@ add_test(
 # nothing script"). The C test_cmdline binary's 15 value-verifying
 # tests (registered above as cmdline_value_tests) are the real
 # replacement.
+
+# Unit-test binaries are build-tree artefacts, not products: keep them
+# out of the repo-root bin/, which holds exactly the shipped multicall
+# suite, its applet entries, and the dev dump tools. ctest resolves
+# test targets by name, so relocating their output directory is
+# invisible to the harness.
+set_target_properties(
+    test_utils test_config test_types test_ast
+    test_symboltable test_check test_cmdline
+    PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+)
