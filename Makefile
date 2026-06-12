@@ -102,8 +102,8 @@ test-fast: build
 	echo && \
 	$(MAKE) --no-print-directory test-unit && \
 	echo && \
-	end=$$(date +%s); \
-	elapsed=$$((end - start)); \
+	end=$$(date +%s) && \
+	elapsed=$$((end - start)) && \
 	echo "================== make test (fast tier) GREEN — $${elapsed}s =================="
 
 test-slow: test-fast
@@ -125,8 +125,8 @@ test-slow: test-fast
 	$(CHECK_METER) zxbc-omatrix-zxnext omatrix-zxnext -- \
 	    ./csrc/tests/run_zxbc_omatrix.sh $(ZXBC_C) $(ZXBC_TESTS_ZXNEXT) && \
 	echo && \
-	end=$$(date +%s); \
-	elapsed=$$((end - start)); \
+	end=$$(date +%s) && \
+	elapsed=$$((end - start)) && \
 	echo "================== make test-slow GREEN — deep tier $${elapsed}s =================="
 
 # Codegen probes — 10 hand-authored probe categories. Each category is
