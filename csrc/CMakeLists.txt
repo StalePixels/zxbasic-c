@@ -11,9 +11,12 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # All executables (the multicall binary and the standalone tools, when
-# enabled) land under <build>/bin/ so the symlinks have a single target
-# directory and so test harnesses see a stable, layout-independent path.
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+# enabled) land under the REPO-ROOT bin/ so the shipped layout is
+# self-contained: bin/ and src/lib are siblings of one tree, and the
+# stdlib default resolves one hop up (<exe_dir>/../src/lib). Objects,
+# CMakeCache, ctest state etc. stay out-of-source under csrc/build/.
+# CMAKE_SOURCE_DIR is csrc/ (cmake -S csrc), so its parent is the repo root.
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/../bin")
 
 # Standalone per-tool executables (zxbpp / zxbasm / zxbc as separate
 # binaries) are useful for debugging a single applet in isolation, but

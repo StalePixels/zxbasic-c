@@ -197,7 +197,7 @@ bool get_lib_include_root(const char *argv0, char *out, size_t out_size) {
         return false;
 
     char raw[PATH_MAX * 2 + 32];
-    snprintf(raw, sizeof(raw), "%s/../../../src/lib", exe_dir);
+    snprintf(raw, sizeof(raw), "%s/../src/lib", exe_dir);
 
     char real[PATH_MAX];
     if (!realpath(raw, real))

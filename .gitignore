@@ -17,6 +17,9 @@ scratch/
 htmlcov/
 build/
 build-*/
+# Repo-root runnable output tree (CMAKE_RUNTIME_OUTPUT_DIRECTORY).
+# Anchored so it only matches <repo>/bin, never csrc/**/bin.
+/bin/
 venv/
 .pypi-token
 .coverage.*

@@ -35,8 +35,12 @@ cmake -S csrc -B csrc/build -DCMAKE_BUILD_TYPE=Release
 cmake --build csrc/build -j8
 ```
 
-Produces `csrc/build/bin/zxbasic-suite` (the real binary) plus
+Produces `bin/zxbasic-suite` (the real binary, at the repo root) plus
 `zxbpp`/`zxbasm`/`zxbc` symlinks next to it that dispatch via argv[0].
+Objects, CMakeCache and ctest state stay out-of-source under
+`csrc/build/`; only the runnable `bin/` tree lives at the repo root
+(gitignored), a sibling of `src/lib` so the stdlib default resolves one
+hop up (`<exe_dir>/../src/lib`).
 On Windows the symlinks are replaced with `.exe` copies (no symlink
 primitive). Opt-in `-DZXBASIC_BUILD_STANDALONE=ON` adds separate
 per-tool executables for single-applet debugging; not the default.
@@ -130,10 +134,10 @@ Always validate against Python when adding features — don't trust assumptions.
 # Build and quick test:
 cmake -S csrc -B csrc/build -DCMAKE_BUILD_TYPE=Release
 cmake --build csrc/build -j4
-./csrc/tests/run_zxbpp_tests.sh ./csrc/build/bin/zxbpp tests/functional/zxbpp
+./csrc/tests/run_zxbpp_tests.sh ./bin/zxbpp tests/functional/zxbpp
 
 # Full Python comparison (slower, requires Python 3.11+):
-./csrc/tests/compare_python_c.sh ./csrc/build/bin/zxbpp tests/functional/zxbpp
+./csrc/tests/compare_python_c.sh ./bin/zxbpp tests/functional/zxbpp
 ```
 
 ### Test File Conventions

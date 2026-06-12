@@ -43,10 +43,11 @@ bool get_executable_dir(const char *argv0, char *out, size_t out_size);
  *   1. If $ZXBASIC_INC_PATH is set and non-empty, use that verbatim.
  *      Lets a package install (e.g. /usr/share/zxbasic-c) point the
  *      toolchain at lib resources outside the dev-tree layout.
- *   2. Otherwise compute realpath(<exe_dir>/../../../src/lib) — the
+ *   2. Otherwise compute realpath(<exe_dir>/../src/lib) — the
  *      faithful default that mirrors Python's
- *      os.path.dirname(__file__)/.. anchor and matches the dev-tree
- *      shape <root>/csrc/build/bin/<tool> -> <root>/src/lib.
+ *      os.path.dirname(__file__)/.. anchor and matches the shipped
+ *      shape <root>/bin/<tool> -> <root>/src/lib, where bin/ and src/lib
+ *      are siblings of one self-contained tree.
  *
  * Callers append "/arch/<arch>/stdlib" and "/arch/<arch>/runtime" as
  * before. Writes the absolute path (no trailing slash) into out;

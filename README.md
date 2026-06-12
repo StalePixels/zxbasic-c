@@ -27,9 +27,10 @@ cmake -S csrc -B csrc/build -DCMAKE_BUILD_TYPE=Release
 cmake --build csrc/build -j8
 ```
 
-This produces `csrc/build/bin/zxbasic-suite` — a busybox-style multicall
-binary — plus `zxbc` / `zxbpp` / `zxbasm` symlinks beside it that dispatch on
-their name. Builds on Linux (x86_64/arm64), macOS (arm64), and Windows
+This produces `bin/zxbasic-suite` (at the repo root) — a busybox-style
+multicall binary — plus `zxbc` / `zxbpp` / `zxbasm` symlinks beside it that
+dispatch on their name. (Build state stays under `csrc/build/`; only the
+runnable `bin/` lands at the root.) Builds on Linux (x86_64/arm64), macOS (arm64), and Windows
 (x86_64); C11, no dependencies beyond a C compiler and CMake.
 
 ## Use
@@ -43,7 +44,7 @@ works as-is:
 ```
 
 ```bash
-csrc/build/bin/zxbc -f tap --autorun --BASIC hello.bas
+bin/zxbc -f tap --autorun --BASIC hello.bas
 # -> hello.tap, ready for your favourite emulator or real hardware
 ```
 
