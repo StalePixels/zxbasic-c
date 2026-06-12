@@ -1,0 +1,1 @@
+DIM unusedVar AS UINTEGER
