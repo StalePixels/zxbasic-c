@@ -319,6 +319,90 @@ static void strip_trailing(char *s)
     s[len] = '\0';
 }
 
+/* ----------------------------------------------------------------
+ * Line-continuation context check
+ *
+ * The pre-tokenisation join loops run on raw text, comment-blind. But
+ * Python's continuation rules live in the LEXER state machine, so a `\`
+ * or `_` at end of line only counts where the relevant CONTINUE rule can
+ * actually see it. The Python truth table (src/zxbpp/zxbpplex.py):
+ *
+ *   context              \ joins?  _ joins?   rule
+ *   ------------------------------------------------------------------
+ *   INITIAL code         YES       YES*       t_INITIAL_CONTINUE :128
+ *   asm code             YES       YES        t_asm_CONTINUE     :100
+ *   #define body (defexpr) YES     YES*       t_defexpr_CONTINUE :204
+ *   asm `;` comment      NO        NO         t_asm_COMMENT `;.*` :106
+ *                                             eats the marker (`.` matches
+ *                                             `\r` but not `\n`) BEFORE
+ *                                             CONTINUE can fire.
+ *   '/REM single-comment YES       NO         t_singlecomment_CONTINUE :192
+ *                                             is `\\\r?\n` — BACKSLASH ONLY.
+ *   string literal       NO        NO         string rule `"([^"\n]|"")*"`
+ *                                             consumes to the closing quote;
+ *                                             an unterminated string ends at
+ *                                             NEWLINE, never CONTINUE.
+ *   (* `_` only when not part of an identifier — handled by the caller's
+ *      is_id_char guard; this helper governs the comment/string contexts.)
+ *
+ * Given the joined-line buffer `cur` and the marker index `mpos` (a `\` or
+ * `_` byte), returns whether that marker should line-continue. `in_asm`
+ * selects the `;`-vs-`'`/REM comment convention. The scan resets state at
+ * any embedded '\n' (a prior joined continuation introduces a fresh logical
+ * line whose comment/string state starts clean). */
+typedef enum { CTX_CODE, CTX_ASM_COMMENT, CTX_BASIC_COMMENT, CTX_STRING } ContChar;
+
+static ContChar continuation_context(const char *cur, int mpos, bool in_asm)
+{
+    /* Start at the beginning of the current logical line (after any embedded
+     * newline left by an earlier join). */
+    int start = 0;
+    for (int i = 0; i < mpos; i++) {
+        if (cur[i] == '\n') start = i + 1;
+    }
+
+    bool in_string = false;
+    for (int i = start; i < mpos; i++) {
+        char c = cur[i];
+        if (in_string) {
+            if (c == '"') {
+                /* Doubled quote "" is an escaped quote, still inside string */
+                if (cur[i + 1] == '"') { i++; continue; }
+                in_string = false;
+            }
+            continue;
+        }
+        if (c == '"') { in_string = true; continue; }
+        if (in_asm) {
+            if (c == ';') return CTX_ASM_COMMENT;
+        } else {
+            if (c == '\'') return CTX_BASIC_COMMENT;
+            if ((c == 'R' || c == 'r') &&
+                (cur[i+1] == 'E' || cur[i+1] == 'e') &&
+                (cur[i+2] == 'M' || cur[i+2] == 'm') &&
+                (i == start || !is_id_char(cur[i-1])) &&
+                !is_id_char(cur[i+3])) {
+                return CTX_BASIC_COMMENT;
+            }
+        }
+    }
+    return in_string ? CTX_STRING : CTX_CODE;
+}
+
+/* Decide whether a trailing continuation marker joins, honouring the Python
+ * lexer truth table above. `marker` is '\\' or '_'. */
+static bool continuation_marker_joins(const char *cur, int mpos, char marker, bool in_asm)
+{
+    ContChar ctx = continuation_context(cur, mpos, in_asm);
+    switch (ctx) {
+        case CTX_ASM_COMMENT:   return false;            /* neither joins */
+        case CTX_STRING:        return false;            /* neither joins */
+        case CTX_BASIC_COMMENT: return marker == '\\';   /* backslash only */
+        case CTX_CODE:
+        default:                return true;             /* both join */
+    }
+}
+
 /* Read entire file into malloc'd string */
 static char *read_file(const char *path)
 {
@@ -1501,15 +1585,16 @@ static void handle_include(PreprocState *pp, const char *rest)
      * top level (preproc_file) joins them correctly.
      *
      * Python's PLY lexer (src/zxbpp/zxbpplex.py:100/128/152/192/204)
-     * has CONTINUE rules in multiple states. We intentionally do NOT
-     * do underscore continuation here even though the INITIAL rule
-     * covers `[\\_]\r?\n`: Python's `singlecomment` state has only the
-     * backslash rule (zxbpplex.py:192), so a `;`-comment ending in
-     * `_` is NOT a continuation. The C pre-tokenisation loop has no
-     * lexer-state tracking, so applying `_` continuation
-     * unconditionally over-fires inside `;`-comments (e.g.
-     * print64.bas's font table has lines ending ` _`). Backslash is
-     * safe because `singlecomment_CONTINUE` also fires on `\<NL>`. */
+     * has CONTINUE rules in multiple states, and a continuation marker
+     * only counts where the relevant CONTINUE rule can SEE it. This
+     * include loop honours backslash continuation only, but gates it
+     * through continuation_marker_joins(): a `\` inside a `;` asm comment
+     * (zxbpplex.py:106 `;.*` eats the marker first) or inside a string
+     * does NOT join. This is the print42.bas font-table shape — comment
+     * lines whose described glyph is `\` (e.g. `defb 252  ; \`). We still
+     * do NOT do underscore continuation here: Python's `singlecomment`
+     * state is backslash-only (zxbpplex.py:192), and the asm/INITIAL `_`
+     * cases the include path could hit are covered conservatively. */
     char *line_start = content;
     StrBuf inc_linebuf;
     strbuf_init(&inc_linebuf);
@@ -1535,7 +1620,8 @@ static void handle_include(PreprocState *pp, const char *rest)
         bool inc_had_cr = (curlen > 0 && cur[curlen - 1] == '\r');
         int inc_mpos = inc_had_cr ? curlen - 2 : curlen - 1;
 
-        if (inc_mpos >= 0 && cur[inc_mpos] == '\\') {
+        if (inc_mpos >= 0 && cur[inc_mpos] == '\\' &&
+            continuation_marker_joins(cur, inc_mpos, '\\', pp->in_asm)) {
             continued = true;
             if (pp->in_asm) {
                 if (inc_had_cr) {
@@ -2849,8 +2935,10 @@ int preproc_file(PreprocState *pp, const char *filename)
 
         if (mpos >= 0) {
             char last = cur[mpos];
-            /* Backslash continuation (for #define and ASM lines) */
-            if (last == '\\') {
+            /* Backslash continuation (for #define and ASM lines). Gated by
+             * continuation_marker_joins(): a `\` inside a `;` asm comment or
+             * a string literal does NOT join (Python lexer truth table). */
+            if (last == '\\' && continuation_marker_joins(cur, mpos, '\\', pp->in_asm)) {
                 continued = true;
                 if (pp->in_asm) {
                     /* In ASM mode, join lines by removing the backslash;
@@ -2875,8 +2963,11 @@ int preproc_file(PreprocState *pp, const char *filename)
             }
             /* Underscore continuation (BASIC line continuation).
              * Only when _ is at end of line AND is not part of an identifier.
-             * i.e., preceded by non-identifier char or is the only char. */
-            else if (last == '_' && (mpos == 0 || !is_id_char(cur[mpos - 1]))) {
+             * Also gated by continuation_marker_joins(): an `_` inside a
+             * `'`/REM single-comment or a `;` asm comment does NOT continue
+             * (singlecomment_CONTINUE is backslash-only; asm COMMENT eats it). */
+            else if (last == '_' && (mpos == 0 || !is_id_char(cur[mpos - 1])) &&
+                     continuation_marker_joins(cur, mpos, '_', pp->in_asm)) {
                 continued = true;
                 /* Keep the _ (and the trailing CR, if any, already in buffer)
                  * and append '\n' — Python's value is "_" + "\r?\n". */
@@ -2952,7 +3043,7 @@ int preproc_string(PreprocState *pp, const char *input, const char *filename)
 
         if (mpos >= 0) {
             char last = cur[mpos];
-            if (last == '\\') {
+            if (last == '\\' && continuation_marker_joins(cur, mpos, '\\', pp->in_asm)) {
                 continued = true;
                 if (pp->in_asm) {
                     if (had_cr) {
@@ -2970,7 +3061,8 @@ int preproc_string(PreprocState *pp, const char *input, const char *filename)
                         linebuf.data[linebuf.len] = '\0';
                     }
                 }
-            } else if (last == '_' && (mpos == 0 || !is_id_char(cur[mpos - 1]))) {
+            } else if (last == '_' && (mpos == 0 || !is_id_char(cur[mpos - 1])) &&
+                       continuation_marker_joins(cur, mpos, '_', pp->in_asm)) {
                 continued = true;
                 strbuf_append_char(&linebuf, '\n');
             }

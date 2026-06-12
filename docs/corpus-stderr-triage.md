@@ -227,6 +227,30 @@ DIFF-STDERR by design. Verified: the C zxbc/zxbasm lexers already tolerate CRLF
 `_`-rendering divergence (Python strips the `_`, C keeps it) remains and is
 identical on LF — out of scope for this CRLF class.
 
+**Side effect found and fixed (comment-blind join).** Making the join CR-aware
+exposed a latent bug it had been masking: the three join loops run
+pre-tokenisation on raw text and were **comment-blind**, so a `\`/`_` at end of
+line continued *unconditionally* — even inside a `;` asm comment or a `'`/REM
+single-comment, where Python's lexer would never fire a CONTINUE. Before the
+CRLF fix this never bit on CRLF files (the `\r`-blindness suppressed the join);
+after it, the comment-blind join fired wrongly. The print42.bas font table is the
+trigger: its CRLF asm block has comment lines whose *described glyph* is the
+continuation char — `defb 252  ; \` (the backslash glyph) and `defb 6  ; _` (the
+underscore glyph). The `\` comment wrongly joined with the next `defb`, eating one
+`defb 240` line and shifting every later `#line` down by one (522→521, 540→539),
+so print42's end-to-end binary FULL-DIFF'd. The same over-fire was demonstrable on
+plain-LF source (latent, pre-existing). **Fix:** a `continuation_marker_joins()`
+helper (`csrc/zxbpp/preproc.c`) gates every join through the Python lexer truth
+table — a `\`/`_` inside a `;` asm comment never joins; inside a `'`/REM
+single-comment only `\` joins (`t_singlecomment_CONTINUE` zxbpplex.py:192 is
+backslash-only); inside a string never joins; in code both join (subject to the
+existing `_`-not-part-of-identifier guard). Probes:
+`preprocessor/asm_comment_glyph_continuation_crlf.bas` (the print42 shape, CRLF),
+`asm_comment_glyph_continuation_lf.bas` (the latent LF form), and
+`single_comment_underscore_no_continue_crlf.bas` (the `'`-comment `_` asymmetry) —
+all RED before, PROBE-EQUAL after; the existing `define_crlf_line_continuation`
+probe stays GREEN.
+
 **Member rows:** knights-demons-dx (secondary divergence, behind its
 include-lineno-zero first divergence).
 
