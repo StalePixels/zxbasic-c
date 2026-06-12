@@ -83,8 +83,8 @@ PY=/opt/homebrew/bin/python3.12
 # (while.bas byte-flip; see README + zxbc_python_bugs.txt). Seed 0 makes the
 # oracle stable and byte-matches C, so the probe meter measures a real delta.
 export PYTHONHASHSEED=0
-ZXBC_C="$ROOT/csrc/build/bin/zxbc"
-ZXBASM_C="$ROOT/csrc/build/bin/zxbasm"
+ZXBC_C="$ROOT/bin/zxbc"
+ZXBASM_C="$ROOT/bin/zxbasm"
 if [ "$MODE" = "zxbc" ]; then
     [ -x "$ZXBC_C" ] || { echo "ERROR: C zxbc not built at $ZXBC_C — build it (cmake --build csrc/build) first." >&2; exit 2; }
 else

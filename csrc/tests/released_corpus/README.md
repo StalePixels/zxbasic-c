@@ -89,7 +89,7 @@ FORCE=1 ./fetch.sh zen
 ```
 
 Requires Python 3.12 (oracle, auto-detected; pin via `PY=...`), a built
-`csrc/build/bin/zxbc`, plus `curl`/`unzip` (and `tar`/`unrar` for the few
+`bin/zxbc`, plus `curl`/`unzip` (and `tar`/`unrar` for the few
 non-zip archives).
 
 ## CI role — decision 2026-06-11

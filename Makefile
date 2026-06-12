@@ -12,17 +12,19 @@ CMAKE       ?= cmake
 BUILD_DIR   ?= csrc/build
 BUILD_TYPE  ?= Release
 
-# All applet entries (zxbpp / zxbasm / zxbc) live under $(BUILD_DIR)/bin/
-# as symlinks (Unix) or copies (Windows) of the multicall zxbasic-suite
-# binary. The harnesses are name-agnostic and take a binary path as argv.
-ZXBPP_C            = $(BUILD_DIR)/bin/zxbpp
+# All applet entries (zxbpp / zxbasm / zxbc) live under the repo-root
+# bin/ as symlinks (Unix) or copies (Windows) of the multicall
+# zxbasic-suite binary. Objects/CMakeCache/ctest stay under $(BUILD_DIR).
+# The harnesses are name-agnostic and take a binary path as argv.
+BIN_DIR            ?= bin
+ZXBPP_C            = $(BIN_DIR)/zxbpp
 ZXBPP_TESTS        = tests/functional/zxbpp
-ZXBASM_C           = $(BUILD_DIR)/bin/zxbasm
+ZXBASM_C           = $(BIN_DIR)/zxbasm
 ZXBASM_TESTS       = tests/functional/asm
-ZXBC_C             = $(BUILD_DIR)/bin/zxbc
+ZXBC_C             = $(BIN_DIR)/zxbc
 ZXBC_TESTS         = tests/functional/arch/zx48k
 ZXBC_TESTS_ZXNEXT  = tests/functional/arch/zxnext
-ZXBC_AST_DUMP_C    = $(BUILD_DIR)/bin/zxbc-ast-dump
+ZXBC_AST_DUMP_C    = $(BIN_DIR)/zxbc-ast-dump
 PY_AST_DUMP        = csrc/tests/dump_python_ast.py
 PY_AST_DIFF        = csrc/tests/diff_ast_json.py
 CHECK_METER        = csrc/tests/check_meter_green.sh

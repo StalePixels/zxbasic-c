@@ -48,7 +48,7 @@ from shutil import copyfile
 import os as _osc
 
 # NEXTBUILD_BACKEND selects which compiler to drive:
-#   "c"      (default) — invoke the C zxbc binary at csrc/build/bin/zxbc.
+#   "c"      (default) — invoke the C zxbc binary at the repo-root bin/zxbc.
 #   "oracle"           — invoke the project's pinned upstream Python at
 #                        zxbasic-c/src/ (the read-only ground-truth oracle).
 # This is the BYTE-FOR-BYTE comparator the port is held against. Do NOT use
@@ -58,7 +58,7 @@ _BACKEND = _osc.environ.get('NEXTBUILD_BACKEND', 'c').lower()
 
 if _BACKEND == 'c':
     ZXBC_C = _osc.path.abspath(_osc.path.join(_osc.path.dirname(__file__),
-                                             '..', 'build', 'bin', 'zxbc'))
+                                             '..', '..', 'bin', 'zxbc'))
     class _ZxbcShim:
         """Drop-in for `zxbc.main(argv)` that invokes the C zxbc binary."""
         @staticmethod

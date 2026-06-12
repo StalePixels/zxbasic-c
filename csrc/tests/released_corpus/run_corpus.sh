@@ -64,7 +64,7 @@ fi
 # (while.bas byte-flip; see README + zxbc_python_bugs.txt). Seed 0 makes the
 # oracle stable and byte-matches C, so the corpus meter measures a real delta.
 export PYTHONHASHSEED=0
-ZXBC_C="$ROOT/csrc/build/bin/zxbc"
+ZXBC_C="$ROOT/bin/zxbc"
 [ -x "$ZXBC_C" ] || { echo "ERROR: C zxbc not built at $ZXBC_C (cmake --build csrc/build)." >&2; exit 2; }
 
 [ -f "$MANIFEST" ] || { echo "ERROR: no manifest.tsv at $MANIFEST" >&2; exit 2; }
