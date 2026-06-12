@@ -271,7 +271,34 @@ the existing BINARY-EQUAL rows with DATA blocks (fourspriter et al.).
 
 ---
 
-## CLASS 5 — include-filename-attribution (W150)  *(MATTERS)*
+## CLASS 5 — include-filename-attribution (W150)  *(FIXED — commit pending)*
+
+**Status: FIXED.** Resolved by attributing the W150 "is never used" emits to
+the symbol's stored declaration filename (mirroring the W170/W190 fix
+c59df290c). Probe `warnings/w150_include_filename_attribution` (+ companion
+`_w150_included_unused_var.bi`) RED-verified before the fix, GREEN after.
+maritrini's W150 wrong-file line (`plScore`) is gone from its `--diff`; only the
+two documented ordering-only sub-divergences (W190 visit-order, undefined-label
+order) remain — both SHELVED (every file+line correct, only sequence differs).
+
+**Correction to the C-location attribution below.** The original triage placed
+the C site in "`csrc/api/` / the symbol-table walk". That was imprecise: the
+module-level W150 is emitted from the **var-translation** phase
+(`csrc/zxbc/var_translator.c` — `vt_visit_vardecl` and `vt_visit_arraydecl`,
+mirroring Python `src/arch/z80/visitor/var_translator.py:29`/`:50`), NOT the
+symbol-table. There is also a **sibling site** the triage did not mention: the
+optimizer LET-prune path (`csrc/zxbc/passes/optimizer.c` `opt_visit_let` /
+`opt_visit_letarray`, mirroring Python `src/api/optimize.py:323`/`:345`), which
+emits W150 for an assigned-but-never-read variable and was diverging the same
+way. maritrini's `plScore` (assigned at engine.bas:196, declared at
+engine.bas:69) is hit by BOTH paths; Python emits the warning twice but its
+`errmsg.msg_output` dedup cache (errmsg.py:30, keyed on the fully-formatted
+message) collapses the two identical `engine.bas:69` strings to one. Before the
+fix both C sites used `cs->current_file` and produced identical
+`maritrini.bas:69` strings (so C's emission also collapsed to one wrong line);
+fixing only var_translator made the two C strings DIFFER, surfacing a second
+line — so **both** sites had to be fixed for parity. (Python's `visit_LETSUBSTR`,
+optimize.py:362, passes no `fname` and is left on `current_file` to match.)
 
 **Member rows:** maritrini (one of three sub-divergences).
 
@@ -384,8 +411,10 @@ Leave for the upstream-resync decision.
 
 Ordered by value-per-risk against the IDE-highlighting bar:
 
-1. **CLASS 5 — include-filename-attribution (W150)** — small, low-risk, high
-   payoff (wrong *file* attributed). Extends the existing W170/W190 fix. Do first.
+1. **CLASS 5 — include-filename-attribution (W150)** — ✅ **FIXED.** small,
+   low-risk, high payoff (wrong *file* attributed). Extended the existing
+   W170/W190 fix to the var-translator VARDECL/ARRAYDECL and optimizer
+   LET/LETARRAY W150 emit sites. Was done first, as recommended.
 2. **CLASS 3 — crlf-continuation** — small, low-risk; clears spurious errors on
    common CRLF sources (knights-demons-dx). Narrow predicate change.
 3. **CLASS 4 — data-label-in-sub** — small–medium; reroute DATA label creation

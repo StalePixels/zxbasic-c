@@ -639,8 +639,19 @@ static void vt_visit_arraydecl(Translator *tr, AstNode *node) {
 
     /* if not entry.accessed: warning_not_used; O>1 -> drop (DCE). */
     if (!entry->u.id.accessed) {
+        /* Python: src.api.errmsg.warning_not_used(entry.lineno, entry.name,
+         *   fname=entry.filename) (var_translator.py:50) — the W150
+         * attributes to the file that was #line-active when the array was
+         * DECLARED (stamped on the ID node at first creation, _id.py:58),
+         * NOT the file active at var-translation time (which has reverted
+         * to the main .bas). Swap cs->current_file for the emit — the same
+         * fname= analogue used by the W170/W190 emits — then restore. */
+        char *saved_file = tr->cs->current_file;
+        if (entry->u.id.filename)
+            tr->cs->current_file = entry->u.id.filename;
         warn_not_used(tr->cs, entry->lineno,
                       entry->u.id.name ? entry->u.id.name : "", "Variable");
+        tr->cs->current_file = saved_file;
         if (tr->cs->opts.optimization_level > 1)
             return;
     }
@@ -814,9 +825,21 @@ static void vt_visit_vardecl(Translator *tr, AstNode *node) {
     if (!entry) return;
 
     if (!entry->u.id.accessed) {
+        /* Python: src.api.errmsg.warning_not_used(entry.lineno, entry.name,
+         *   fname=entry.filename) (var_translator.py:29) — the W150
+         * attributes to the file that was #line-active when the variable
+         * was DECLARED (stamped on the ID node at first creation,
+         * _id.py:58), NOT the file active at var-translation time (which
+         * has reverted to the main .bas). Swap cs->current_file for the
+         * emit — the same fname= analogue used by the W170/W190 emits —
+         * then restore. */
+        char *saved_file = tr->cs->current_file;
+        if (entry->u.id.filename)
+            tr->cs->current_file = entry->u.id.filename;
         warn_not_used(tr->cs, entry->lineno,
                       entry->u.id.name ? entry->u.id.name : "",
                       "Variable");
+        tr->cs->current_file = saved_file;
         if (tr->cs->opts.optimization_level > 1)
             return;                         /* unused vars not compiled */
     }

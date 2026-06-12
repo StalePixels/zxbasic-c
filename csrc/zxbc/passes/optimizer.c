@@ -754,9 +754,20 @@ static AstNode *opt_visit_let(Visitor *v, AstNode *node) {
     AstNode *lvalue = node->child_count > 0 ? node->children[0] : NULL;
     if (v->cs->opts.optimization_level > 1 && lvalue &&
         !lvalue->u.id.accessed) {
+        /* Python: warning_not_used(lvalue.lineno, lvalue.name,
+         *   fname=lvalue.filename) (optimize.py:323) — the W150 attributes
+         * to the file that was #line-active when the variable was DECLARED
+         * (stamped on the ID node at first creation, _id.py:58), NOT the
+         * file active at optimize-emit time (which has reverted to the main
+         * .bas). Swap cs->current_file for the emit — the same fname=
+         * analogue used by the W170/W190 emits — then restore. */
+        char *saved_file = v->cs->current_file;
+        if (lvalue->u.id.filename)
+            v->cs->current_file = lvalue->u.id.filename;
         warn_not_used(v->cs, lvalue->lineno,
                       lvalue->u.id.name ? lvalue->u.id.name : "",
                       "Variable"); /* Python default kind= "Variable" */
+        v->cs->current_file = saved_file;
         AstNode *rhs = node->child_count > 1 ? node->children[1] : NULL;
         return build_side_effect_block(v, rhs, node->lineno, true);
     }
@@ -784,9 +795,17 @@ static AstNode *opt_visit_letarray(Visitor *v, AstNode *node) {
     if (v->cs->opts.optimization_level > 1 && lvalue &&
         lvalue->tag == AST_ID &&
         !lvalue->u.id.accessed) {
+        /* Python: warning_not_used(lvalue.lineno, lvalue.name,
+         *   fname=lvalue.filename) (optimize.py:345) — attribute to the
+         * variable's stored declaration file, not the optimize-time
+         * current file. Swap cs->current_file for the emit, then restore. */
+        char *saved_file = v->cs->current_file;
+        if (lvalue->u.id.filename)
+            v->cs->current_file = lvalue->u.id.filename;
         warn_not_used(v->cs, lvalue->lineno,
                       lvalue->u.id.name ? lvalue->u.id.name : "",
                       "Variable"); /* Python default kind= "Variable" */
+        v->cs->current_file = saved_file;
         AstNode *rhs = node->child_count > 1 ? node->children[1] : NULL;
         return build_side_effect_block(v, rhs, node->lineno, false);
     }
