@@ -371,12 +371,26 @@ static bool math_fn_fold(BTokenType kw, double v, double *out) {
     }
 }
 
-static AstNode *make_string(Parser *p, const char *value, int lineno) {
+/* Build an AST_STRING from an explicit byte length. ZX BASIC string
+ * literals may embed NUL bytes (control-code escapes; src/zxbc/zxblex.py
+ * keeps every byte of __STRING), so the byte count — not strlen — is the
+ * authoritative length carried into codegen (the .__DATA__ DEFW length +
+ * DEFB run). The stored value is copied length+1 bytes and kept
+ * NUL-terminated for any C-string consumer. */
+static AstNode *make_string_n(Parser *p, const char *value, int length, int lineno) {
+    if (length < 0) length = 0;
     AstNode *n = ast_new(p->cs, AST_STRING, lineno);
-    n->u.string.value = arena_strdup(&p->cs->arena, value);
-    n->u.string.length = (int)strlen(value);
+    char *buf = arena_alloc(&p->cs->arena, (size_t)length + 1);
+    if (value && length > 0) memcpy(buf, value, (size_t)length);
+    buf[length] = '\0';
+    n->u.string.value = buf;
+    n->u.string.length = length;
     n->type_ = p->cs->symbol_table->basic_types[TYPE_string];
     return n;
+}
+
+static AstNode *make_string(Parser *p, const char *value, int lineno) {
+    return make_string_n(p, value, value ? (int)strlen(value) : 0, lineno);
 }
 
 /* Render a numeric constant exactly as Python's SymbolNUMBER.__str__
@@ -2311,9 +2325,11 @@ AstNode *parse_primary(Parser *p) {
         return make_number(p, p->previous.numval, p->previous.lineno, NULL);
     }
 
-    /* String literal */
+    /* String literal — carry the lexer's byte length (embedded-NUL-safe;
+     * control-code escapes can put NUL bytes inside the literal). */
     if (match(p, BTOK_STRC)) {
-        return make_string(p, p->previous.sval ? p->previous.sval : "", p->previous.lineno);
+        return make_string_n(p, p->previous.sval ? p->previous.sval : "",
+                             p->previous.slen, p->previous.lineno);
     }
 
     /* PI constant */
@@ -8980,11 +8996,13 @@ static bool pd_lex(void *ud, PlySym *out) {
     if (was_preproc && t.type == BTOK_STRC) {
         out->type = ply_term_id("STRING");
         out->sval = t.sval;
+        out->slen = t.slen;
         return true;
     }
     out->type = id;
     out->num = t.numval;
     out->sval = t.sval;
+    out->slen = t.slen;  /* STRC byte length (embedded-NUL-safe); 0 otherwise */
     return true;
 }
 
@@ -8995,6 +9013,7 @@ static bool pd_lex(void *ud, PlySym *out) {
 #define PD_LINENO(i) (rhs[(i) - 1].lineno)
 #define PD_NUM(i)    (rhs[(i) - 1].num)
 #define PD_SVAL(i)   (rhs[(i) - 1].sval)
+#define PD_SLEN(i)   (rhs[(i) - 1].slen)
 
 /* ---- reduce-action dispatch. Returns false on a SyntaxError-raising action
  * (none wired yet). Sets *out to p[0]. ---- */
@@ -11748,7 +11767,10 @@ static bool pd_action(void *ud, int prodno, PlySym *rhs, int len,
         r = PD_NODE(1);
         break;
     case 285: /* string : STRC */
-        r = make_string(p, PD_SVAL(1) ? PD_SVAL(1) : "", PD_LINENO(1));
+        /* Carry the lexer's byte length so embedded NULs from control-code
+         * escapes (\{p0} -> 11 00, \#000 -> 00, ...) survive into the
+         * AST_STRING .__DATA__ emission (zxblex.py keeps every byte). */
+        r = make_string_n(p, PD_SVAL(1) ? PD_SVAL(1) : "", PD_SLEN(1), PD_LINENO(1));
         break;
 
     /* ---- substr non-terminal (p_subind_*, zxbparser.py:2600-2638) ----

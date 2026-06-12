@@ -113,6 +113,11 @@ typedef struct BToken {
     int lineno;
     double numval;        /* for BTOK_NUMBER */
     char *sval;           /* for BTOK_ID, BTOK_STRC, BTOK_ASM, BTOK_LABEL (arena-allocated) */
+    int slen;             /* byte length of sval for BTOK_STRC (ZX BASIC string
+                           * literals may contain embedded NULs from control-code
+                           * escapes, e.g. \{p0} -> 11 00; sval is still
+                           * NUL-terminated for C-string consumers, but slen is
+                           * the authoritative byte count). 0 for other tokens. */
     char *text;           /* original text of the token */
 } BToken;
 

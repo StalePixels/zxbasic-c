@@ -192,13 +192,20 @@ FRONTEND-EQUAL), the drift guard, and the `fixups/` flyby-fix mechanism.
 **Local/manual only — not in `make test` or CI** (by-design not green while
 DIFF-* findings are open; fetch needs network). Same discipline as the probes:
 don't loosen the runner, don't re-pin a manifest sha to silence DRIFT without
-confirming the new bytes. As of 2026-06-11 (after the DIFF-EXIT fix): 29
-programs — 2 BINARY-EQUAL, 10 FRONTEND-EQUAL, 0 DIFF-EXIT, 17 DIFF-STDERR
-(17 open findings). The two DIFF-EXIT findings (o-trix, retrobsesion) were the
+confirming the new bytes. As of 2026-06-12 (after the string-literal embedded-NUL fix): 29
+programs — 5 BINARY-EQUAL, 10 FRONTEND-EQUAL, 0 DIFF-EXIT, 14 DIFF-STDERR
+(14 open findings). The DIFF-EXIT findings (o-trix, retrobsesion) were the
 C assembler's flat-64K memory image aborting on a >64K emission where Python's
 sparse-dict model tolerates it — fixed via `csrc/zxbasm/zxbasm.h MAX_MEM =
-0x20000` (o-trix is now BINARY-EQUAL; retrobsesion's overflow is gone but a
-deeper string-array-constant codegen divergence keeps it at DIFF-STDERR).
+0x20000`. retrobsesion's deeper divergence was NOT a string-array-constant gap
+(that prior triage was wrong): ZX BASIC string literals with control-code
+escapes (`\{p0}` → bytes `11 00`) lex to embedded NULs, and the C lexer/parser
+truncated them at the first NUL via `arena_strdup`/`strlen`. Fixed by carrying an
+explicit byte length lexer → token → AST_STRING (`make_string_n`); the codegen
+chain was already NUL-safe. retrobsesion, saltarin and walking-around-porto all
+reached BINARY-EQUAL from that single fix (plus a same-day W170/W190
+include-filename-attribution fix that cleared retrobsesion's shallower stderr
+divergence first).
 
 ## Keeping Things Up To Date
 

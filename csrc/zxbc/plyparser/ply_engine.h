@@ -33,6 +33,10 @@ typedef struct PlySym {
      * (e.g. `bexpr : NUMBER`) read them. Unused for nonterminals. */
     double num;          /* NUMBER token value */
     const char *sval;    /* ID/STRC/LABEL/ASM/ERROR/keyword text */
+    int slen;            /* byte length of sval for a STRING terminal — ZX BASIC
+                          * string literals can hold embedded NULs from
+                          * control-code escapes, so strlen(sval) under-counts.
+                          * 0 for tokens whose value has no embedded NUL. */
 } PlySym;
 
 struct PlyParser;

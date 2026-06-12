@@ -685,10 +685,21 @@ static BToken lex_string(BLexer *lex) {
             advance(lex);
             lex->state = BLEXST_INITIAL;
 
-            /* Null-terminate and create token */
-            str_append_char(lex, '\0');
+            /* ZX BASIC string literals may contain embedded NUL bytes
+             * (control-code escapes: \{p0} -> 11 00, \{i0} -> 10 00,
+             * \#000 -> 00, ...). The lexer accumulator holds the true
+             * byte count in str_len; arena_strdup/strlen would truncate
+             * at the first NUL, so copy str_len bytes explicitly and
+             * carry the length on the token (still NUL-terminated for
+             * C-string consumers). Faithful to src/zxbc/zxblex.py whose
+             * __STRING is a Python str that keeps every byte. */
+            int n = lex->str_len;
+            char *buf = arena_alloc(&lex->cs->arena, (size_t)n + 1);
+            memcpy(buf, lex->str_buf, (size_t)n);
+            buf[n] = '\0';
             BToken t = make_tok(lex, BTOK_STRC);
-            t.sval = arena_strdup(&lex->cs->arena, lex->str_buf);
+            t.sval = buf;
+            t.slen = n;
             return t;
         }
 
