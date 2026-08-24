@@ -9,10 +9,9 @@
 
 import sys
 
-from src.api import global_
+from src.api import global_, lex
 from src.api.config import OPTIONS
 from src.api.errmsg import error
-from src.ply import lex
 
 _tokens: tuple[str, ...] = (
     "STRING",

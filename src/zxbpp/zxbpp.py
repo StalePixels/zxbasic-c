@@ -12,13 +12,10 @@ import os
 import re
 import sys
 from dataclasses import dataclass
-from enum import Enum, unique
+from enum import StrEnum, unique
 from typing import Any, Final, NamedTuple
 
-from src import arch
 from src.api import config, global_, utils
-from src.arch import AVAILABLE_ARCHITECTURES
-from src.ply import yacc
 from src.zxbpp import zxbasmpplex, zxbpplex
 from src.zxbpp.base_pplex import STDIN
 from src.zxbpp.prepro import ID, Arg, ArgList, DefinesTable, MacroCall, output
@@ -28,12 +25,17 @@ from src.zxbpp.prepro.operators import Concatenation, Stringizing
 from src.zxbpp.prepro.output import error, warning
 from src.zxbpp.zxbpplex import tokens  # noqa
 
+from .zxbpp_standalone import Lark_StandAlone, Lexer, Token, Transformer, UnexpectedInput
+
 
 @unique
-class PreprocMode(str, Enum):
+class PreprocMode(StrEnum):
     BASIC = "BASIC"
     ASM = "ASM"
 
+
+# List of available architectures
+AVAILABLE_ARCHITECTURES: Final[list[str]] = []
 
 # Generated output
 OUTPUT = ""
@@ -86,15 +88,6 @@ INCLUDED: dict[str, IncludedFileInfo] = {}
 # IFDEFS array
 IFDEFS: list[IfDef] = []  # Push (Line, state here)
 
-precedence = (
-    ("nonassoc", "DUMMY"),
-    ("left", "OR"),
-    ("left", "AND"),
-    ("left", "EQ", "NE", "LT", "LE", "GT", "GE"),
-    ("right", "LLP"),
-    ("left", "PASTE", "STRINGIZING"),
-)
-
 
 def remove_spaces(x: str) -> str:
     if not x:
@@ -123,6 +116,11 @@ def init():
     global CURRENT_DIR
     global ENABLED
     global IFDEFS
+
+    from src import arch
+
+    AVAILABLE_ARCHITECTURES.clear()
+    AVAILABLE_ARCHITECTURES.extend(arch.AVAILABLE_ARCHITECTURES)
 
     config.OPTIONS(config.Action.ADD_IF_NOT_DEFINED, name="debug_zxbpp", type=bool, default=False)
     global_.FILENAME = STDIN
@@ -160,6 +158,12 @@ def set_include_path():
     for arch_ in AVAILABLE_ARCHITECTURES:
         pwd = get_include_path(arch_)
         INCLUDE_MAP[arch_] = [os.path.join(pwd, "stdlib"), os.path.join(pwd, "runtime")]
+
+    # zx81sd inherits runtime files from zx48k (only overrides specific ones).
+    # zx81sd paths take priority: its own files shadow zx48k equivalents.
+    if "zx81sd" in INCLUDE_MAP:
+        zx48k_pwd = get_include_path("zx48k")
+        INCLUDE_MAP["zx81sd"].extend([os.path.join(zx48k_pwd, "stdlib"), os.path.join(zx48k_pwd, "runtime")])
 
     INCLUDEPATH = INCLUDE_MAP.get(config.OPTIONS.architecture, [])
 
@@ -291,622 +295,471 @@ def to_int(expr: str | int) -> int:
     return expr
 
 
-# -------- GRAMMAR RULES for the preprocessor ---------
-def p_start(p):
-    """start : program"""
-    global OUTPUT
-
-    OUTPUT += "".join(p[1])
-
-
-def p_program(p):
-    """program : include_file
-    | line
-    | init
-    | undef
-    | ifdef
-    | require
-    | pragma
-    | errormsg
-    | warningmsg
-    """
-    p[0] = p[1]
-
-
-def p_program_tokenstring(p):
-    """program : defs NEWLINE"""
-    tmp = expand_macros(p[1], p.lineno(2))
-    if tmp is None:
-        p[0] = []
-        return
-
-    p[0] = [tmp]
-
-
-def p_program_tokenstring_2(p):
-    """program : define NEWLINE"""
-    p[0] = p[1] + [p[2]]
-
-
-def p_program_char(p):
-    """program : program include_file
-    | program line
-    | program init
-    | program undef
-    | program ifdef
-    | program require
-    | program pragma
-    | program errormsg
-    | program warningmsg
-    """
-    p[0] = p[1] + p[2]
-
-
-def p_program_newline(p):
-    """program : program defs NEWLINE"""
-    tmp = expand_macros(p[2], p.lineno(3))
-    if tmp is None:
-        p[0] = []
-        return
-
-    p[0] = p[1]
-    p[0].append(tmp)
-
-
-def p_program_newline_2(p):
-    """program : program define NEWLINE"""
-    p[0] = p[1] + [f'#line {p.lineno(3) + 1} "{output.CURRENT_FILE[-1]}"\n']
-
-
-def p_token(p):
-    """token : STRING
-    | TOKEN
-    | CONTINUE
-    | SEPARATOR
-    | NUMBER
-    """
-    p[0] = p[1]
-
-
-def p_include_file(p):
-    """include_file : include NEWLINE program _ENDFILE_"""
-    global CURRENT_DIR
-    p[0] = [p[1] + p[2]] + p[3] + [p[4]]
-    output.CURRENT_FILE.pop()  # Remove top of the stack
-    CURRENT_DIR = os.path.dirname(output.CURRENT_FILE[-1])
-
-
-def p_include_file_empty(p):
-    """include_file : include NEWLINE _ENDFILE_"""  # This happens when an IFDEF is FALSE
-    p[0] = [p[2]]
-
-
-def p_include_once_empty(p):
-    """include_file : include_once NEWLINE _ENDFILE_"""
-    p[0] = [p[2]]  # Include once already included. Nothing done.
-
-
-def p_include_once_ok(p):
-    """include_file : include_once NEWLINE program _ENDFILE_"""
-    global CURRENT_DIR
-    p[0] = [p[1] + p[2]] + p[3] + [p[4]]
-    output.CURRENT_FILE.pop()  # Remove top of the stack
-    CURRENT_DIR = os.path.dirname(output.CURRENT_FILE[-1])
-
-
-def p_include_fname(p):
-    """include : INCLUDE include_modifier FILENAME"""
-    modifier = p[2]
-    if modifier is None:
-        p[0] = []
-        return
-
-    filename = p[3]
-    if ENABLED:
-        arch = modifier.get("arch", "")
-        p[0] = include_file(filename, p.lineno(3), local_first=False, arch=arch)
-    else:
-        p[0] = []
-        p.lexer.next_token = "_ENDFILE_"
-
-
-def p_include_macro(p):
-    """include : INCLUDE include_modifier expr"""
-    modifier = p[2]
-    if modifier is None:
-        p[0] = []
-        return
-
-    expr = p[3]
-    global_fist = RE_GLOBAL_FIRST_FILENAME.match(expr)
-    local_first = RE_LOCAL_FIRST_FILENAME.match(expr)
-    if global_fist is None and local_first is None:
-        error(p.lineno(1), f"invalid filename {expr}")
-        p[0] = []
-        return
-
-    if ENABLED:
-        arch = modifier.get("arch", "")
-        p[0] = include_file(expr[1:-1], p.lineno(3), local_first=local_first is not None, arch=arch)
-    else:
-        p[0] = []
-        p.lexer.next_token = "_ENDFILE_"
-
-
-def p_include_once(p):
-    """include_once : INCLUDE ONCE include_modifier STRING"""
-    modifier = p[3]
-    if modifier is None:
-        p[0] = []
-        return
-
-    string = p[4]
-    if ENABLED:
-        arch = modifier.get("arch", "")
-        p[0] = include_once(string[1:-1], p.lineno(4), local_first=True, arch=arch)
-    else:
-        p[0] = []
-
-    if not p[0]:
-        p.lexer.next_token = "_ENDFILE_"
-
-
-def p_include_once_fname(p):
-    """include_once : INCLUDE ONCE include_modifier FILENAME"""
-    p[0] = []
-    modifier = p[3]
-    if modifier is None:
-        return
-
-    filename = p[4]
-    if ENABLED:
-        arch = modifier.get("arch", "")
-        p[0] = include_once(filename, p.lineno(4), local_first=False, arch=arch)
-    else:
-        p[0] = []
-
-    if not p[0]:
-        p.lexer.next_token = "_ENDFILE_"
-
-
-def p_include_modifier(p):
-    """include_modifier :
-    | LB ID CO ID RB
-    """
-    if len(p) == 1:
-        p[0] = {}
-        return
-
-    modifier = p[2]
-    value = p[4]
-
-    if modifier == "arch":
-        p[0] = {"arch": value}
-    else:
-        p[0] = None
-        error(p.lineno(1), f"unknown modifier {modifier}")
-
-    return
-
-
-def p_line(p):
-    """line : LINE INTEGER NEWLINE"""
-    if ENABLED:
-        p[0] = ["#%s %s%s" % (p[1], p[2], p[3])]
-    else:
-        p[0] = []
-
-
-def p_line_file(p):
-    """line : LINE INTEGER STRING NEWLINE"""
-    if ENABLED:
-        p[0] = ['#%s %s "%s"%s' % (p[1], p[2], p[3], p[4])]
-    else:
-        p[0] = []
-
-
-def p_require_file(p):
-    """require : REQUIRE STRING NEWLINE"""
-    p[0] = ["#%s %s\n" % (p[1], utils.sanitize_filename(p[2]))]
-
-
-def p_init(p):
-    """init : INIT ID NEWLINE"""
-    p[0] = ['#%s "%s"\n' % (p[1], p[2])]
-
-
-def p_init_str(p):
-    """init : INIT STRING NEWLINE"""
-    p[0] = ["#%s %s\n" % (p[1], p[2])]
-
-
-def p_undef(p):
-    """undef : UNDEF ID"""
-    if ENABLED:
-        ID_TABLE.undef(p[2])
-
-    p[0] = []
-
-
-def p_errormsg(p):
-    """errormsg : ERROR TEXT"""
-    if ENABLED:
-        error(p.lineno(1), p[2])
-    p[0] = []
-
-
-def p_warningmsg(p):
-    """warningmsg : WARNING TEXT"""
-    if ENABLED:
-        warning(p.lineno(1), p[2])
-    p[0] = []
-
-
-def p_define(p):
-    """define : DEFINE ID params defs"""
-    id_ = p[2]
-    params = p[3]
-    defs = p[4]
-
-    if ENABLED:
-        if defs:
-            if isinstance(defs[0], str) and defs[0] in " \t":  # remove leading whitespaces
-                defs[0] = defs[0].lstrip(" \t")
-            else:
-                output.warning_missing_whitespace_after_macro(p.lineno(1), p.lexer.current_file)
-
-        ID_TABLE.define(
-            id_,
-            args=params,
-            value=defs,
-            lineno=p.lineno(2),
-            fname=output.CURRENT_FILE[-1],
-        )
-    p[0] = []
-
-
-def p_define_params_epsilon(p):
-    """params :"""
-    p[0] = None
-
-
-def p_define_params_empty(p):
-    """params : LP RP"""
-    # Defines the 'epsilon' parameter
-    p[0] = [ID("", value="", args=None, lineno=p.lineno(1), fname=output.CURRENT_FILE[-1])]
-
-
-def p_define_params_paramlist(p):
-    """params : LP paramlist RP"""
-    for i in p[2]:
-        if not isinstance(i, ID):
-            error(p.lineno(3), '"%s" might not appear in a macro parameter list' % str(i))
-            p[0] = None
-            return
-
-    names = [x.name for x in p[2]]
-    for i in range(len(names)):
-        if names[i] in names[i + 1 :]:
-            error(p.lineno(3), 'Duplicated name parameter "%s"' % (names[i]))
-            p[0] = None
-            return
-
-    p[0] = p[2]
-
-
-def p_paramlist_single(p):
-    """paramlist : ID"""
-    p[0] = [ID(p[1], value="", args=None, lineno=p.lineno(1), fname=output.CURRENT_FILE[-1])]
-
-
-def p_paramlist_paramlist(p):
-    """paramlist : paramlist COMMA ID"""
-    p[0] = p[1] + [ID(p[3], value="", args=None, lineno=p.lineno(1), fname=output.CURRENT_FILE[-1])]
-
-
-def p_pragma_id(p):
-    """pragma : PRAGMA ID"""
-    p[0] = ["#%s %s" % (p[1], p[2])]
-
-
-def p_pragma_id_expr(p):
-    """pragma : PRAGMA ID EQ ID
-    | PRAGMA ID EQ INTEGER
-    """
-    p[0] = ["#%s %s %s %s" % (p[1], p[2], p[3], p[4])]
-
-
-def p_pragma_id_string(p):
-    """pragma : PRAGMA ID EQ STRING"""
-    p[0] = ["#%s %s %s %s" % (p[1], p[2], p[3], p[4][1:-1])]
-
-
-def p_pragma_push(p):
-    """pragma : PRAGMA PUSH LP ID RP
-    | PRAGMA POP LP ID RP
-    """
-    p[0] = ["#%s %s%s%s%s" % (p[1], p[2], p[3], p[4], p[5])]
-
-
-def p_pragma_once(p):
-    """pragma : PRAGMA ONCE"""
-    abs_filename = utils.get_absolute_filename_path(output.CURRENT_FILE[-1])
-    if abs_filename not in INCLUDED:
-        INCLUDED[abs_filename] = IncludedFileInfo(once=False, parents=[])
-
-    INCLUDED[abs_filename].once = True
-    p[0] = []
-
-
-def p_ifdef(p):
-    """ifdef : if_header NEWLINE program ENDIF"""
-    global ENABLED
-
-    if ENABLED:
-        p[0] = [p[2]] + p[3]
-    else:
-        p[0] = []
-
-    p[0] += ['#line %i "%s"' % (p.lineno(4) + 1, output.CURRENT_FILE[-1])]
-    ENABLED = IFDEFS.pop().enabled
-
-
-def p_ifdef_else(p):
-    """ifdef : ifdefelsea ifdefelseb ENDIF"""
-    global ENABLED
-
-    ENABLED = IFDEFS.pop().enabled
-    if ENABLED:
-        p[0] = p[1] + p[2]
-    else:
-        p[0] = []
-
-    p[0] += ['#line %i "%s"' % (p.lineno(3) + 1, output.CURRENT_FILE[-1])]
-
-
-def p_ifdef_else_a(p):
-    """ifdefelsea : if_header NEWLINE program"""
-    global ENABLED
-
-    p[0] = []
-    if IFDEFS[-1].enabled:
-        if p[1]:
-            p[0] = [p[2]] + p[3]
-        ENABLED = not p[1]
-
-
-def p_ifdef_else_b(p):
-    """ifdefelseb : ELSE NEWLINE program"""
-    global ENABLED
-
-    if ENABLED:
-        p[0] = ['#line %i "%s"%s' % (p.lineno(1) + 1, output.CURRENT_FILE[-1], p[2])]
-        p[0] += p[3]
-    else:
-        p[0] = []
-
-
-def p_if_header(p):
-    """if_header : IFDEF ID"""
-    global ENABLED
-
-    IFDEFS.append(IfDef(ENABLED, p.lineno(2)))
-    if ENABLED:
-        ENABLED = ID_TABLE.defined(p[2])
-
-    p[0] = ENABLED
-
-
-def p_ifn_header(p):
-    """if_header : IFNDEF ID"""
-    global ENABLED
-
-    IFDEFS.append(IfDef(ENABLED, p.lineno(2)))
-    if ENABLED:
-        ENABLED = not ID_TABLE.defined(p[2])
-
-    p[0] = ENABLED
-
-
-def p_if_expr_header(p):
-    """if_header : IF expr"""
-    global ENABLED
-
-    IFDEFS.append(IfDef(ENABLED, p.lineno(2)))
-    if ENABLED:
-        ENABLED = bool(int(p[2])) if p[2].isdigit() else ID_TABLE.defined(p[2])
-
-    p[0] = ENABLED
-
-
-def p_expr(p):
-    """expr : macrocall"""
-    p[0] = str(p[1]()).strip()
-
-
-def p_expr_val(p):
-    """expr : NUMBER"""
-    p[0] = p[1]
-
-
-def p_expr_str(p):
-    """expr : STRING"""
-    p[0] = p[1]
-
-
-def p_exprand(p):
-    """expr : expr AND expr"""
-    p[0] = "1" if to_bool(p[1]) and to_bool(p[3]) else "0"
-
-
-def p_expror(p):
-    """expr : expr OR expr"""
-    p[0] = "1" if to_bool(p[1]) or to_bool(p[3]) else "0"
-
-
-def p_exprne(p):
-    """expr : expr NE expr"""
-    p[0] = "1" if p[1] != p[3] else "0"
-
-
-def p_expreq(p):
-    """expr : expr EQ expr"""
-    p[0] = "1" if p[1] == p[3] else "0"
-
-
-def p_exprlt(p):
-    """expr : expr LT expr"""
-    p[0] = "1" if to_int(p[1]) < to_int(p[3]) else "0"
-
-
-def p_exprle(p):
-    """expr : expr LE expr"""
-    p[0] = "1" if to_int(p[1]) <= to_int(p[3]) else "0"
-
-
-def p_exprgt(p):
-    """expr : expr GT expr"""
-    p[0] = "1" if to_int(p[1]) > to_int(p[3]) else "0"
-
-
-def p_exprge(p):
-    """expr : expr GE expr"""
-    p[0] = "1" if to_int(p[1]) >= to_int(p[3]) else "0"
-
-
-def p_expr_par(p):
-    """expr : LLP expr RRP"""
-    p[0] = p[2]
-
-
-def p_defs_list_eps(p):
-    """defs :"""
-    p[0] = []
-
-
-def p_defs_list(p):
-    """defs : defs def"""
-    p[0] = p[1]
-    p[0].append(p[2])
-
-
-def p_def(p):
-    """def : token
-    | COMMA
-    | RRP
-    | LLP
-    """
-    p[0] = p[1]
-
-
-def p_def_macrocall(p):
-    """def : macrocall %prec DUMMY"""
-    p[0] = p[1]
-
-
-def p_macrocall(p):
-    """macrocall : ID"""
-    p[0] = MacroCall(p.lexer.current_file, p.lineno(1), ID_TABLE, p[1], None)
-
-
-def p_macrocall_args(p):
-    """macrocall : macrocall args"""
-    p[0] = MacroCall(p.lexer.current_file, p[2].end_lineno, ID_TABLE, p[1], p[2])
-
-
-def p_macrocall_paste(p):
-    """macrocall : macrocall PASTE macrocall"""
-    p[0] = Concatenation(p.lexer.current_file, p[1].lineno, ID_TABLE, p[1], p[3])
-
-
-def p_macrocall_stringizing(p):
-    """macrocall : STRINGIZING macrocall"""
-    p[0] = Stringizing(p.lexer.current_file, p[2].lineno, ID_TABLE, p[2])
-
-
-def p_args(p):
-    """args : LLP arglist RRP"""
-    p[0] = p[2]
-    p[0].start_lineno = p.slice[1].lineno
-    p[0].end_lineno = p.slice[3].lineno
-
-
-def p_arglist(p):
-    """arglist : arglist COMMA arg"""
-    p[1].addNewArg(p[3])
-    p[0] = p[1]
-
-
-def p_arglist_arg(p):
-    """arglist : arg"""
-    p[0] = ArgList(ID_TABLE)
-    p[0].addNewArg(p[1])
-
-
-def p_arg_eps(p):
-    """arg :"""
-    p[0] = Arg()
-
-
-def p_arg_argstring(p):
-    """arg : argstring"""
-    p[0] = p[1]
-
-
-def p_argstring(p):
-    """argstring : token
-    | macrocall %prec DUMMY
-    """
-    p[0] = Arg(p[1])
-
-
-def p_argstring_argslist(p):
-    """argstring : LLP arglist RRP"""
-    p[0] = Arg(p[2])
-
-
-def p_argstring_token(p):
-    """argstring : argstring token
-    | argstring macrocall %prec DUMMY
-    """
-    p[0] = p[1]
-    p[0].addToken(p[2])
-
-
-def p_argstring_argstring(p):
-    """argstring : argstring LLP arglist RRP"""
-    p[0] = p[1]
-    p[0].addToken(p[3])
-
-
-# --- YYERROR
-
-
-def p_error(p):
-    if p is not None:
-        if p.type == "NEWLINE":
-            error(
-                p.lineno,
-                "Syntax error. Unexpected end of line",
-                output.CURRENT_FILE[-1],
+class PPToken(Token):
+    pass
+
+
+class LarkLexerAdapter(Lexer):
+    def __init__(self, lexer_conf: Any) -> None:
+        pass
+
+    def lex(self, data: Any, parser_state: Any = None) -> Any:  # type: ignore[override]
+        lexer = data
+        while True:
+            if lexer.next_token is not None:
+                tok_type = "ENDFILE" if lexer.next_token == "_ENDFILE_" else lexer.next_token
+                lexer.next_token = None
+                t = PPToken(tok_type, "", line=lexer.lineno, column=1)
+                t.fname = lexer.current_file
+                yield t
+                continue
+
+            tok = lexer.token()
+            if tok is None:
+                break
+
+            tok_type = "ENDFILE" if tok.type == "_ENDFILE_" else tok.type
+            t = PPToken(
+                tok_type, tok.value, line=tok.lineno, column=lexer.find_column(tok) if tok.type != "_ENDFILE_" else 1
             )
-        elif p.type == "_ENDFILE_":
-            error(
-                p.lineno,
-                "Syntax error. Unexpected end of file",
-                output.CURRENT_FILE[-1],
+            t.fname = tok.fname
+            yield t
+
+
+class ZxbppTransformer(Transformer):
+    def start(self, items):
+        global OUTPUT
+        OUTPUT += "".join(items[0])
+        return items[0]
+
+    def program(self, items):
+        return items[0]
+
+    def program_tokenstring(self, items):
+        tmp = expand_macros(items[0], items[1].line)
+        if tmp is None:
+            return []
+        return [tmp]
+
+    def program_tokenstring_2(self, items):
+        return items[0] + [items[1]]
+
+    def program_char(self, items):
+        return items[0] + items[1]
+
+    def program_newline(self, items):
+        tmp = expand_macros(items[1], items[2].line)
+        if tmp is None:
+            return []
+        res = list(items[0])
+        res.append(tmp)
+        return res
+
+    def program_newline_2(self, items):
+        return items[0] + [f'#line {items[2].line + 1} "{items[2].fname}"\n']
+
+    def token(self, items):
+        return items[0]
+
+    def include_file(self, items):
+        p0 = [items[0] + items[1]] + items[2] + [items[3]]
+        output.CURRENT_FILE.pop()
+        global CURRENT_DIR
+        CURRENT_DIR = os.path.dirname(output.CURRENT_FILE[-1])
+        return p0
+
+    def include_file_empty(self, items):
+        return [items[1]]
+
+    def include_once_empty(self, items):
+        return [items[1]]
+
+    def include_once_ok(self, items):
+        p0 = [items[0] + items[1]] + items[2] + [items[3]]
+        output.CURRENT_FILE.pop()
+        global CURRENT_DIR
+        CURRENT_DIR = os.path.dirname(output.CURRENT_FILE[-1])
+        return p0
+
+    def include_fname(self, items):
+        modifier = items[1]
+        if modifier is None:
+            return []
+        filename = items[2]
+        if ENABLED:
+            arch = modifier.get("arch", "")
+            return include_file(filename, items[2].line, local_first=False, arch=arch)
+        LEXER.next_token = "_ENDFILE_"
+        return []
+
+    def include_macro(self, items):
+        modifier = items[1]
+        if modifier is None:
+            return []
+        expr = items[2]
+        global_first = RE_GLOBAL_FIRST_FILENAME.match(expr)
+        local_first = RE_LOCAL_FIRST_FILENAME.match(expr)
+        if global_first is None and local_first is None:
+            error(items[0].line, f"invalid filename {expr}")
+            return []
+        if ENABLED:
+            arch = modifier.get("arch", "")
+            return include_file(expr[1:-1], items[0].line, local_first=local_first is not None, arch=arch)
+        LEXER.next_token = "_ENDFILE_"
+        return []
+
+    def include_once_str(self, items):
+        modifier = items[2]
+        if modifier is None:
+            return []
+        string = items[3]
+        p0 = []
+        if ENABLED:
+            arch = modifier.get("arch", "")
+            p0 = include_once(string[1:-1], items[3].line, local_first=True, arch=arch)
+        if not p0:
+            LEXER.next_token = "_ENDFILE_"
+        return p0
+
+    def include_once_fname(self, items):
+        modifier = items[2]
+        if modifier is None:
+            return []
+        filename = items[3]
+        p0 = []
+        if ENABLED:
+            arch = modifier.get("arch", "")
+            p0 = include_once(filename, items[3].line, local_first=False, arch=arch)
+        if not p0:
+            LEXER.next_token = "_ENDFILE_"
+        return p0
+
+    def include_modifier_empty(self, items):
+        return {}
+
+    def include_modifier_arch(self, items):
+        modifier = items[1]
+        value = items[3]
+        if modifier == "arch":
+            return {"arch": value}
+        error(items[0].line, f"unknown modifier {modifier}")
+        return None
+
+    def line(self, items):
+        if ENABLED:
+            return ["#%s %s%s" % (items[0], items[1], items[2])]
+        return []
+
+    def line_file(self, items):
+        if ENABLED:
+            return ['#%s %s "%s"%s' % (items[0], items[1], items[2], items[3])]
+        return []
+
+    def require(self, items):
+        return ["#%s %s\n" % (items[0], utils.sanitize_filename(items[1]))]
+
+    def init_id(self, items):
+        return ['#%s "%s"\n' % (items[0], items[1])]
+
+    def init_str(self, items):
+        return ["#%s %s\n" % (items[0], items[1])]
+
+    def undef(self, items):
+        if ENABLED:
+            ID_TABLE.undef(items[1])
+        return []
+
+    def errormsg(self, items):
+        if ENABLED:
+            error(items[0].line, items[1])
+        return []
+
+    def warningmsg(self, items):
+        if ENABLED:
+            warning(items[0].line, items[1])
+        return []
+
+    def define(self, items):
+        id_ = items[1]
+        params = items[2]
+        defs = items[3]
+        if ENABLED:
+            if defs:
+                if isinstance(defs[0], str) and defs[0] in " \t":
+                    defs[0] = defs[0].lstrip(" \t")
+                else:
+                    output.warning_missing_whitespace_after_macro(items[0].line, LEXER.current_file)
+            ID_TABLE.define(
+                id_,
+                args=params,
+                value=defs,
+                lineno=items[1].line,
+                fname=items[1].fname,
             )
+        return []
+
+    def params_epsilon(self, items):
+        return None
+
+    def params_empty(self, items):
+        return [ID("", value="", args=None, lineno=items[0].line, fname=items[0].fname)]
+
+    def params_paramlist(self, items):
+        params = items[1]
+        if params is None:
+            return None
+        for i in params:
+            if not isinstance(i, ID):
+                error(items[2].line, '"%s" might not appear in a macro parameter list' % str(i))
+                return None
+        names = [x.name for x in params]
+        for i in range(len(names)):
+            if names[i] in names[i + 1 :]:
+                error(items[2].line, 'Duplicated name parameter "%s"' % (names[i]))
+                return None
+        return params
+
+    def paramlist_single(self, items):
+        return [ID(items[0], value="", args=None, lineno=items[0].line, fname=items[0].fname)]
+
+    def paramlist_paramlist(self, items):
+        return items[0] + [ID(items[2], value="", args=None, lineno=items[2].line, fname=items[2].fname)]
+
+    def pragma_id(self, items):
+        return ["#%s %s" % (items[0], items[1])]
+
+    def pragma_id_expr(self, items):
+        return ["#%s %s %s %s" % (items[0], items[1], items[2], items[3])]
+
+    def pragma_id_string(self, items):
+        return ["#%s %s %s %s" % (items[0], items[1], items[2], items[3][1:-1])]
+
+    def pragma_push(self, items):
+        return ["#%s %s%s%s%s" % (items[0], items[1], items[2], items[3], items[4])]
+
+    def pragma_once(self, items):
+        abs_filename = utils.get_absolute_filename_path(output.CURRENT_FILE[-1])
+        if abs_filename not in INCLUDED:
+            INCLUDED[abs_filename] = IncludedFileInfo(once=False, parents=[])
+        INCLUDED[abs_filename].once = True
+        return []
+
+    def ifdef(self, items):
+        global ENABLED
+        p0 = []
+        if ENABLED:
+            p0 = [items[1]] + items[2]
+        p0 += ['#line %i "%s"' % (items[3].line + 1, items[3].fname)]
+        ENABLED = IFDEFS.pop().enabled
+        return p0
+
+    def ifdef_else(self, items):
+        global ENABLED
+        ENABLED = IFDEFS.pop().enabled
+        p0 = []
+        if ENABLED:
+            p0 = items[0] + items[1]
+        p0 += ['#line %i "%s"' % (items[2].line + 1, items[2].fname)]
+        return p0
+
+    def ifdefelsea(self, items):
+        global ENABLED
+        p0 = []
+        if IFDEFS[-1].enabled:
+            if items[0]:
+                p0 = [items[1]] + items[2]
+            ENABLED = not items[0]
+        return p0
+
+    def ifdefelseb(self, items):
+        if ENABLED:
+            p0 = ['#line %i "%s"%s' % (items[0].line + 1, items[0].fname, items[1])]
+            p0 += items[2]
         else:
-            value = p.value
-            value = "".join(["|%s|" % hex(ord(x)) if x < " " else x for x in value])
+            p0 = []
+        return p0
+
+    def ifdef_header(self, items):
+        global ENABLED
+        IFDEFS.append(IfDef(ENABLED, items[1].line))
+        if ENABLED:
+            ENABLED = ID_TABLE.defined(items[1])
+        return ENABLED
+
+    def ifndef_header(self, items):
+        global ENABLED
+        IFDEFS.append(IfDef(ENABLED, items[1].line))
+        if ENABLED:
+            ENABLED = not ID_TABLE.defined(items[1])
+        return ENABLED
+
+    def if_expr_header(self, items):
+        global ENABLED
+        IFDEFS.append(IfDef(ENABLED, items[1].line if hasattr(items[1], "line") else items[0].line))
+        if ENABLED:
+            val = items[1]
+            ENABLED = bool(int(val)) if (isinstance(val, str) and val.isdigit()) else ID_TABLE.defined(val)
+        return ENABLED
+
+    def expr_macrocall(self, items):
+        return str(items[0]()).strip()
+
+    def expr_val(self, items):
+        return items[0]
+
+    def expr_str(self, items):
+        return items[0]
+
+    def expr_par(self, items):
+        return items[1]
+
+    def expreq(self, items):
+        return "1" if items[0] == items[2] else "0"
+
+    def exprne(self, items):
+        return "1" if items[0] != items[2] else "0"
+
+    def exprlt(self, items):
+        return "1" if to_int(items[0]) < to_int(items[2]) else "0"
+
+    def exprle(self, items):
+        return "1" if to_int(items[0]) <= to_int(items[2]) else "0"
+
+    def exprgt(self, items):
+        return "1" if to_int(items[0]) > to_int(items[2]) else "0"
+
+    def exprge(self, items):
+        return "1" if to_int(items[0]) >= to_int(items[2]) else "0"
+
+    def exprand(self, items):
+        return "1" if to_bool(items[0]) and to_bool(items[2]) else "0"
+
+    def expror(self, items):
+        return "1" if to_bool(items[0]) or to_bool(items[2]) else "0"
+
+    def defs_list_eps(self, items):
+        return []
+
+    def defs_list(self, items):
+        return items[0] + [items[1]]
+
+    def def_item_val(self, items):
+        return items[0]
+
+    def def_macrocall(self, items):
+        return items[0]
+
+    def macrocall_id(self, items):
+        return MacroCall(items[0].fname, items[0].line, ID_TABLE, items[0], None)
+
+    def macrocall_args(self, items):
+        return MacroCall(items[0].fname, items[1].end_lineno, ID_TABLE, items[0], items[1])
+
+    def macrocall_paste(self, items):
+        return Concatenation(items[0].fname, items[0].lineno, ID_TABLE, items[0], items[2])
+
+    def macrocall_stringizing(self, items):
+        return Stringizing(items[1].fname, items[1].lineno, ID_TABLE, items[1])
+
+    def args(self, items):
+        arglist = items[1]
+        arglist.start_lineno = items[0].line
+        arglist.end_lineno = items[2].line
+        return arglist
+
+    def arglist_single(self, items):
+        al = ArgList(ID_TABLE)
+        al.addNewArg(items[0])
+        return al
+
+    def arglist(self, items):
+        items[0].addNewArg(items[2])
+        return items[0]
+
+    def arg_eps(self, items):
+        return Arg()
+
+    def arg_val(self, items):
+        return items[0]
+
+    def argstring_token_single(self, items):
+        return Arg(items[0])
+
+    def argstring_macrocall_single(self, items):
+        return Arg(items[0])
+
+    def argstring_argslist(self, items):
+        return Arg(items[1])
+
+    def argstring_token(self, items):
+        items[0].addToken(items[1])
+        return items[0]
+
+    def argstring_macrocall(self, items):
+        items[0].addToken(items[1])
+        return items[0]
+
+    def argstring_argstring(self, items):
+        items[0].addToken(items[2])
+        return items[0]
+
+
+lark_parser = Lark_StandAlone(lexer=LarkLexerAdapter, transformer=ZxbppTransformer())
+
+
+def parse_with_lark():
+    try:
+        lark_parser.parse(LEXER)
+    except UnexpectedInput as e:
+        from .zxbpp_standalone import UnexpectedToken
+
+        if isinstance(e, UnexpectedToken):
+            tok = e.token
+            if tok.type == "$END":
+                if global_.has_errors == 0:
+                    error(
+                        tok.line,
+                        "Syntax error. Unexpected end of file",
+                        output.CURRENT_FILE[-1],
+                    )
+                    global_.has_errors += 1
+                return
+
+            if tok.type == "ENDFILE":
+                error(
+                    tok.line,
+                    "Syntax error. Unexpected end of file",
+                    output.CURRENT_FILE[-1],
+                )
+            elif tok.type == "NEWLINE":
+                error(
+                    tok.line,
+                    "Syntax error. Unexpected end of line",
+                    output.CURRENT_FILE[-1],
+                )
+            else:
+                value = tok.value
+                value = "".join(["|%s|" % hex(ord(x)) if x < " " else x for x in value])
+                error(
+                    tok.line,
+                    "Syntax error. Unexpected token '%s' [%s]" % (value, tok.type),
+                    output.CURRENT_FILE[-1],
+                )
+
+            # Skip remaining tokens on the same line if error wasn't on newline/endfile
+            if tok.type not in ("NEWLINE", "ENDFILE"):
+                while True:
+                    t = LEXER.token()
+                    if t is None or t.type in ("NEWLINE", "_ENDFILE_"):
+                        break
+        else:
             error(
-                p.lineno,
-                "Syntax error. Unexpected token '%s' [%s]" % (value, p.type),
+                e.line,
+                "Syntax error. Unexpected input",
                 output.CURRENT_FILE[-1],
             )
-    else:
-        config.OPTIONS.stderr.write("General syntax error at preprocessor (unexpected End of File?)")
-    global_.has_errors += 1
+        global_.has_errors += 1
+        parse_with_lark()
 
 
 def filter_(input_, filename="<internal>", state="INITIAL"):
@@ -920,7 +773,7 @@ def filter_(input_, filename="<internal>", state="INITIAL"):
     CURRENT_DIR = os.path.dirname(output.CURRENT_FILE[-1])
     LEXER.input(input_, filename)
     LEXER.lex.begin(state)
-    parser.parse(lexer=LEXER, debug=config.OPTIONS.debug_zxbpp)
+    parse_with_lark()
     output.CURRENT_FILE.pop()
     CURRENT_DIR = prev_dir
 
@@ -948,7 +801,7 @@ def main(argv):
         if OUTPUT and OUTPUT[-1] != "\n":
             OUTPUT += "\n"
 
-        parser.parse(lexer=LEXER, debug=config.OPTIONS.debug_zxbpp)
+        parse_with_lark()
         output.CURRENT_FILE.pop()
         CURRENT_DIR = os.path.dirname(output.CURRENT_FILE[-1])
 
@@ -958,13 +811,13 @@ def main(argv):
     if OUTPUT and OUTPUT[-1] != "\n":
         OUTPUT += "\n"
 
-    parser.parse(lexer=LEXER, debug=config.OPTIONS.debug_zxbpp)
+    parse_with_lark()
     output.CURRENT_FILE.pop()
     global_.FILENAME = prev_file
     return global_.has_errors
 
 
-parser = utils.get_or_create("zxbpp", lambda: yacc.yacc(debug=True))
+parser = lark_parser
 parser.defaulted_states = {}
 
 
@@ -1014,9 +867,9 @@ def entry_point(args=None):
     parser.add_argument(
         "--arch",
         type=str,
-        default=arch.AVAILABLE_ARCHITECTURES[0],
-        help=f"Target architecture (defaults is'{arch.AVAILABLE_ARCHITECTURES[0]}'). "
-        f"Available architectures: {','.join(arch.AVAILABLE_ARCHITECTURES)}",
+        default=AVAILABLE_ARCHITECTURES[0],
+        help=f"Target architecture (defaults is'{AVAILABLE_ARCHITECTURES[0]}'). "
+        f"Available architectures: {','.join(AVAILABLE_ARCHITECTURES)}",
     )
     parser.add_argument(
         "--expect-warnings",
@@ -1030,7 +883,7 @@ def entry_point(args=None):
     config.OPTIONS.debug_zxbpp = config.OPTIONS.debug_level > 0
     config.OPTIONS.expected_warnings = options.expect_warnings
 
-    if options.arch not in arch.AVAILABLE_ARCHITECTURES:
+    if options.arch not in AVAILABLE_ARCHITECTURES:
         parser.error(f"Invalid architecture '{options.arch}'")  # Exits with error
 
     config.OPTIONS.architecture = options.arch

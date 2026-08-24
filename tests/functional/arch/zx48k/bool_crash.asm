@@ -38,7 +38,7 @@ _ReadKeys:
 	push ix
 	ld ix, 0
 	add ix, sp
-	pop af
+	ld a, (_pldx)
 	ld hl, (_pldx - 1)
 	or h
 	jp z, .LABEL.__LABEL1

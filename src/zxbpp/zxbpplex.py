@@ -10,8 +10,7 @@
 import re
 import sys
 
-from src.api import global_
-from src.ply import lex
+from src.api import global_, lex
 from src.zxbpp.base_pplex import BaseLexer, ReservedDirectives
 from src.zxbpp.prepro.definestable import DefinesTable
 

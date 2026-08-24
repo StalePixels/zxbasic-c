@@ -10,12 +10,13 @@ from src.api.debug import __DEBUG__
 from src.arch.interface.quad import Quad
 from src.arch.z80.backend import Backend
 from src.arch.z80.backend.common import BOOL_t, F16_t, F_t, I8_t, I16_t, I32_t, STR_t, U8_t, U16_t, U32_t
-from src.ast import NodeVisitor
+from src.ast_ import NodeVisitor
 from src.symbols import sym
 
 
 class TranslatorInstVisitor(NodeVisitor):
     def __init__(self, backend: Backend):
+        super().__init__()
         self.backend = backend
 
     def emit(self, *args: str) -> None:
@@ -25,8 +26,8 @@ class TranslatorInstVisitor(NodeVisitor):
         self.backend.MEMORY.append(quad)
 
     @staticmethod
-    def TSUFFIX(type_: TYPE | sym.TYPEREF | sym.BASICTYPE) -> str:
-        assert isinstance(type_, sym.TYPE) or TYPE.is_valid(type_)
+    def TSUFFIX(type_: TYPE | sym.TYPING) -> str:
+        assert isinstance(type_, sym.TYPING) or TYPE.is_valid(type_)
 
         _TSUFFIX = {
             TYPE.byte: I8_t,
@@ -41,17 +42,16 @@ class TranslatorInstVisitor(NodeVisitor):
             TYPE.boolean: BOOL_t,
         }
 
-        if isinstance(type_, sym.TYPEREF):
+        if isinstance(type_, sym.TYPEREF | sym.BASICTYPE):
             type_ = type_.final
             assert isinstance(type_, sym.BASICTYPE)
+            type_ = TYPE.to_type(type_.name)
 
-        if isinstance(type_, sym.BASICTYPE):
-            return _TSUFFIX[type_.type_]
-
+        assert isinstance(type_, TYPE)
         return _TSUFFIX[type_]
 
     @classmethod
-    def _no_bool(cls, type_: TYPE | sym.TYPEREF | sym.BASICTYPE) -> str:
+    def _no_bool(cls, type_: TYPE | sym.TYPING | sym.BASICTYPE) -> str:
         """Returns the corresponding type suffix except for bool which maps to U8_t"""
         return cls.TSUFFIX(type_) if cls.TSUFFIX(type_) != BOOL_t else U8_t
 

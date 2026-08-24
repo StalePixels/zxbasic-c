@@ -1,13 +1,12 @@
-#!/usr/bin/env python
-
 # --------------------------------------------------------------------
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# © Copyright 2008-2024 José Manuel Rodríguez de la Rosa and contributors.
+# © Copyright 2008-2026 José Manuel Rodríguez de la Rosa and contributors.
 # See the file CONTRIBUTORS.md for copyright details.
 # See https://www.gnu.org/licenses/agpl-3.0.html for details.
 # --------------------------------------------------------------------
 
 import os
+from typing import Any
 
 import src.api.utils
 from src import outfmt
@@ -15,7 +14,6 @@ from src.api import global_ as gl
 from src.api.config import OPTIONS
 from src.api.debug import __DEBUG__
 from src.api.errmsg import error, warning
-from src.ply import yacc
 from src.zxbasm import asmlex, basic
 from src.zxbasm import global_ as asm_gl
 from src.zxbasm.asm import Asm, Container
@@ -25,6 +23,10 @@ from src.zxbasm.global_ import DOT
 from src.zxbasm.memory import Memory
 from src.zxbpp import zxbpp
 
+from .asmparse_standalone import Lark_StandAlone as BaseLarkStandAlone
+from .asmparse_standalone import Lexer, Token, Transformer, UnexpectedInput
+from .asmparse_zxnext_standalone import Lark_StandAlone as ZXNextLarkStandAlone
+
 LEXER = asmlex.Lexer()
 
 ORG = 0  # Origin of CODE
@@ -33,14 +35,6 @@ MEMORY: Memory | None = None  # Memory for instructions (Will be initialized wit
 AUTORUN_ADDR = None  # Where to start the execution automatically
 
 REGS16 = {"BC", "DE", "HL", "SP", "IX", "IY"}  # 16 Bits registers
-
-precedence = (
-    ("left", "RSHIFT", "LSHIFT", "BAND", "BOR", "BXOR"),
-    ("left", "PLUS", "MINUS"),
-    ("left", "MUL", "DIV", "MOD"),
-    ("right", "POW"),
-    ("right", "UMINUS"),
-)
 
 
 def init():
@@ -62,931 +56,465 @@ def init():
     asm_gl.NAMESPACE = asm_gl.GLOBAL_NAMESPACE
 
 
-# -------- GRAMMAR RULES for the preprocessor ---------
+class AsmToken(Token):
+    pass
 
 
-def p_start(p):
-    """start : program
-    | program endline
-    """
-
-
-def p_program_endline(p):
-    """endline : END NEWLINE
-    | endline NEWLINE
-    """
-
-
-def p_program_endline2(p):
-    """endline : END expr NEWLINE
-    | END pexpr NEWLINE
-    """
-    global AUTORUN_ADDR
-    AUTORUN_ADDR = p[2].eval()
-
-
-def p_program(p):
-    """program : line"""
-
+class AsmLarkLexerAdapter(Lexer):
+    def __init__(self, lexer_conf: Any) -> None:
+        pass
 
-def p_program_line(p):
-    """program : program line"""
-
-
-def p_def_label(p):
-    """line : ID EQU expr NEWLINE
-    | ID EQU pexpr NEWLINE
-    """
-    p[0] = None
-    MEMORY.declare_label(p[1], p.lineno(1), p[3])
+    def lex(self, data: Any, parser_state: Any = None) -> Any:  # type: ignore[override]
+        lexer = data
+        while True:
+            if lexer.next_token is not None:
+                tok_type = lexer.next_token
+                lexer.next_token = None
+                t = AsmToken(tok_type, "", line=lexer.lineno, column=1)
+                yield t
+                continue
 
+            tok = lexer.token()
+            if tok is None:
+                break
 
-def p_line_asm(p):
-    """line : asms NEWLINE
-    | asms CO NEWLINE
-    """
+            t = AsmToken(tok.type, tok.value, line=tok.lineno, column=lexer.find_column(tok))
+            yield t
 
 
-def p_asms_empty(p):
-    """asms :"""
-    p[0] = MEMORY.org
+class AsmTransformer(Transformer):
+    def start(self, items):
+        return items[0]
 
+    def program(self, items):
+        return items[0]
 
-def p_asms_asm(p):
-    """asms : asm"""
-    p[0] = MEMORY.org
-    asm = p[1]
-    if isinstance(asm, Asm):
-        MEMORY.add_instruction(asm)
+    def empty_program(self, items):
+        return None
 
+    def program_endline2(self, items):
+        global AUTORUN_ADDR
+        AUTORUN_ADDR = items[1].eval()
+        return items[0]
 
-def p_asms_asms_asm(p):
-    """asms : asms CO asm"""
-    p[0] = p[1]
-    asm = p[3]
-    if isinstance(asm, Asm):
-        MEMORY.add_instruction(asm)
+    def def_label(self, items):
+        MEMORY.declare_label(items[0], items[0].line, items[2])
 
+    def line_asm(self, items):
+        return None
 
-def p_asm_label(p):
-    """asm : ID
-    | INTEGER
-    """
-    MEMORY.declare_label(str(p[1]), p.lineno(1))
+    def preprocessor_line(self, items):
+        return None
 
+    def preproc_line_init(self, items):
+        global INITS
+        INITS.append(Container(items[0].strip('"'), items[0].line))
 
-def p_asm_ld8(p):
-    """asm : LD reg8 COMMA reg8_hl
-    | LD reg8_hl COMMA reg8
-    | LD reg8 COMMA reg8
-    | LD SP COMMA HL
-    | LD SP COMMA reg16i
-    | LD A COMMA reg8
-    | LD reg8 COMMA A
-    | LD reg8_hl COMMA A
-    | LD A COMMA reg8_hl
-    | LD A COMMA A
-    | LD A COMMA I
-    | LD I COMMA A
-    | LD A COMMA R
-    | LD R COMMA A
-    | LD A COMMA reg8i
-    | LD reg8i COMMA A
-    | LD reg8 COMMA reg8i
-    | LD reg8i COMMA regBCDE
-    | LD reg8i COMMA reg8i
-    """
-    if p[2] in ("H", "L") and p[4] in ("IXH", "IXL", "IYH", "IYL"):
-        p[0] = None
-        error(p.lineno(0), "Unexpected token '%s'" % p[4])
-    else:
-        p[0] = Asm(p.lineno(1), "LD %s,%s" % (p[2], p[4]))
+    def asms_empty(self, items):
+        return MEMORY.org
 
+    def asms_asm(self, items):
+        asm = items[0]
+        if isinstance(asm, Asm):
+            MEMORY.add_instruction(asm)
+        return MEMORY.org
 
-def p_LDa(p):  # Remaining LD A,... and LD...,A instructions
-    """asm : LD A COMMA LP BC RP
-    | LD A COMMA LB BC RB
-    | LD A COMMA LP DE RP
-    | LD A COMMA LB DE RB
-    | LD LP BC RP COMMA A
-    | LD LB BC RB COMMA A
-    | LD LP DE RP COMMA A
-    | LD LB DE RB COMMA A
-    """
-    p[0] = Asm(p.lineno(1), "LD " + "".join(x.replace("[", "(").replace("]", ")") for x in p[2:]))
+    def asms_asms_asm(self, items):
+        asm = items[2]
+        if isinstance(asm, Asm):
+            MEMORY.add_instruction(asm)
+        return items[0]
 
+    def asm_label(self, items):
+        MEMORY.declare_label(str(items[0]), items[0].line)
 
-def p_PROC(p):
-    """asm : PROC"""
-    p[0] = None  # Start of a PROC scope
-    MEMORY.enter_proc(p.lineno(1))
+    def asm_ld8(self, items):
+        if items[1] in ("H", "L") and items[3] in ("IXH", "IXL", "IYH", "IYL"):
+            error(items[0].line, "Unexpected token '%s'" % items[3])
+            return None
+        return Asm(items[0].line, "LD %s,%s" % (items[1], items[3]))
 
+    def ld_a_instr(self, items):
+        return Asm(items[0].line, "LD " + "".join(str(x).replace("[", "(").replace("]", ")") for x in items[1:]))
 
-def p_ENDP(p):
-    """asm : ENDP"""
-    p[0] = None  # End of a PROC scope
-    MEMORY.exit_proc(p.lineno(1))
+    def proc_scope(self, items):
+        MEMORY.enter_proc(items[0].line)
 
+    def endp_scope(self, items):
+        MEMORY.exit_proc(items[0].line)
 
-def p_LOCAL(p):
-    """asm : LOCAL id_list"""
-    p[0] = None
-    for label, line in p[2]:
-        __DEBUG__("Setting label '%s' as local at line %i" % (label, line))
+    def local_labels(self, items):
+        for label, line in items[1]:
+            MEMORY.set_label(label, line, local=True)
 
-        MEMORY.set_label(label, line, local=True)
+    def idlist(self, items):
+        return (Container(items[0], items[0].line),)
 
+    def idlist_id(self, items):
+        return items[0] + (Container(items[2], items[2].line),)
 
-def p_idlist(p):
-    """id_list : ID"""
-    p[0] = (Container(p[1], p.lineno(1)),)
+    def defb_op(self, items):
+        return Asm(items[0].line, "DEFB", items[1])
 
+    def defs_op(self, items):
+        num_list = items[1]
+        if len(num_list) > 2:
+            error(items[0].line, "too many arguments for DEFS")
+        if len(num_list) < 2:
+            num = Expr.makenode(Container(0, items[0].line))
+            num_list = num_list + (num,)
+        return Asm(items[0].line, "DEFS", num_list)
 
-def p_idlist_id(p):
-    """id_list : id_list COMMA ID"""
-    p[0] = p[1] + (Container(p[3], p.lineno(3)),)
+    def defw_op(self, items):
+        return Asm(items[0].line, "DEFW", items[1])
 
+    def expr_list_from_string(self, items):
+        return tuple(Expr.makenode(Container(ord(x), items[0].line)) for x in items[0])
 
-def p_DEFB(p):  # Define bytes
-    """asm : DEFB expr_list"""
-    p[0] = Asm(p.lineno(1), "DEFB", p[2])
+    def expr_list_from_num(self, items):
+        return (items[0],)
 
+    def expr_list_plus_expr(self, items):
+        return items[0] + (items[2],)
 
-def p_DEFS(p):  # Define bytes
-    """asm : DEFS number_list"""
-    if len(p[2]) > 2:
-        error(p.lineno(1), "too many arguments for DEFS")
+    def expr_list_plus_string(self, items):
+        return items[0] + tuple(Expr.makenode(Container(ord(x), items[2].line)) for x in items[2])
 
-    if len(p[2]) < 2:
-        num = Expr.makenode(Container(0, p.lineno(1)))  # Defaults to 0
-        p[2] = p[2] + (num,)
+    def number_list(self, items):
+        return (items[0],)
 
-    p[0] = Asm(p.lineno(1), "DEFS", p[2])
+    def number_list_number(self, items):
+        return items[0] + (items[2],)
 
+    def asm_ldind_r8(self, items):
+        return Asm(items[0].line, "LD %s,%s" % (items[1][0], items[3]), items[1][1])
 
-def p_DEFW(p):  # Define words
-    """asm : DEFW number_list"""
-    p[0] = Asm(p.lineno(1), "DEFW", p[2])
+    def asm_ldr8_ind(self, items):
+        return Asm(items[0].line, "LD %s,%s" % (items[1], items[3][0]), items[3][1])
 
+    def reg8_hl(self, items):
+        return "(HL)"
 
-def p_expr_list_from_string(p):
-    """expr_list : STRING"""
-    p[0] = tuple(Expr.makenode(Container(ord(x), p.lineno(1))) for x in p[1])
-
-
-def p_expr_list_from_num(p):
-    """expr_list : expr
-    | pexpr
-    """
-    p[0] = (p[1],)
-
-
-def p_expr_list_plus_expr(p):
-    """expr_list : expr_list COMMA expr
-    | expr_list COMMA pexpr
-    """
-    p[0] = p[1] + (p[3],)
-
-
-def p_expr_list_plus_string(p):
-    """expr_list : expr_list COMMA STRING"""
-    p[0] = p[1] + tuple(Expr.makenode(Container(ord(x), p.lineno(3))) for x in p[3])
-
-
-def p_number_list(p):
-    """number_list : expr
-    | pexpr
-    """
-    p[0] = (p[1],)
-
-
-def p_number_list_number(p):
-    """number_list : number_list COMMA expr
-    | number_list COMMA pexpr
-    """
-    p[0] = p[1] + (p[3],)
-
-
-def p_asm_ldind_r8(p):
-    """asm : LD reg8_I COMMA reg8
-    | LD reg8_I COMMA A
-    """
-    p[0] = Asm(p.lineno(1), "LD %s,%s" % (p[2][0], p[4]), p[2][1])
-
-
-def p_asm_ldr8_ind(p):
-    """asm : LD reg8 COMMA reg8_I
-    | LD A COMMA reg8_I
-    """
-    p[0] = Asm(p.lineno(1), "LD %s,%s" % (p[2], p[4][0]), p[4][1])
-
-
-def p_reg8_hl(p):
-    """reg8_hl : LP HL RP
-    | LB HL RB
-    """
-    p[0] = "(HL)"
-
-
-def p_ind8_I(p):
-    """reg8_I : LP IX expr RP
-    | LP IY expr RP
-    | LP IX PLUS pexpr RP
-    | LP IX MINUS pexpr RP
-    | LP IY PLUS pexpr RP
-    | LP IY MINUS pexpr RP
-    | LB IX expr RB
-    | LB IY expr RB
-    | LB IX PLUS pexpr RB
-    | LB IX MINUS pexpr RB
-    | LB IY PLUS pexpr RB
-    | LB IY MINUS pexpr RB
-    """
-    if len(p) == 6:
-        expr = p[4]
-        sign = p[3]
-    else:
-        expr = p[3]
-        gen_ = expr.inorder()
-        first_expr = next(gen_, "")
-        if first_expr and first_expr.parent:
-            if len(first_expr.parent.children) == 2:
-                first_token = first_expr.symbol.item
-            else:
-                first_token = first_expr.parent.symbol.item
+    def ind8_i(self, items):
+        if len(items) == 5:
+            expr = items[3]
+            sign = items[2]
         else:
-            first_token = "<nothing>"
-        if first_token not in ("-", "+"):
-            error(p.lineno(2), f"Unexpected token '{first_token}'. Expected '+' or '-'")
-        sign = "+"
+            expr = items[2]
+            gen_ = expr.inorder()
+            first_expr = next(gen_, "")
+            if first_expr and first_expr.parent:
+                if len(first_expr.parent.children) == 2:
+                    first_token = first_expr.symbol.item
+                else:
+                    first_token = first_expr.parent.symbol.item
+            else:
+                first_token = "<nothing>"
+            if first_token not in ("-", "+"):
+                error(items[1].line, f"Unexpected token '{first_token}'. Expected '+' or '-'")
+            sign = "+"
 
-    if sign == "-":
-        expr = Expr.makenode(Container(sign, p.lineno(2)), expr)
+        if sign == "-":
+            expr = Expr.makenode(Container(sign, items[1].line), expr)
 
-    p[0] = ("(%s+N)" % p[2], expr)
+        return ("(%s+N)" % items[1], expr)
 
+    def ex_af_af(self, items):
+        return Asm(items[0].line, "EX AF,AF'")
 
-def p_ex_af_af(p):
-    """asm : EX AF COMMA AF APO"""
-    p[0] = Asm(p.lineno(1), "EX AF,AF'")
+    def ex_de_hl(self, items):
+        return Asm(items[0].line, "EX DE,HL")
 
+    def org(self, items):
+        MEMORY.set_org(items[1].eval(), items[0].line)
 
-def p_ex_de_hl(p):
-    """asm : EX DE COMMA HL"""
-    p[0] = Asm(p.lineno(1), "EX DE,HL")
-
-
-def p_org(p):
-    """asm : ORG expr
-    | ORG pexpr
-    """
-    MEMORY.set_org(p[2].eval(), p.lineno(1))
-
-
-def p_namespace(p):
-    """asm : NAMESPACE ID"""
-
-    asm_gl.NAMESPACE = asm_gl.normalize_namespace(p[2])
-    __DEBUG__("Setting namespace to " + (asm_gl.NAMESPACE or DOT), level=1)
-
-
-def p_push_namespace(p):
-    """asm : PUSH NAMESPACE
-    | PUSH NAMESPACE ID
-    """
-
-    asm_gl.NAMESPACE_STACK.append(asm_gl.NAMESPACE)
-    asm_gl.NAMESPACE = asm_gl.normalize_namespace(p[3] if len(p) == 4 else asm_gl.NAMESPACE)
-
-    if asm_gl.NAMESPACE != asm_gl.NAMESPACE_STACK[-1]:
+    def namespace(self, items):
+        asm_gl.NAMESPACE = asm_gl.normalize_namespace(items[1])
         __DEBUG__("Setting namespace to " + (asm_gl.NAMESPACE or DOT), level=1)
 
-
-def p_pop_namespace(p):
-    """asm : POP NAMESPACE"""
-
-    if not asm_gl.NAMESPACE_STACK:
-        error(p.lineno(2), f"Stack underflow. No more Namespaces to pop. Current namespace is {asm_gl.NAMESPACE}")
-    else:
-        asm_gl.NAMESPACE = asm_gl.NAMESPACE_STACK.pop()
-
-
-def p_align(p):
-    """asm : ALIGN expr
-    | ALIGN pexpr
-    """
-    align = p[2].eval()
-    if align < 2:
-        error(p.lineno(1), "ALIGN value must be greater than 1")
-        return
-
-    MEMORY.set_org(MEMORY.org + (align - MEMORY.org % align) % align, p.lineno(1))
-
-
-def p_incbin(p):
-    """asm : INCBIN STRING
-    | INCBIN STRING COMMA expr
-    | INCBIN STRING COMMA expr COMMA expr
-    """
-
-    try:
-        fname = zxbpp.search_filename(p[2], p.lineno(2), local_first=True)
-        if not fname:
-            p[0] = None
-            return
-
-        with src.api.utils.open_file(fname, "rb") as f:
-            filecontent = f.read()
-
-    except IOError:
-        error(p.lineno(2), "cannot read file '%s'" % p[2])
-        p[0] = None
-        return
-
-    offset = 0
-    length = None
-
-    if len(p) > 4:
-        offset = p[4].eval()
-
-    if len(p) > 6:
-        length = p[6].eval()
-        if length < 1:
-            error(p.lineno(5), "INCBIN length must be greater than 0")
-
-    if offset < 0:
-        offset = len(filecontent) + offset
-        if offset < 0 or offset >= len(filecontent):
-            error(p.lineno(4), "INCBIN offset is out of range")
-
-    if length is None:
-        length = len(filecontent) - offset
-
-    if offset + length > len(filecontent):
-        excess = len(filecontent) - (offset + length)
-        warning(p.lineno(5), f"INCBIN length if beyond file length by {excess} bytes")
-
-    filecontent = filecontent[offset : offset + length]
-    p[0] = Asm(p.lineno(1), "DEFB", filecontent)
-
-
-def p_ex_sp_reg8(p):
-    """asm : EX LP SP RP COMMA reg16i
-    | EX LB SP RB COMMA reg16i
-    | EX LP SP RP COMMA HL
-    | EX LB SP RB COMMA HL
-    """
-    p[0] = Asm(p.lineno(1), "EX (SP)," + p[6])
-
-
-def p_incdec(p):
-    """asm : INC inc_reg
-    | DEC inc_reg
-    """
-    p[0] = Asm(p.lineno(1), "%s %s" % (p[1], p[2]))
-
-
-def p_incdeci(p):
-    """asm : INC reg8_I
-    | DEC reg8_I
-    """
-    p[0] = Asm(p.lineno(1), "%s %s" % (p[1], p[2][0]), p[2][1])
-
-
-def p_LD_reg_val(p):
-    """asm : LD reg8 COMMA expr
-    | LD reg8 COMMA pexpr
-    | LD reg16 COMMA expr
-    | LD reg8_hl COMMA expr
-    | LD A COMMA expr
-    | LD SP COMMA expr
-    | LD reg8i COMMA expr
-    """
-    s = "LD %s,N" % p[2]
-    if p[2] in REGS16:
-        s += "N"
-
-    p[0] = Asm(p.lineno(1), s, p[4])
-
-
-def p_LD_regI_val(p):
-    """asm : LD reg8_I COMMA expr"""
-    p[0] = Asm(p.lineno(1), "LD %s,N" % p[2][0], (p[2][1], p[4]))
-
-
-def p_JP_hl(p):
-    """asm : JP reg8_hl
-    | JP LP reg16i RP
-    | JP LB reg16i RB
-    """
-    s = "JP "
-    if p[2] == "(HL)":
-        s += p[2]
-    else:
-        s += "(%s)" % p[3]
-
-    p[0] = Asm(p.lineno(1), s)
-
-
-def p_SBCADD(p):
-    """asm : SBC A COMMA reg8
-    | SBC A COMMA reg8i
-    | SBC A COMMA A
-    | SBC A COMMA reg8_hl
-    | SBC HL COMMA SP
-    | SBC HL COMMA BC
-    | SBC HL COMMA DE
-    | SBC HL COMMA HL
-    | ADD A COMMA reg8
-    | ADD A COMMA reg8i
-    | ADD A COMMA A
-    | ADD A COMMA reg8_hl
-    | ADC A COMMA reg8
-    | ADC A COMMA reg8i
-    | ADC A COMMA A
-    | ADC A COMMA reg8_hl
-    | ADD HL COMMA BC
-    | ADD HL COMMA DE
-    | ADD HL COMMA HL
-    | ADD HL COMMA SP
-    | ADC HL COMMA BC
-    | ADC HL COMMA DE
-    | ADC HL COMMA HL
-    | ADC HL COMMA SP
-    | ADD reg16i COMMA BC
-    | ADD reg16i COMMA DE
-    | ADD reg16i COMMA HL
-    | ADD reg16i COMMA SP
-    | ADD reg16i COMMA reg16i
-    """
-    p[0] = Asm(p.lineno(1), "%s %s,%s" % (p[1], p[2], p[4]))
-
-
-def p_arith_A_expr(p):
-    """asm : SBC A COMMA expr
-    | SBC A COMMA pexpr
-    | ADD A COMMA expr
-    | ADD A COMMA pexpr
-    | ADC A COMMA expr
-    | ADC A COMMA pexpr
-    """
-    p[0] = Asm(p.lineno(1), "%s A,N" % p[1], p[4])
-
-
-def p_arith_A_regI(p):
-    """asm : SBC A COMMA reg8_I
-    | ADD A COMMA reg8_I
-    | ADC A COMMA reg8_I
-    """
-    p[0] = Asm(p.lineno(1), "%s A,%s" % (p[1], p[4][0]), p[4][1])
-
-
-def p_bitwiseop_reg(p):
-    """asm : bitwiseop reg8
-    | bitwiseop reg8i
-    | bitwiseop A
-    | bitwiseop reg8_hl
-    """
-    p[0] = Asm(p[1][1], "%s %s" % (p[1][0], p[2]))
-
-
-def p_bitwiseop_regI(p):
-    """asm : bitwiseop reg8_I"""
-    p[0] = Asm(p[1][1], "%s %s" % (p[1][0], p[2][0]), p[2][1])
-
-
-def p_bitwise_expr(p):
-    """asm : bitwiseop expr
-    | bitwiseop pexpr
-    """
-    p[0] = Asm(p[1][1], "%s N" % p[1][0], p[2])
-
-
-def p_bitwise(p):
-    """bitwiseop : OR
-    | AND
-    | XOR
-    | SUB
-    | CP
-    """
-    p[0] = (p[1], p.lineno(1))
-
-
-def p_PUSH_POP(p):
-    """asm : PUSH AF
-    | PUSH reg16
-    | POP AF
-    | POP reg16
-    """
-    p[0] = Asm(p.lineno(1), "%s %s" % (p[1], p[2]))
-
-
-def p_LD_addr_reg(p):  # Load address,reg
-    """asm : LD pexpr COMMA A
-    | LD pexpr COMMA reg16
-    | LD pexpr COMMA SP
-    | LD mem_indir COMMA A
-    | LD mem_indir COMMA reg16
-    | LD mem_indir COMMA SP
-    """
-    p[0] = Asm(p.lineno(1), "LD (NN),%s" % p[4], p[2])
-
-
-def p_LD_reg_addr(p):  # Load address,reg
-    """asm : LD A COMMA pexpr
-    | LD reg16 COMMA pexpr
-    | LD SP COMMA pexpr
-    | LD A COMMA mem_indir
-    | LD reg16 COMMA mem_indir
-    | LD SP COMMA mem_indir
-    """
-    p[0] = Asm(p.lineno(1), "LD %s,(NN)" % p[2], p[4])
-
-
-def p_ROTATE(p):
-    """asm : rotation reg8
-    | rotation reg8_hl
-    | rotation A
-    """
-    p[0] = Asm(p[1][1], "%s %s" % (p[1][0], p[2]))
-
-
-def p_ROTATE_ix(p):
-    """asm : rotation reg8_I"""
-    p[0] = Asm(p[1][1], "%s %s" % (p[1][0], p[2][0]), p[2][1])
-
-
-def p_BIT(p):
-    """asm : bitop expr COMMA A
-    | bitop pexpr COMMA A
-    | bitop expr COMMA reg8
-    | bitop pexpr COMMA reg8
-    | bitop expr COMMA reg8_hl
-    | bitop pexpr COMMA reg8_hl
-    """
-    bit = p[2].eval()
-    if bit < 0 or bit > 7:
-        error(p.lineno(3), "Invalid bit position %i. Must be in [0..7]" % bit)
-        p[0] = None
-        return
-
-    p[0] = Asm(p.lineno(3), "%s %i,%s" % (p[1], bit, p[4]))
-
-
-def p_BIT_ix(p):
-    """asm : bitop expr COMMA reg8_I
-    | bitop pexpr COMMA reg8_I
-    """
-    bit = p[2].eval()
-    if bit < 0 or bit > 7:
-        error(p.lineno(3), "Invalid bit position %i. Must be in [0..7]" % bit)
-        p[0] = None
-        return
-
-    p[0] = Asm(p.lineno(3), "%s %i,%s" % (p[1], bit, p[4][0]), p[4][1])
-
-
-def p_bitop(p):
-    """bitop : BIT
-    | RES
-    | SET
-    """
-    p[0] = p[1]
-
-
-def p_rotation(p):
-    """rotation : RR
-    | RL
-    | RRC
-    | RLC
-    | SLA
-    | SLL
-    | SRA
-    | SRL
-    """
-    p[0] = (p[1], p.lineno(1))
-
-
-def p_reg_inc(p):  # INC/DEC registers and (HL)
-    """inc_reg : SP
-    | reg8
-    | reg16
-    | reg8_hl
-    | A
-    | reg8i
-    """
-    p[0] = p[1]
-
-
-def p_reg8(p):
-    """reg8 : H
-    | L
-    | regBCDE
-    """
-    p[0] = p[1]
-
-
-def p_regBCDE(p):
-    """regBCDE : B
-    | C
-    | D
-    | E
-    """
-    p[0] = p[1]
-
-
-def p_reg8i(p):
-    """reg8i : IXH
-    | IXL
-    | IYH
-    | IYL
-    """
-    p[0] = p[1]
-
-
-def p_reg16(p):
-    """reg16 : BC
-    | DE
-    | HL
-    | reg16i
-    """
-    p[0] = p[1]
-
-
-def p_reg16i(p):
-    """reg16i : IX
-    | IY
-    """
-    p[0] = p[1]
-
-
-def p_jp(p):
-    """asm : JP jp_flags COMMA expr
-    | JP jp_flags COMMA pexpr
-    | CALL jp_flags COMMA expr
-    | CALL jp_flags COMMA pexpr
-    """
-    p[0] = Asm(p.lineno(1), "%s %s,NN" % (p[1], p[2]), p[4])
-
-
-def p_ret(p):
-    """asm : RET jp_flags"""
-    p[0] = Asm(p.lineno(1), "RET %s" % p[2])
-
-
-def p_jpflags_other(p):
-    """jp_flags : P
-    | M
-    | PO
-    | PE
-    | jr_flags
-    """
-    p[0] = p[1]
-
-
-def p_jr(p):
-    """asm : JR jr_flags COMMA expr
-    | JR jr_flags COMMA pexpr
-    """
-    p[4] = Expr.makenode(Container("-", p.lineno(3)), p[4], Expr.makenode(Container(MEMORY.org + 2, p.lineno(1))))
-    p[0] = Asm(p.lineno(1), "JR %s,N" % p[2], p[4])
-
-
-def p_jr_flags(p):
-    """jr_flags : Z
-    | C
-    | NZ
-    | NC
-    """
-    p[0] = p[1]
-
-
-def p_jrjp(p):
-    """asm : JP expr
-    | JR expr
-    | CALL expr
-    | DJNZ expr
-    | JP pexpr
-    | JR pexpr
-    | CALL pexpr
-    | DJNZ pexpr
-    """
-    if p[1] in ("JR", "DJNZ"):
-        op = "N"
-        p[2] = Expr.makenode(Container("-", p.lineno(1)), p[2], Expr.makenode(Container(MEMORY.org + 2, p.lineno(1))))
-    else:
-        op = "NN"
-
-    p[0] = Asm(p.lineno(1), p[1] + " " + op, p[2])
-
-
-def p_rst(p):
-    """asm : RST expr"""
-    val = p[2].eval()
-
-    if val not in (0, 8, 16, 24, 32, 40, 48, 56):
-        error(p.lineno(1), "Invalid RST number %i" % val)
-        p[0] = None
-        return
-
-    p[0] = Asm(p.lineno(1), "RST %XH" % val)
-
-
-def p_im(p):
-    """asm : IM expr"""
-    val = p[2].eval()
-    if val not in (0, 1, 2):
-        error(p.lineno(1), "Invalid IM number %i" % val)
-        p[0] = None
-        return
-
-    p[0] = Asm(p.lineno(1), "IM %i" % val)
-
-
-def p_in(p):
-    """asm : IN A COMMA LP C RP
-    | IN A COMMA LB C RB
-    | IN reg8 COMMA LP C RP
-    | IN reg8 COMMA LB C RB
-    """
-    p[0] = Asm(p.lineno(1), "IN %s,(C)" % p[2])
-
-
-def p_out(p):
-    """asm : OUT LP C RP COMMA A
-    | OUT LB C RB COMMA A
-    | OUT LP C RP COMMA reg8
-    | OUT LB C RB COMMA reg8
-    """
-    p[0] = Asm(p.lineno(1), "OUT (C),%s" % p[6])
-
-
-def p_in_expr(p):
-    """asm : IN A COMMA mem_indir
-    | IN A COMMA pexpr
-    """
-    p[0] = Asm(p.lineno(1), "IN A,(N)", p[4])
-
-
-def p_out_expr(p):
-    """asm : OUT mem_indir COMMA A
-    | OUT pexpr COMMA A
-    """
-    p[0] = Asm(p.lineno(1), "OUT (N),A", p[2])
-
-
-def p_single(p):
-    """asm : NOP
-    | EXX
-    | CCF
-    | SCF
-    | LDIR
-    | LDI
-    | LDDR
-    | LDD
-    | CPIR
-    | CPI
-    | CPDR
-    | CPD
-    | DAA
-    | NEG
-    | CPL
-    | HALT
-    | EI
-    | DI
-    | OUTD
-    | OUTI
-    | OTDR
-    | OTIR
-    | IND
-    | INI
-    | INDR
-    | INIR
-    | RET
-    | RETI
-    | RETN
-    | RLA
-    | RLCA
-    | RRA
-    | RRCA
-    | RLD
-    | RRD
-    """
-    p[0] = Asm(p.lineno(1), p[1])  # Single instruction
-
-
-def p_expr_div_expr(p):
-    """expr : expr BAND expr
-    | expr BOR expr
-    | expr BXOR expr
-    | expr PLUS expr
-    | expr MINUS expr
-    | expr MUL expr
-    | expr DIV expr
-    | expr MOD expr
-    | expr POW expr
-    | expr LSHIFT expr
-    | expr RSHIFT expr
-    | pexpr BAND expr
-    | pexpr BOR expr
-    | pexpr BXOR expr
-    | pexpr PLUS expr
-    | pexpr MINUS expr
-    | pexpr MUL expr
-    | pexpr DIV expr
-    | pexpr MOD expr
-    | pexpr POW expr
-    | pexpr LSHIFT expr
-    | pexpr RSHIFT expr
-    | expr BAND pexpr
-    | expr BOR pexpr
-    | expr BXOR pexpr
-    | expr PLUS pexpr
-    | expr MINUS pexpr
-    | expr MUL pexpr
-    | expr DIV pexpr
-    | expr MOD pexpr
-    | expr POW pexpr
-    | expr LSHIFT pexpr
-    | expr RSHIFT pexpr
-    | pexpr BAND pexpr
-    | pexpr BOR pexpr
-    | pexpr BXOR pexpr
-    | pexpr PLUS pexpr
-    | pexpr MINUS pexpr
-    | pexpr MUL pexpr
-    | pexpr DIV pexpr
-    | pexpr MOD pexpr
-    | pexpr POW pexpr
-    | pexpr LSHIFT pexpr
-    | pexpr RSHIFT pexpr
-    """
-    p[0] = Expr.makenode(Container(p[2], p.lineno(2)), p[1], p[3])
-
-
-def p_expr_lprp(p):
-    """pexpr : LP expr RP"""
-    p[0] = p[2]
-
-
-def p_mem_indir(p):
-    """mem_indir : LB expr RB"""
-    p[0] = p[2]
-
-
-def p_expr_uminus(p):
-    """expr : MINUS expr %prec UMINUS
-    | PLUS expr %prec UMINUS
-    | MINUS pexpr %prec UMINUS
-    | PLUS pexpr %prec UMINUS
-    """
-    p[0] = Expr.makenode(Container(p[1], p.lineno(1)), p[2])
-
-
-def p_expr_int(p):
-    """expr : INTEGER"""
-    p[0] = Expr.makenode(Container(int(p[1]), p.lineno(1)))
-
-
-def p_expr_label(p):
-    """expr : ID"""
-    p[0] = Expr.makenode(Container(MEMORY.get_label(p[1], p.lineno(1)), p.lineno(1)))
-
-
-def p_expr_paren(p):
-    """expr : LPP expr RPP"""
-    p[0] = p[2]
-
-
-def p_expr_addr(p):
-    """expr : ADDR"""
-    # The current instruction address
-    p[0] = Expr.makenode(Container(MEMORY.org, p.lineno(1)))
-
-
-# Some preprocessor directives
-def p_preprocessor_line(p):
-    """line : preproc_line"""
-    p[0] = None
-
-
-def p_preproc_line_init(p):
-    """preproc_line : _INIT STRING"""
-    INITS.append(Container(p[2].strip('"'), p.lineno(2)))
-
-
-# --- YYERROR
-
-
-def p_error(p):
-    if p is not None:
-        if p.type != "NEWLINE":
-            error(p.lineno, "Syntax error. Unexpected token '%s' [%s]" % (p.value, p.type))
+    def push_namespace(self, items):
+        asm_gl.NAMESPACE_STACK.append(asm_gl.NAMESPACE)
+        asm_gl.NAMESPACE = asm_gl.normalize_namespace(items[2] if len(items) == 3 else asm_gl.NAMESPACE)
+        if asm_gl.NAMESPACE != asm_gl.NAMESPACE_STACK[-1]:
+            __DEBUG__("Setting namespace to " + (asm_gl.NAMESPACE or DOT), level=1)
+
+    def pop_namespace(self, items):
+        if not asm_gl.NAMESPACE_STACK:
+            error(items[1].line, f"Stack underflow. No more Namespaces to pop. Current namespace is {asm_gl.NAMESPACE}")
         else:
-            error(p.lineno, "Syntax error. Unexpected end of line [NEWLINE]")
-    else:
-        OPTIONS.stderr.write("General syntax error at assembler (unexpected End of File?)")
-        gl.has_errors += 1
+            asm_gl.NAMESPACE = asm_gl.NAMESPACE_STACK.pop()
+
+    def align(self, items):
+        align = items[1].eval()
+        if align < 2:
+            error(items[0].line, "ALIGN value must be greater than 1")
+            return None
+        MEMORY.set_org(MEMORY.org + (align - MEMORY.org % align) % align, items[0].line)
+        return None
+
+    def incbin(self, items):
+        try:
+            fname = zxbpp.search_filename(items[1], items[1].line, local_first=True)
+            if not fname:
+                return None
+            with src.api.utils.open_file(fname, "rb") as f:
+                filecontent = f.read()
+        except IOError:
+            error(items[1].line, "cannot read file '%s'" % items[1])
+            return None
+
+        offset = 0
+        length = None
+
+        if len(items) > 3:
+            offset = items[3].eval()
+
+        if len(items) > 5:
+            length = items[5].eval()
+            if length < 1:
+                error(items[0].line, "INCBIN length must be greater than 0")
+
+        if offset < 0:
+            offset = len(filecontent) + offset
+            if offset < 0 or offset >= len(filecontent):
+                error(items[0].line, "INCBIN offset is out of range")
+
+        if length is None:
+            length = len(filecontent) - offset
+
+        if offset + length > len(filecontent):
+            excess = len(filecontent) - (offset + length)
+            warning(items[0].line, f"INCBIN length if beyond file length by {excess} bytes")
+
+        filecontent = filecontent[offset : offset + length]
+        return Asm(items[0].line, "DEFB", filecontent)
+
+    def ex_sp_reg8(self, items):
+        return Asm(items[0].line, "EX (SP)," + items[5])
+
+    def incdec(self, items):
+        return Asm(items[0].line, "%s %s" % (items[0], items[1]))
+
+    def incdeci(self, items):
+        return Asm(items[0].line, "%s %s" % (items[0], items[1][0]), items[1][1])
+
+    def ld_reg_val(self, items):
+        s = "LD %s,N" % items[1]
+        if items[1] in REGS16:
+            s += "N"
+        return Asm(items[0].line, s, items[3])
+
+    def ld_reg_val_i(self, items):
+        return Asm(items[0].line, "LD %s,N" % items[1][0], (items[1][1], items[3]))
+
+    def jp_hl(self, items):
+        s = "JP "
+        if items[1] == "(HL)":
+            s += items[1]
+        else:
+            s += "(%s)" % items[2]
+        return Asm(items[0].line, s)
+
+    def sbcadd(self, items):
+        return Asm(items[0].line, "%s %s,%s" % (items[0], items[1], items[3]))
+
+    def arith_a_expr(self, items):
+        return Asm(items[0].line, "%s A,N" % items[0], items[3])
+
+    def arith_a_reg_i(self, items):
+        return Asm(items[0].line, "%s A,%s" % (items[0], items[3][0]), items[3][1])
+
+    def bitwiseop_reg(self, items):
+        return Asm(items[0][1], "%s %s" % (items[0][0], items[1]))
+
+    def bitwiseop_reg_i(self, items):
+        return Asm(items[0][1], "%s %s" % (items[0][0], items[1][0]), items[1][1])
+
+    def bitwise_expr(self, items):
+        return Asm(items[0][1], "%s N" % items[0][0], items[1])
+
+    def bitwise(self, items):
+        return (items[0], items[0].line)
+
+    def push_pop(self, items):
+        return Asm(items[0].line, "%s %s" % (items[0], items[1]))
+
+    def ld_addr_reg(self, items):
+        return Asm(items[0].line, "LD (NN),%s" % items[3], items[1])
+
+    def ld_reg_addr(self, items):
+        return Asm(items[0].line, "LD %s,(NN)" % items[1], items[3])
+
+    def rotate(self, items):
+        return Asm(items[0][1], "%s %s" % (items[0][0], items[1]))
+
+    def rotate_ix(self, items):
+        return Asm(items[0][1], "%s %s" % (items[0][0], items[1][0]), items[1][1])
+
+    def bit(self, items):
+        bit = items[1].eval()
+        if bit < 0 or bit > 7:
+            error(items[2].line, "Invalid bit position %i. Must be in [0..7]" % bit)
+            return None
+        return Asm(items[2].line, "%s %i,%s" % (items[0], bit, items[3]))
+
+    def bit_ix(self, items):
+        bit = items[1].eval()
+        if bit < 0 or bit > 7:
+            error(items[2].line, "Invalid bit position %i. Must be in [0..7]" % bit)
+            return None
+        return Asm(items[2].line, "%s %i,%s" % (items[0], bit, items[3][0]), items[3][1])
+
+    def bitop(self, items):
+        return items[0]
+
+    def rotation(self, items):
+        return (items[0], items[0].line)
+
+    def reg_inc(self, items):
+        return items[0]
+
+    def reg8(self, items):
+        return items[0]
+
+    def reg_bcde(self, items):
+        return items[0]
+
+    def reg8i(self, items):
+        return items[0]
+
+    def reg16(self, items):
+        return items[0]
+
+    def reg16i(self, items):
+        return items[0]
+
+    def jp(self, items):
+        return Asm(items[0].line, "%s %s,NN" % (items[0], items[1]), items[3])
+
+    def ret(self, items):
+        return Asm(items[0].line, "RET %s" % items[1])
+
+    def jpflags_other(self, items):
+        return items[0]
+
+    def jr(self, items):
+        expr = Expr.makenode(
+            Container("-", items[2].line), items[3], Expr.makenode(Container(MEMORY.org + 2, items[0].line))
+        )
+        return Asm(items[0].line, "JR %s,N" % items[1], expr)
+
+    def jr_flags(self, items):
+        return items[0]
+
+    def jrjp(self, items):
+        if items[0] in ("JR", "DJNZ"):
+            op = "N"
+            expr = Expr.makenode(
+                Container("-", items[0].line), items[1], Expr.makenode(Container(MEMORY.org + 2, items[0].line))
+            )
+        else:
+            op = "NN"
+            expr = items[1]
+        return Asm(items[0].line, items[0] + " " + op, expr)
+
+    def rst(self, items):
+        val = items[1].eval()
+        if val not in (0, 8, 16, 24, 32, 40, 48, 56):
+            error(items[0].line, "Invalid RST number %i" % val)
+            return None
+        return Asm(items[0].line, "RST %XH" % val)
+
+    def im(self, items):
+        val = items[1].eval()
+        if val not in (0, 1, 2):
+            error(items[0].line, "Invalid IM number %i" % val)
+            return None
+        return Asm(items[0].line, "IM %i" % val)
+
+    def in_op(self, items):
+        return Asm(items[0].line, "IN %s,(C)" % items[1])
+
+    def out_op(self, items):
+        return Asm(items[0].line, "OUT (C),%s" % items[5])
+
+    def in_expr(self, items):
+        return Asm(items[0].line, "IN A,(N)", items[3])
+
+    def out_expr(self, items):
+        return Asm(items[0].line, "OUT (N),A", items[1])
+
+    def single(self, items):
+        return Asm(items[0].line, items[0])
+
+    def mul_d_e(self, items):
+        return Asm(items[0].line, "MUL D,E")
+
+    def simple_instruction(self, items):
+        return Asm(items[0].line, items[0])
+
+    def add_reg16_a(self, items):
+        return Asm(items[0].line, f"ADD {items[1]},A")
+
+    def jp_c(self, items):
+        return Asm(items[0].line, "JP (C)")
+
+    def bxxxx_de_b(self, items):
+        return Asm(items[0].line, f"{items[0]} DE,B")
+
+    def add_reg_nn(self, items):
+        return Asm(items[0].line, f"ADD {items[1]},NN", items[3])
+
+    def test_nn(self, items):
+        return Asm(items[0].line, "TEST N", items[1])
+
+    def nextreg_expr(self, items):
+        return Asm(items[0].line, "NEXTREG N,N", (items[1], items[3]))
+
+    def nextreg_a(self, items):
+        return Asm(items[0].line, "NEXTREG N,A", items[1])
+
+    def push_imm(self, items):
+        mknod = Expr.makenode
+        cont = lambda x: Container(x, items[0].line)
+        ff = mknod(cont(0xFF))
+        n8 = mknod(cont(8))
+        expr = mknod(
+            cont("|"),
+            mknod(cont("<<"), mknod(cont("&"), items[1], ff), n8),
+            mknod(cont("&"), mknod(cont(">>"), items[1], n8), ff),
+        )
+        return Asm(items[0].line, "PUSH NN", expr)
+
+    def expr_div_expr(self, items):
+        return Expr.makenode(Container(items[1], items[1].line), items[0], items[2])
+
+    def expr_add_minus_expr(self, items):
+        return Expr.makenode(Container(items[1], items[1].line), items[0], items[2])
+
+    def expr_lprp(self, items):
+        return items[1]
+
+    def mem_indir(self, items):
+        return items[1]
+
+    def expr_uminus(self, items):
+        return Expr.makenode(Container(items[0], items[0].line), items[1])
+
+    def expr_uplus(self, items):
+        return Expr.makenode(Container(items[0], items[0].line), items[1])
+
+    def expr_int(self, items):
+        return Expr.makenode(Container(int(items[0]), items[0].line))
+
+    def expr_label(self, items):
+        return Expr.makenode(Container(MEMORY.get_label(items[0], items[0].line), items[0].line))
+
+    def expr_paren(self, items):
+        return items[1]
+
+    def expr_addr(self, items):
+        return Expr.makenode(Container(MEMORY.org, items[0].line))
 
 
 def assemble(input_):
@@ -1003,7 +531,42 @@ def assemble(input_):
     else:
         parser_ = parser
 
-    parser_.parse(input_, lexer=LEXER, debug=OPTIONS.debug_level > 1)
+    logical_lines = []
+    current_buffer = []
+    raw_lines = input_.splitlines()
+    for line in raw_lines:
+        current_buffer.append(line)
+        if line.rstrip(" \t").endswith("\\"):
+            continue
+        else:
+            logical_lines.append("\n".join(current_buffer))
+            current_buffer = []
+    if current_buffer:
+        logical_lines.append("\n".join(current_buffer))
+
+    current_lineno = 1
+    for line in logical_lines:
+        LEXER.input(line + "\n")
+        LEXER.lineno = current_lineno
+        try:
+            parser_.parse(LEXER)
+            current_lineno = LEXER.lineno
+        except UnexpectedInput as e:
+            from .asmparse_standalone import UnexpectedToken
+
+            if isinstance(e, UnexpectedToken):
+                tok = e.token
+                if tok.type == "$END":
+                    OPTIONS.stderr.write("General syntax error at assembler (unexpected End of File?)")
+                    gl.has_errors += 1
+                elif tok.type == "NEWLINE":
+                    error(current_lineno, "Syntax error. Unexpected end of line [NEWLINE]")
+                else:
+                    error(current_lineno, "Syntax error. Unexpected token '%s' [%s]" % (tok.value, tok.type))
+            else:
+                error(current_lineno, f"Syntax error at line {current_lineno}, column {e.column}")
+            current_lineno += line.count("\n") + 1
+
     if len(MEMORY.scopes):
         error(MEMORY.scopes[-1], "Missing ENDP to close this scope")
 
@@ -1093,11 +656,6 @@ def main(argv):
     generate_binary(OPTIONS.output_filename, OPTIONS.output_file_type)
 
 
-# Z80 only ASM parser
-parser = src.api.utils.get_or_create("asmparse", lambda: yacc.yacc(start="start", debug=True))
+parser = BaseLarkStandAlone(lexer=AsmLarkLexerAdapter, transformer=AsmTransformer())
 
-# needed for ply
-from .zxnext import *  # noqa
-
-# ZXNEXT extended Opcodes parser
-zxnext_parser = src.api.utils.get_or_create("zxnext_asmparse", lambda: yacc.yacc(start="start", debug=True))
+zxnext_parser = ZXNextLarkStandAlone(lexer=AsmLarkLexerAdapter, transformer=AsmTransformer())
