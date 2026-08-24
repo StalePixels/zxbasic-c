@@ -59,6 +59,11 @@ META_LOOPS: list[list[LoopInfo]] = []
 # ----------------------------------------------------------------------
 has_errors = 0  # Number of errors
 has_warnings = 0  # Number of warnings
+syntax_error_occurred = False  # True if a syntax error occurred during parse
+reporting_syntax_error = False  # True if we are actively reporting a syntax error
+tokens_yielded = 0
+tokens_rejected = 0
+shifted_at_last_error = 0
 
 # ----------------------------------------------------------------------
 # Default var type when not specified (implicit) an can't be guessed

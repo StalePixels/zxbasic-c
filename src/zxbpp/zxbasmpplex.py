@@ -9,7 +9,7 @@
 
 import sys
 
-from src.ply import lex
+from src.api import lex
 from src.zxbpp.base_pplex import BaseLexer, ReservedDirectives
 from src.zxbpp.prepro.definestable import DefinesTable
 

@@ -7,14 +7,13 @@
 
 import errno
 import os
-import shelve
 import signal
 from collections.abc import Callable, Iterable
 from contextlib import contextmanager
 from functools import wraps
 from typing import IO, Any, TypeVar
 
-from src.api import constants, errmsg, global_
+from src.api import errmsg, global_
 
 __all__ = (
     "chdir",
@@ -30,19 +29,16 @@ __doc__ = """Utils module contains many helpers for several task,
 like reading files or path management"""
 
 
-SHELVE_PATH = os.path.join(constants.ZXBASIC_ROOT, "parsetab", "tabs.dbm")
-SHELVE = shelve.open(SHELVE_PATH)
-
 T = TypeVar("T")
 
 
-def first(iter_: Iterable[T], default: T | None = None) -> T | None:
+def first[T](iter_: Iterable[T], default: T | None = None) -> T | None:
     """Return the first element of an Iterable, or None if it's empty or
     there are no more elements to return."""
     return next(iter(iter_), default)
 
 
-def sfirst(iter_: Iterable[T]) -> T:
+def sfirst[T](iter_: Iterable[T]) -> T:
     """Return the first element of an Iterable, or fails if it's empty"""
     return next(iter(iter_))
 
@@ -175,27 +171,13 @@ def eval_to_num(expr: str) -> int | float | None:
     if it was non-numeric."""
     try:
         result = eval(expr, {}, {})
-    except (NameError, SyntaxError, ValueError):
+    except NameError, SyntaxError, ValueError:
         return None
 
-    if isinstance(result, (int, float)):
+    if isinstance(result, int | float):
         return result
 
     return None
-
-
-def load_object(key: str) -> Any:
-    return SHELVE[key] if key in SHELVE else None
-
-
-def save_object(key: str, obj: Any) -> Any:
-    SHELVE[key] = obj
-    SHELVE.sync()
-    return obj
-
-
-def get_or_create(key: str, fn: Callable[[], Any]) -> Any:
-    return load_object(key) or save_object(key, fn())
 
 
 def timeout(seconds: Callable[[], int] | int = 10, error_message=os.strerror(errno.ETIME)):

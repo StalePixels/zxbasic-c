@@ -6,13 +6,13 @@
 # See the file CONTRIBUTORS.md for copyright details.
 # See https://www.gnu.org/licenses/agpl-3.0.html for details.
 # --------------------------------------------------------------------
-
 import math
 import sys
+from collections.abc import Callable
 from math import pi as PI
 
 # typings
-from typing import NamedTuple
+from typing import Any, NamedTuple, cast
 
 import src.api.config
 import src.api.dataref
@@ -40,7 +40,7 @@ from src.api.check import (
     is_unsigned,
 )
 from src.api.config import OPTIONS
-from src.api.constants import CLASS, CONVENTION, SCOPE, LoopType
+from src.api.constants import CLASS, CONVENTION, SCOPE, TYPE, LoopType
 from src.api.debug import __DEBUG__
 from src.api.errmsg import error, warning
 from src.api.global_ import LoopInfo
@@ -49,13 +49,14 @@ from src.api.global_ import LoopInfo
 from src.api.symboltable.symboltable import SymbolTable
 
 # Lexers and parsers, etc
-from src.ply import yacc
 from src.symbols import sym
 from src.symbols.id_ import SymbolID
 from src.symbols.symbol_ import Symbol
-from src.symbols.type_ import Type as TYPE
+from src.symbols.type_ import Type
 from src.zxbc import zxblex
 from src.zxbc.zxblex import tokens  # noqa
+
+from .zxbparser_standalone import Lark_StandAlone, Lexer, Token, Transformer, UnexpectedInput, v_args
 
 # ----------------------------------------------------------------------
 # Function level entry ID in which scope we are into. If the list
@@ -136,6 +137,11 @@ def init():
     optemps = opcodestemps.OpcodesTemps()
 
     gl.INITS.clear()
+    gl.syntax_error_occurred = False
+    gl.tokens_yielded = 0
+    gl.tokens_rejected = 0
+    gl.shifted_at_last_error = 0
+    gl.expr_linenos = {}
     del gl.FUNCTION_CALLS[:]
     del gl.FUNCTION_LEVEL[:]
     del gl.FUNCTIONS[:]
@@ -154,11 +160,15 @@ def init():
 # ----------------------------------------------------------------------
 # "Macro" functions. Just return more complex expressions
 # ----------------------------------------------------------------------
-def _TYPE(type_):
-    """returns an internal type converted to a SYMBOL_TABLE
-    type.
-    """
+def _TYPE(type_: TYPE) -> sym.TYPE | None:
+    """returns an internal type converted to a SYMBOL_TABLE type."""
+    assert isinstance(type_, TYPE)
     return SYMBOL_TABLE.basic_types[type_]
+
+
+def _TYPEREF(type_: TYPE, *, implicit: bool = True) -> sym.TYPEREF:
+    """Returns a typing annotation"""
+    return sym.TYPEREF(_TYPE(type_), 0, implicit=implicit)
 
 
 # ----------------------------------------------------------------------
@@ -194,17 +204,33 @@ def make_nop():
 
 
 def make_number(value, lineno: int, type_=None):
-    """Wrapper: creates a constant number node."""
+    if hasattr(value, "original_value"):
+        value = value.original_value
+    elif isinstance(value, str):
+        try:
+            if "." in value or "e" in value.lower():
+                value = float(value)
+            else:
+                value = int(value, 0)
+        except ValueError:
+            value = float(value)
     return sym.NUMBER(value, type_=type_, lineno=lineno)
 
 
-def make_typecast(type_: sym.TYPE, node: sym.SYMBOL | None, lineno: int) -> sym.TYPECAST | None:
+def make_typecast(type_: sym.TYPING, node: sym.EXPR | None, lineno: int) -> sym.TYPECAST | sym.EXPR | None:
     """Wrapper: returns a Typecast node"""
     if node is None or node.type_ is None:
         return None  # syntax / semantic error
 
+    if isinstance(type_, sym.TYPEREF):
+        type_ = type_.type_
+
     assert isinstance(type_, sym.TYPE)
-    return sym.TYPECAST.make_node(type_, node, lineno)
+
+    result = sym.TYPECAST.make_node(type_, node, lineno)
+    assert isinstance(result, None | sym.TYPECAST | sym.EXPR), f"{result.__class__.__name__} != TYPECAST | EXPR"
+
+    return result
 
 
 def make_binary(lineno: int, operator, left, right, func=None, type_=None):
@@ -212,7 +238,13 @@ def make_binary(lineno: int, operator, left, right, func=None, type_=None):
     return sym.BINARY.make_node(operator, left, right, lineno, func, type_)
 
 
-def make_unary(lineno: int, operator, operand, func=None, type_=None):
+def make_unary(
+    lineno: int,
+    operator: str,
+    operand: sym.EXPR | None,
+    func=Callable,
+    type_: sym.TYPE | None = None,
+) -> sym.UNARY | sym.NUMBER | sym.STRING | None:
     """Wrapper: returns a Unary node"""
     if operand is None:  # syntax / semantic error
         return None
@@ -220,17 +252,26 @@ def make_unary(lineno: int, operator, operand, func=None, type_=None):
     return sym.UNARY.make_node(lineno, operator, operand, func, type_)
 
 
-def make_builtin(lineno: int, fname: str, operands: Symbol | tuple | list | None, func=None, type_=None):
+def make_builtin(
+    lineno: int,
+    fname: str,
+    operands: Symbol | tuple | list | None,
+    func: Callable | None = None,
+    type_: sym.TYPE | None = None,
+) -> sym.BUILTIN | sym.NUMBER:
     """Wrapper: returns a Builtin function node.
-    Can be a Symbol, tuple or list of Symbols
+    Can be a Symbol, tuple, or list of Symbols
     If operand is an iterable, they will be expanded.
     """
     if operands is None:
         operands = []
+
     assert isinstance(operands, Symbol | tuple | list)
+    assert isinstance(type_, sym.TYPE | None)
+
     # TODO: In the future, builtin functions will be implemented in an external stdlib, like POINT or ATTR
     __DEBUG__(f'Creating BUILTIN "{fname}"', 1)
-    if not isinstance(operands, (list, tuple)):
+    if not isinstance(operands, list | tuple):
         operands = [operands]
 
     return sym.BUILTIN.make_node(lineno, fname, func, type_, *operands)
@@ -267,12 +308,17 @@ def make_var_declaration(entry):
     return sym.VARDECL(entry)
 
 
-def make_array_declaration(entry):
+def make_array_declaration(entry: sym.ID) -> sym.ARRAYDECL:
     """This will return a node with the symbol as an array."""
     return sym.ARRAYDECL(entry)
 
 
-def make_func_declaration(func_name: str, lineno: int, class_: CLASS, type_=None):
+def make_func_declaration(
+    func_name: str,
+    lineno: int,
+    class_: CLASS,
+    type_: sym.TYPEREF | None = None,
+) -> sym.FUNCDECL | None:
     """This will return a node with the symbol as a function or sub."""
     return sym.FUNCDECL.make_node(func_name, lineno, class_, type_=type_)
 
@@ -314,7 +360,7 @@ def make_array_access(id_, lineno, arglist):
     """
     for i, arg in enumerate(arglist):
         value = make_typecast(
-            TYPE.by_name(src.api.constants.TYPE.to_string(gl.BOUND_TYPE)),
+            Type.by_name(src.api.constants.TYPE.to_string(gl.BOUND_TYPE)),
             arg.value,
             arg.lineno,
         )
@@ -333,7 +379,7 @@ def make_array_substr_assign(lineno: int, id_: str, arg_list, substr, expr_) -> 
     if entry is None:
         return None  # There were errors
 
-    if entry.type_ != TYPE.string:
+    if entry.type_ != Type.string:
         error(lineno, "Array '%s' is not of type String" % id_)
         return None  # There were errors
 
@@ -383,7 +429,7 @@ def make_call(id_: str, lineno: int, args: sym.ARGLIST):
     if entry is None:
         return None
 
-    if entry.class_ is CLASS.unknown and entry.type_ == TYPE.string and len(args) == 1 and is_numeric(args[0]):
+    if entry.class_ is CLASS.unknown and entry.type_ == Type.string and len(args) == 1 and is_numeric(args[0]):
         entry = entry.to_var()  # A scalar variable. e.g a$(expr)
 
     if entry.class_ == CLASS.array:  # An already declared array
@@ -392,7 +438,7 @@ def make_call(id_: str, lineno: int, args: sym.ARGLIST):
             return None
 
         if arr.offset is not None:
-            offset = make_typecast(TYPE.uinteger, make_number(arr.offset, lineno=lineno), lineno)
+            offset = make_typecast(Type.uinteger, make_number(arr.offset, lineno=lineno), lineno)
             arr.append_child(offset)
         return arr
 
@@ -418,9 +464,16 @@ def make_call(id_: str, lineno: int, args: sym.ARGLIST):
     return make_func_call(id_, lineno, args)
 
 
-def make_param_decl(id_: str, lineno: int, typedef, is_array: bool, default_value: sym.SYMBOL | None = None):
+def make_param_decl(
+    id_: str,
+    lineno: int,
+    typedef: sym.TYPEREF,
+    *,
+    is_array: bool,
+    default_value: sym.SYMBOL | None = None,
+):
     """Wrapper that creates a param declaration"""
-    return SYMBOL_TABLE.declare_param(id_, lineno, typedef, is_array, default_value)
+    return SYMBOL_TABLE.declare_param(id_, lineno, typedef, default_value, is_array=is_array)
 
 
 def make_type(typename, lineno, implicit=False):
@@ -435,7 +488,7 @@ def make_type(typename, lineno, implicit=False):
     if not SYMBOL_TABLE.check_is_declared(typename, lineno, "type"):
         return None
 
-    type_ = sym.TYPEREF(SYMBOL_TABLE.get_entry(typename), lineno, implicit)
+    type_ = sym.TYPEREF(SYMBOL_TABLE.get_entry(typename), lineno, implicit=implicit)
     return type_
 
 
@@ -468,7 +521,7 @@ def make_break(lineno: int, p):
         return None
 
     last_brk_linenum = lineno
-    return make_sentence(lineno, "CHKBREAK", make_number(lineno, lineno, TYPE.uinteger))
+    return make_sentence(lineno, "CHKBREAK", make_number(lineno, lineno, Type.uinteger))
 
 
 # ----------------------------------------------------------------------
@@ -498,3096 +551,2685 @@ precedence = (
 
 
 # ----------------------------------------------------------------------
-# Grammar rules
-# ----------------------------------------------------------------------
 
 
-def p_start(p):
-    """start : program"""
-    global ast, data_ast
-
-    make_label(gl.ZXBASIC_USER_DATA, 0)
-    make_label(gl.ZXBASIC_USER_DATA_LEN, 0)
-
-    if PRINT_IS_USED:
-        OPTIONS.__DEFINES["___PRINT_IS_USED___"] = 1
-
-    if zxblex.IN_STATE:
-        p.type = "NEWLINE"
-        p_error(p)
-        sys.exit(1)
-
-    ast = p[0] = p[1]
-    __end = make_sentence(p.lexer.lineno, "END", make_number(0, lineno=p.lexer.lineno), sentinel=True)
-
-    if not is_null(ast):
-        if isinstance(ast, sym.BLOCK) and not is_ender(ast[-1]):
-            ast.append_child(__end)
-    else:
-        ast = __end
-
-    SYMBOL_TABLE.check_labels()
-    SYMBOL_TABLE.check_classes()
-
-    if gl.has_errors:
-        return
-
-    __DEBUG__("Checking pending labels", 1)
-    if not src.api.check.check_pending_labels(ast):
-        return
-
-    __DEBUG__("Checking pending calls", 1)
-    if not src.api.check.check_pending_calls():
-        return
-
-    data_ast = make_sentence(p.lexer.lineno, "BLOCK")
-
-    # Appends variable declarations at the end.
-    for var in SYMBOL_TABLE.vars_:
-        data_ast.append_child(make_var_declaration(var))
-
-    # Appends arrays declarations at the end.
-    for var in SYMBOL_TABLE.arrays:
-        data_ast.append_child(make_array_declaration(var))
+def get_lineno(item):
+    if hasattr(gl, "expr_linenos") and id(item) in gl.expr_linenos:
+        return gl.expr_linenos[id(item)]
+    if hasattr(item, "line"):
+        return item.line
+    if hasattr(item, "lineno"):
+        return item.lineno
+    if hasattr(item, "children") and item.children:
+        for child in item.children:
+            l = get_lineno(child)
+            if l:
+                return l
+    return zxblex.lexer.lineno if hasattr(zxblex, "lexer") else 0
 
 
-def p_program_program_line(p):
-    """program : program_line"""
-    p[0] = make_block(p[1], make_break(p.lineno(1), p[1]))
+def meta_line(meta):
+    return getattr(meta, "line", None) or (zxblex.lexer.lineno if hasattr(zxblex, "lexer") else 0) or 0
 
 
-def p_program(p):
-    """program : program program_line"""
-    p[0] = make_block(p[1], p[2], make_break(p.lineno(2), p[2]))
+class ZXBasicToken(Token):
+    def __eq__(self, other):
+        return str.__eq__(self, other)
+
+    def __hash__(self):
+        return str.__hash__(self)
 
 
-def p_program_line(p):
-    """program_line : preproc_line NEWLINE
-    | label_line NEWLINE
-    | statements NEWLINE
-    | statements_co NEWLINE
-    | co_statements NEWLINE
-    | co_statements_co NEWLINE
-    | NEWLINE
-    """
-    p[0] = make_nop() if len(p) == 2 else p[1]
+class ZXBasicLarkLexerAdapter(Lexer):
+    def __init__(self, lexer_conf: Any) -> None:
+        pass
+
+    def lex(self, data: Any, parser_state: Any = None) -> Any:
+        lexer = data
+        lookahead = []
+
+        def get_next():
+            tok = lexer.token()
+            if tok is None:
+                return None
+            tok.lexer = lexer
+            col = zxblex.find_column(tok) if hasattr(zxblex, "find_column") else 1
+            val = tok.value
+            if isinstance(val, float) and val.is_integer():
+                val = str(int(val))
+            elif isinstance(val, (int, float)):
+                val = str(val)
+            t = ZXBasicToken(tok.type, val, line=tok.lineno, column=col)
+            t.original_value = tok.value
+            return t
+
+        while True:
+            if lookahead:
+                t = lookahead.pop(0)
+            else:
+                t = get_next()
+                if t is None:
+                    break
+
+            if hasattr(gl, "tokens_yielded"):
+                gl.tokens_yielded += 1
+
+            if t.type == "END":
+                next_t = get_next()
+                if next_t is not None:
+                    if next_t.type in ("SUB", "FUNCTION", "IF", "WHILE"):
+                        merged_type = "END_" + next_t.type
+                        merged_value = t.value + " " + next_t.value
+                        merged_t = ZXBasicToken(merged_type, merged_value, line=t.line, column=t.column)
+                        merged_t.original_value = merged_value
+                        yield merged_t
+                        continue
+                    else:
+                        lookahead.append(next_t)
+
+            yield t
 
 
-def p_co_statements_co(p):
-    """co_statements_co : co_statements CO
-    | co_statements_co CO
-    | CO
-    """
-    p[0] = p[1] if len(p) == 3 else make_nop()
+@v_args(meta=True)
+class ZXBasicTransformer(Transformer):
+    def start(self, meta, items):
+        p0 = None
+        global ast, data_ast
+        make_label(gl.ZXBASIC_USER_DATA, 0)
+        make_label(gl.ZXBASIC_USER_DATA_LEN, 0)
+        if PRINT_IS_USED:
+            getattr(OPTIONS, "__DEFINES")["___PRINT_IS_USED___"] = 1
+        if zxblex.IN_STATE:
+            error(meta.line, "Unexpected end of line")
+            sys.exit(1)
+        ast = p0 = items[0]
+        __end = make_sentence(meta_line(meta), "END", make_number(0, lineno=meta_line(meta)), sentinel=True)
+        if not is_null(ast):
+            if isinstance(ast, sym.BLOCK) and (not is_ender(ast[-1])):
+                ast.append_child(__end)
+        else:
+            ast = __end
+        SYMBOL_TABLE.check_labels()
+        SYMBOL_TABLE.check_classes()
+        if gl.has_errors:
+            return p0
+        __DEBUG__("Checking pending labels", 1)
+        if not src.api.check.check_pending_labels(ast):
+            return p0
+        __DEBUG__("Checking pending calls", 1)
+        if not src.api.check.check_pending_calls():
+            return p0
+        data_ast = make_sentence(meta_line(meta), "BLOCK")
+        for var in SYMBOL_TABLE.vars_:
+            data_ast.append_child(make_var_declaration(var))
+        for var in SYMBOL_TABLE.arrays:
+            data_ast.append_child(make_array_declaration(var))
+        return p0
 
+    def program_program_line(self, meta, items):
+        p0 = None
+        p0 = make_block(items[0], make_break(get_lineno(items[0]), items[0]))
+        return p0
 
-def p_co_statements(p):
-    """co_statements : co_statements_co statement"""
-    p[0] = make_block(p[1], p[2])
+    def program(self, meta, items):
+        p0 = None
+        p0 = make_block(items[0], items[1], make_break(get_lineno(items[1]), items[1]))
+        return p0
 
+    def program_line(self, meta, items):
+        p0 = None
+        p0 = make_nop() if len(items) + 1 == 2 else items[0]
+        return p0
 
-def p_statements_co(p):
-    """statements_co : statements CO
-    | statements_co CO
-    """
-    p[0] = p[1]
+    def co_statements_co(self, meta, items):
+        p0 = None
+        p0 = items[0] if len(items) + 1 == 3 else make_nop()
+        return p0
 
+    def co_statements(self, meta, items):
+        p0 = None
+        p0 = make_block(items[0], items[1])
+        return p0
 
-def p_statements_statement(p):
-    """statements : statement
-    | statements_co statement
-    """
-    if len(p) == 2:
-        p[0] = make_block(p[1])
-    else:
-        p[0] = make_block(p[1], p[2])
+    def statements_co(self, meta, items):
+        p0 = None
+        p0 = items[0]
+        return p0
 
+    def statements_statement(self, meta, items):
+        p0 = None
+        if len(items) + 1 == 2:
+            p0 = make_block(items[0])
+        else:
+            p0 = make_block(items[0], items[1])
+        return p0
 
-def p_var_decls(p):
-    """statement : var_decl"""
-    p[0] = p[1]
+    def var_decls(self, meta, items):
+        p0 = None
+        p0 = items[0]
+        return p0
 
+    def label(self, meta, items):
+        p0 = None
+        p0 = make_label(items[0], get_lineno(items[0]))
+        return p0
 
-def p_label(p):
-    """label : LABEL"""
-    p[0] = make_label(p[1], p.lineno(1))
+    def program_line_label(self, meta, items):
+        p0 = None
+        lbl = items[0]
+        p0 = make_block(lbl, items[1]) if len(items) + 1 == 3 else lbl
+        return p0
 
+    def label_line_label_line_co(self, meta, items):
+        p0 = None
+        p0 = items[0]
+        return p0
 
-def p_program_line_label(p):
-    """label_line : label statements
-    | label co_statements
-    """
-    lbl = p[1]
-    p[0] = make_block(lbl, p[2]) if len(p) == 3 else lbl
+    def label_line_co(self, meta, items):
+        p0 = None
+        lbl = items[0]
+        p0 = make_block(lbl, items[1]) if len(items) + 1 == 3 else lbl
+        return p0
 
+    def program_line_co(self, meta, items):
+        p0 = None
+        p0 = items[0] if len(items) + 1 == 2 else make_block(items[0], items[1])
+        return p0
 
-def p_label_line_label_line_co(p):
-    """label_line : label_line_co"""
-    p[0] = p[1]
+    def var_decl(self, meta, items):
+        p0 = None
+        for vardata in items[1]:
+            SYMBOL_TABLE.declare_variable(vardata[0], vardata[1], items[2])
+        p0 = None
+        return p0
 
+    def var_decl_at(self, meta, items):
+        p0 = None
+        p0 = None
+        if items[1] is None or items[2] is None or items[4] is None:
+            return p0
+        if len(items[1]) != 1:
+            error(get_lineno(items[0]), "Only one variable at a time can be declared this way")
+            return p0
+        idlist = items[1][0]
+        entry = SYMBOL_TABLE.declare_variable(idlist[0], idlist[1], items[2])
+        if entry is None:
+            return p0
+        if items[4].token == "CONSTEXPR":
+            tmp = items[4].expr
+            entry.addr = tmp
+        elif not is_static(items[4]):
+            errmsg.syntax_error_address_must_be_constant(get_lineno(items[3]))
+            return p0
+        else:
+            entry.addr = make_typecast(_TYPE(gl.PTR_TYPE), items[4], get_lineno(items[3]))
+            mark_entry_as_accessed(entry)
+            if entry.scope == SCOPE.local:
+                SYMBOL_TABLE.make_static(entry.name)
+        return p0
 
-def p_label_line_co(p):
-    """label_line_co : label statements_co %prec CO
-    | label co_statements_co %prec CO
-    | label %prec CO
-    """
-    lbl = p[1]
-    p[0] = make_block(lbl, p[2]) if len(p) == 3 else lbl
+    def var_decl_ini(self, meta, items):
+        p0 = None
+        keyword, idlist, typedef, expr = (items[0], items[1], items[2], items[4])
+        if len(idlist) != 1:
+            error(get_lineno(items[0]), "Initialized variables must be declared one by one.")
+            return p0
 
+        if expr is None:
+            return p0
 
-def p_program_line_co(p):
-    """program_co : program %prec CO
-    | program label_line_co
-    | program co_statements_co %prec CO
-    | program statements_co %prec CO
-    """
-    p[0] = p[1] if len(p) == 2 else make_block(p[1], p[2])
+        if is_static(expr) and isinstance(expr, sym.UNARY):
+            expr = make_constexpr(get_lineno(items[3]), expr)
 
+        if typedef.implicit:
+            typedef = sym.TYPEREF(expr.type_, meta_line(meta), implicit=True)
+        value = make_typecast(typedef.type_, expr, get_lineno(items[3]))
+        defval = value if is_static(expr) and value.type_ != Type.string else None
 
-def p_var_decl(p):
-    """var_decl : DIM idlist typedef"""
-    for vardata in p[2]:
-        SYMBOL_TABLE.declare_variable(vardata[0], vardata[1], p[3])
+        if keyword == "DIM":
+            SYMBOL_TABLE.declare_variable(idlist[0].name, idlist[0].lineno, typedef, default_value=defval)
+        else:
+            if defval is None:
+                if not is_static_str(value):
+                    errmsg.syntax_error_not_constant(get_lineno(items[3]))
+                    return p0
+                defval = value
+            SYMBOL_TABLE.declare_const(idlist[0].name, idlist[0].lineno, typedef, default_value=defval)
 
-    p[0] = None  # Variable declarations are made at the end of parsing
-
-
-def p_var_decl_at(p):
-    """var_decl : DIM idlist typedef AT expr"""
-    p[0] = None
-
-    if p[2] is None or p[3] is None or p[5] is None:
-        return
-
-    if len(p[2]) != 1:
-        error(p.lineno(1), "Only one variable at a time can be declared this way")
-        return
-
-    idlist = p[2][0]
-
-    entry = SYMBOL_TABLE.declare_variable(idlist[0], idlist[1], p[3])
-    if entry is None:
-        return
-
-    if p[5].token == "CONSTEXPR":
-        tmp = p[5].expr
-        entry.addr = tmp
-    elif not is_static(p[5]):
-        errmsg.syntax_error_address_must_be_constant(p.lineno(4))
-        return
-    else:
-        entry.addr = make_typecast(_TYPE(gl.PTR_TYPE), p[5], p.lineno(4))
-        mark_entry_as_accessed(entry)
-        if entry.scope == SCOPE.local:
-            SYMBOL_TABLE.make_static(entry.name)
-
-
-def p_var_decl_ini(p):
-    """var_decl : DIM idlist typedef EQ expr
-    | CONST idlist typedef EQ expr
-    """
-    p[0] = None
-
-    keyword, idlist, typedef, expr = p[1], p[2], p[3], p[5]
-
-    if len(idlist) != 1:
-        error(p.lineno(1), "Initialized variables must be declared one by one.")
-        return
-
-    if expr is None:
-        return
-
-    if not is_static(expr):
-        if isinstance(expr, sym.UNARY):
-            expr = make_constexpr(p.lineno(4), expr)  # Delayed constant evaluation
-
-    if typedef.implicit:
-        typedef = sym.TYPEREF(expr.type_, p.lexer.lineno, implicit=True)
-
-    value = make_typecast(typedef, expr, p.lineno(4))
-    defval = value if is_static(expr) and value.type_ != TYPE.string else None
-
-    if keyword == "DIM":
-        SYMBOL_TABLE.declare_variable(idlist[0].name, idlist[0].lineno, typedef, default_value=defval)
-    else:
-        # keyword == "CONST"
         if defval is None:
-            if not is_static_str(value):
-                errmsg.syntax_error_not_constant(p.lineno(4))
-                return
-            defval = value
+            p0 = make_sentence(
+                get_lineno(items[0]), "LET", SYMBOL_TABLE.access_var(idlist[0].name, get_lineno(items[0])), value
+            )
+        return p0
 
-        SYMBOL_TABLE.declare_const(idlist[0].name, idlist[0].lineno, typedef, default_value=defval)
+    def singleid(self, meta, items):
+        p0 = Id(name=items[0], lineno=get_lineno(items[0]))
+        return p0
 
-    if defval is None:  # Okay do a delayed initialization
-        p[0] = make_sentence(
-            p.lineno(1),
-            "LET",
-            SYMBOL_TABLE.access_var(idlist[0].name, p.lineno(1)),
-            value,
+    def idlist_id(self, meta, items):
+        p0 = [items[0]]
+        return p0
+
+    def idlist_idlist_id(self, meta, items):
+        items[0].append(items[2])
+        p0 = items[0]
+        return p0
+
+    def arr_decl(self, meta, items):
+        p0 = None
+        return p0
+
+    def arr_decl_attr(self, meta, items):
+        p0 = None
+        arr_decl, expr = (items[0], items[2])
+        if arr_decl is None or expr is None:
+            p0 = None
+            return p0
+        if expr.token == "CONSTEXPR":
+            expr = expr.expr
+            if expr.token == "UNARY" and expr.operator == "ADDRESS":
+                if expr.operand.token == "ARRAYACCESS":
+                    if expr.operand.offset is None:
+                        error(get_lineno(items[3]), "Address is not constant. Only constant subscripts are allowed")
+                        return p0
+                else:
+                    if expr.operand.token not in ("ID", "VAR", "LABEL"):
+                        error(get_lineno(items[2]), "Only addresses of identifiers are allowed")
+                        return p0
+                    expr.operand.has_address = True
+        elif not is_static(expr):
+            errmsg.syntax_error_address_must_be_constant(get_lineno(items[2]))
+            return p0
+        arr_entry = SYMBOL_TABLE.access_array(arr_decl[0], arr_decl[1])
+        arr_entry.addr = make_typecast(_TYPE(gl.PTR_TYPE), expr, get_lineno(items[1]))
+        if arr_entry.scope == SCOPE.local:
+            SYMBOL_TABLE.make_static(arr_entry.name)
+        p0 = items[0]
+        return p0
+
+    def decl_arr(self, meta, items):
+        p0 = None
+        if len(items[1]) != 1:
+            error(get_lineno(items[0]), "Array declaration only allows one variable name at a time")
+        else:
+            id_, lineno = items[1][0]
+            SYMBOL_TABLE.declare_array(id_, lineno, items[5], items[3])
+        p0 = items[1][0]
+        return p0
+
+    def arr_decl_initialized(self, meta, items):
+
+        def check_bound(boundlist, remaining):
+            lineno = get_lineno(items[6])
+            if not boundlist:
+                if not isinstance(remaining, list):
+                    return True
+                error(lineno, "Unexpected extra vector dimensions. It should be %i" % len(remaining))
+                return False
+            if not isinstance(remaining, list):
+                error(lineno, "Mismatched vector size. Missing %i extra dimension(s)" % len(boundlist))
+                return False
+            if len(remaining) != boundlist[0].count:
+                error(
+                    lineno,
+                    "Mismatched vector size. Expected %i elements, got %i." % (boundlist[0].count, len(remaining)),
+                )
+                return False
+            for row in remaining:
+                if not check_bound(boundlist[1:], row):
+                    return False
+            return True
+
+        p0 = None
+
+        if items[3] is None or items[5] is None or items[7] is None:
+            return p0
+
+        if not check_bound(items[3].children, items[7]):
+            return p0
+
+        id_, lineno = items[1][0]
+        SYMBOL_TABLE.declare_array(id_, lineno, items[5], items[3], default_value=items[7])
+        entry = SYMBOL_TABLE.get_entry(id_)
+        if entry is None:
+            return p0
+
+        if items[5] == Type.string or entry.type_ == Type.string:
+            errmsg.syntax_error_cannot_initialize_array_of_type(get_lineno(items[0]), Type.string)
+            return p0
+
+        return p0
+
+    def bound_list(self, meta, items):
+        p0 = make_bound_list(items[0])
+        return p0
+
+    def bound_list_bound(self, meta, items):
+        p0 = make_bound_list(items[0], items[2])
+        return p0
+
+    def bound(self, meta, items):
+        p0 = make_bound(make_number(OPTIONS.array_base, lineno=get_lineno(items[0])), items[0], meta_line(meta))
+        return p0
+
+    def bound_to_bound(self, meta, items):
+        p0 = make_bound(items[0], items[2], get_lineno(items[1]))
+        return p0
+
+    def const_vector(self, meta, items):
+        p0 = items[1]
+        return p0
+
+    def const_vector_elem_list(self, meta, items):
+        p0 = None
+        if items[0] is None:
+            return p0
+
+        if not is_static(items[0]):
+            if isinstance(items[0], sym.UNARY):
+                tmp = make_constexpr(get_lineno(items[0]), items[0])
+            else:
+                errmsg.syntax_error_not_constant(meta_line(meta))
+                return p0
+        else:
+            tmp = items[0]
+
+        p0 = [tmp]
+        return p0
+
+    def const_vector_elem_list_list(self, meta, items):
+        p0 = None
+        if items[0] is None or items[2] is None:
+            return p0
+        if not is_static(items[2]):
+            if isinstance(items[2], sym.UNARY):
+                tmp = make_constexpr(get_lineno(items[1]), items[2])
+            else:
+                errmsg.syntax_error_not_constant(get_lineno(items[1]))
+                p0 = None
+                return p0
+        else:
+            tmp = items[2]
+        if items[0] is not None:
+            items[0].append(tmp)
+        p0 = items[0]
+        return p0
+
+    def const_vector_list(self, meta, items):
+        p0 = [items[0]]
+        return p0
+
+    def const_vector_vector_list(self, meta, items):
+        if len(items[2]) != len(items[0][0]):
+            error(get_lineno(items[1]), "All rows must have the same number of elements")
+            p0 = None
+            return p0
+        p0 = items[0] + [items[2]]
+        return p0
+
+    def staement_func_decl(self, meta, items):
+        p0 = items[0]
+        return p0
+
+    def statement_border(self, meta, items):
+        p0 = make_sentence(get_lineno(items[0]), "BORDER", make_typecast(Type.ubyte, items[1], get_lineno(items[0])))
+        return p0
+
+    def statement_plot(self, meta, items):
+        p0 = make_sentence(
+            get_lineno(items[0]),
+            "PLOT",
+            make_typecast(Type.ubyte, items[1], get_lineno(items[2])),
+            make_typecast(Type.ubyte, items[3], get_lineno(items[2])),
+        )
+        return p0
+
+    def statement_plot_attr(self, meta, items):
+        p0 = make_sentence(
+            get_lineno(items[0]),
+            "PLOT",
+            make_typecast(Type.ubyte, items[2], get_lineno(items[3])),
+            make_typecast(Type.ubyte, items[4], get_lineno(items[3])),
+            items[1],
+        )
+        return p0
+
+    def statement_draw3(self, meta, items):
+        p0 = make_sentence(
+            get_lineno(items[0]),
+            "DRAW3",
+            make_typecast(Type.integer, items[1], get_lineno(items[2])),
+            make_typecast(Type.integer, items[3], get_lineno(items[4])),
+            make_typecast(Type.float_, items[5], get_lineno(items[4])),
+        )
+        return p0
+
+    def statement_draw3_attr(self, meta, items):
+        p0 = make_sentence(
+            get_lineno(items[0]),
+            "DRAW3",
+            make_typecast(Type.integer, items[2], get_lineno(items[3])),
+            make_typecast(Type.integer, items[4], get_lineno(items[5])),
+            make_typecast(Type.float_, items[6], get_lineno(items[5])),
+            items[1],
+        )
+        return p0
+
+    def statement_draw(self, meta, items):
+        p0 = make_sentence(
+            get_lineno(items[0]),
+            "DRAW",
+            make_typecast(Type.integer, items[1], get_lineno(items[2])),
+            make_typecast(Type.integer, items[3], get_lineno(items[2])),
+        )
+        return p0
+
+    def statement_draw_attr(self, meta, items):
+        p0 = make_sentence(
+            get_lineno(items[0]),
+            "DRAW",
+            make_typecast(Type.integer, items[2], get_lineno(items[3])),
+            make_typecast(Type.integer, items[4], get_lineno(items[3])),
+            items[1],
+        )
+        return p0
+
+    def statement_circle(self, meta, items):
+        p0 = make_sentence(
+            get_lineno(items[0]),
+            "CIRCLE",
+            make_typecast(Type.byte_, items[1], get_lineno(items[2])),
+            make_typecast(Type.byte_, items[3], get_lineno(items[4])),
+            make_typecast(Type.byte_, items[5], get_lineno(items[4])),
+        )
+        return p0
+
+    def statement_circle_attr(self, meta, items):
+        p0 = make_sentence(
+            get_lineno(items[0]),
+            "CIRCLE",
+            make_typecast(Type.byte_, items[2], get_lineno(items[3])),
+            make_typecast(Type.byte_, items[4], get_lineno(items[5])),
+            make_typecast(Type.byte_, items[6], get_lineno(items[5])),
+            items[1],
+        )
+        return p0
+
+    def statement_cls(self, meta, items):
+        p0 = make_sentence(get_lineno(items[0]), "CLS")
+        return p0
+
+    def statement_asm(self, meta, items):
+        p0 = make_asm_sentence(items[0], get_lineno(items[0]))
+        return p0
+
+    def statement_randomize(self, meta, items):
+        p0 = make_sentence(
+            get_lineno(items[0]), "RANDOMIZE", make_number(0, lineno=get_lineno(items[0]), type_=Type.ulong)
+        )
+        return p0
+
+    def statement_randomize_expr(self, meta, items):
+        p0 = make_sentence(get_lineno(items[0]), "RANDOMIZE", make_typecast(Type.ulong, items[1], get_lineno(items[0])))
+        return p0
+
+    def statement_beep(self, meta, items):
+        p0 = make_sentence(
+            get_lineno(items[0]),
+            "BEEP",
+            make_typecast(Type.float_, items[1], get_lineno(items[0])),
+            make_typecast(Type.float_, items[3], get_lineno(items[2])),
+        )
+        return p0
+
+    def statement_call(self, meta, items):
+        if len(items) + 1 > 2 and items[1] is None:
+            p0 = None
+        elif len(items) + 1 == 2:
+            entry = SYMBOL_TABLE.get_entry(items[0])
+            if entry is not None and entry.class_ in (CLASS.label, CLASS.unknown):
+                p0 = make_label(items[0], get_lineno(items[0]))
+            else:
+                p0 = make_sub_call(items[0], get_lineno(items[0]), make_arg_list(None))
+        else:
+            p0 = make_sub_call(items[0], get_lineno(items[0]), items[1])
+
+        return p0
+
+    def assignment(self, meta, items):
+        global LET_ASSIGNMENT
+        LET_ASSIGNMENT = False
+        p0 = None
+        q = items[0:]
+        i = 1
+        if q[1] is None:
+            return p0
+
+        if q[1].token == "VAR" and q[1].class_ == CLASS.unknown:
+            q[1] = SYMBOL_TABLE.access_var(q[1].name, get_lineno(items[i - 1]))
+
+        q1class_ = q[1].class_ if q[1].token == "VAR" else CLASS.unknown
+        variable = SYMBOL_TABLE.access_id(
+            q[0], get_lineno(items[i - 1]), default_type=q[1].type_, default_class=q1class_
         )
 
+        if variable is None:
+            return p0
 
-def p_singleid(p):
-    """singleid : ID
-    | ARRAY_ID
-    """
-    p[0] = Id(name=p[1], lineno=p.lineno(1))
+        if variable.class_ == CLASS.unknown:
+            variable = variable.to_var()
 
+        if variable.class_ not in (CLASS.var, CLASS.array):
+            errmsg.syntax_error_cannot_assign_not_a_var(get_lineno(items[i - 1]), variable.name)
+            return p0
 
-def p_idlist_id(p):
-    """idlist : singleid"""
-    p[0] = [p[1]]
+        if variable.class_ == CLASS.var and q1class_ == CLASS.array:
+            error(get_lineno(items[i - 1]), "Cannot assign an array to an scalar variable")
+            return p0
 
+        expr = make_typecast(variable.type_, q[1], get_lineno(items[i - 1]))
+        p0 = make_sentence(get_lineno(items[0]), "LET", variable, expr)
+        return p0
 
-def p_idlist_idlist_id(p):
-    """idlist : idlist COMMA singleid"""
-    p[1].append(p[3])
-    p[0] = p[1]
+    def lexpr(self, meta, items):
+        global LET_ASSIGNMENT
+        LET_ASSIGNMENT = True
+        if items[0] == "LET":
+            p0 = items[1]
+            i = 2
+        else:
+            p0 = items[0]
+            i = 1
 
+        SYMBOL_TABLE.access_id(items[i - 1], get_lineno(items[i - 1]))
+        return p0
 
-def p_arr_decl(p):
-    """var_decl : var_arr_decl
-    | var_arr_decl_addr
-    """
-    p[0] = None
+    def array_copy(self, meta, items):
+        p0 = None
+        if items[0] == "LET":
+            array_id1, array_id2 = (items[1], items[3])
+            l1, l2 = (get_lineno(items[1]), get_lineno(items[3]))
+        else:
+            array_id1, array_id2 = (items[0], items[2])
+            l1, l2 = (get_lineno(items[0]), get_lineno(items[2]))
 
+        larray = SYMBOL_TABLE.access_id(array_id1, l1)
+        rarray = SYMBOL_TABLE.access_id(array_id2, l2)
 
-def p_arr_decl_attr(p):
-    """var_arr_decl_addr : var_arr_decl AT expr"""
-    arr_decl, expr = p[1], p[3]
-    if arr_decl is None or expr is None:
-        p[0] = None
-        return
+        if larray is None or rarray is None:
+            p0 = None
+            return p0
 
-    if expr.token == "CONSTEXPR":
-        expr = expr.expr
-        if expr.token == "UNARY" and expr.operator == "ADDRESS":  # Must be an ID
-            if expr.operand.token == "ARRAYACCESS":
-                if expr.operand.offset is None:
-                    error(
-                        p.lineno(4),
-                        "Address is not constant. Only constant subscripts are allowed",
-                    )
-                    return
+        if larray.type_ != rarray.type_:
+            error(l1, "Arrays must have the same element type")
+            return p0
+
+        if larray.ref.memsize != rarray.ref.memsize:
+            error(l1, "Arrays '%s' and '%s' must have the same size" % (array_id1, array_id2))
+            return p0
+
+        if larray.ref.count != rarray.ref.count:
+            warning(l1, "Arrays '%s' and '%s' don't have the same number of dimensions" % (larray.name, rarray.name))
+        else:
+            for b1, b2 in zip(larray.ref.bounds, rarray.ref.bounds):
+                if b1.count != b2.count:
+                    warning(l1, "Arrays '%s' and '%s' don't have the same dimensions" % (array_id1, array_id2))
+                    break
+
+        mark_entry_as_accessed(larray)
+        mark_entry_as_accessed(rarray)
+        p0 = make_sentence(get_lineno(items[0]), "ARRAYCOPY", larray, rarray)
+        return p0
+
+    def arr_assignment(self, meta, items):
+        i = 2 if items[0].upper() == "LET" else 1
+        id_ = items[i - 1]
+        arg_list = items[i + 1 - 1]
+        expr = items[i + 3 - 1]
+        p0 = None
+        if arg_list is None or expr is None:
+            return p0
+
+        entry = SYMBOL_TABLE.access_call(id_, get_lineno(items[i - 1]))
+        if entry is None:
+            return p0
+
+        if entry.type_ == Type.string:
+            variable = gl.SYMBOL_TABLE.access_array(id_, get_lineno(items[i - 1]))
+            if len(variable.ref.bounds) and len(variable.ref.bounds) + 1 == len(arg_list):
+                ss = arg_list.children.pop().value
+                p0 = make_array_substr_assign(get_lineno(items[i - 1]), id_, arg_list, (ss, ss), expr)
+                return p0
+
+        arr = make_array_access(id_, get_lineno(items[i - 1]), arg_list)
+        if arr is None:
+            return p0
+
+        expr = make_typecast(arr.type_, expr, get_lineno(items[i - 1]))
+        if entry is None:
+            return p0
+
+        if entry.addr is not None:
+            mark_entry_as_accessed(entry)
+        p0 = make_sentence(get_lineno(items[0]), "LETARRAY", arr, expr)
+        return p0
+
+    def substr_assignment_no_let(self, meta, items):
+        p0 = None
+        entry = SYMBOL_TABLE.access_call(items[0], get_lineno(items[0]))
+        if entry is None:
+            return p0
+
+        if entry.class_ == CLASS.unknown:
+            errmsg.warning_uninitalized_string_var(get_lineno(items[0]), entry.name)
+            entry.to_var()
+
+        if items[5].type_ != Type.string:
+            errmsg.syntax_error_expected_string(get_lineno(items[4]), items[5].type_)
+
+        lineno = get_lineno(items[1])
+        base = make_number(OPTIONS.string_base, lineno, _TYPE(gl.STR_INDEX_TYPE))
+        substr = make_typecast(_TYPE(gl.STR_INDEX_TYPE), items[2], lineno)
+        p0 = make_sentence(
+            get_lineno(items[0]),
+            "LETSUBSTR",
+            entry,
+            make_binary(lineno, "MINUS", substr, base, func=lambda x, y: x - y),
+            make_binary(lineno, "MINUS", substr, base, func=lambda x, y: x - y),
+            items[5],
+        )
+        return p0
+
+    def substr_assignment(self, meta, items):
+        p0 = None
+        if items[2] is None or items[4] is None:
+            return p0
+
+        entry = SYMBOL_TABLE.access_call(items[1], get_lineno(items[1]))
+        if entry is None:
+            return p0
+
+        if entry.class_ == CLASS.unknown:
+            entry = entry.to_var()
+
+        if entry.class_ != CLASS.var:
+            errmsg.syntax_error_cannot_assign_not_a_var(get_lineno(items[1]), items[1])
+            return p0
+
+        if entry.type_ != Type.string:
+            errmsg.syntax_error_expected_string(get_lineno(items[1]), entry.type_)
+            return p0
+
+        if items[4].type_ != Type.string:
+            errmsg.syntax_error_expected_string(get_lineno(items[3]), items[4].type_)
+            return p0
+
+        if len(items[2]) > 1:
+            error(get_lineno(items[1]), "Accessing string with too many indexes. Expected only one.")
+            return p0
+
+        if len(items[2]) == 1:
+            substr = (
+                make_typecast(_TYPE(gl.STR_INDEX_TYPE), items[2][0].value, get_lineno(items[1])),
+                make_typecast(_TYPE(gl.STR_INDEX_TYPE), items[2][0].value, get_lineno(items[1])),
+            )
+        else:
+            substr = (
+                make_typecast(
+                    _TYPE(gl.STR_INDEX_TYPE),
+                    make_number(gl.MIN_STRSLICE_IDX, lineno=get_lineno(items[1])),
+                    get_lineno(items[1]),
+                ),
+                make_typecast(
+                    _TYPE(gl.STR_INDEX_TYPE),
+                    make_number(gl.MAX_STRSLICE_IDX, lineno=get_lineno(items[1])),
+                    get_lineno(items[1]),
+                ),
+            )
+
+        lineno = get_lineno(items[1])
+        base = make_number(OPTIONS.string_base, lineno, _TYPE(gl.STR_INDEX_TYPE))
+        p0 = make_sentence(
+            get_lineno(items[0]),
+            "LETSUBSTR",
+            entry,
+            make_binary(lineno, "MINUS", substr[0], base, func=lambda x, y: x - y),
+            make_binary(lineno, "MINUS", substr[1], base, func=lambda x, y: x - y),
+            items[4],
+        )
+        return p0
+
+    def str_assign(self, meta, items):
+        p0 = None
+        if items[0].upper() != "LET":
+            q = items[0]
+            r = items[3]
+            s = items[1]
+            lineno = get_lineno(items[2])
+        else:
+            q = items[1]
+            r = items[4]
+            s = items[2]
+            lineno = get_lineno(items[3])
+        if q is None or s is None:
+            return p0
+
+        if r.type_ != Type.string:
+            errmsg.syntax_error_expected_string(lineno, r.type_)
+
+        entry = SYMBOL_TABLE.access_var(q, lineno, default_type=Type.string)
+        if entry is None:
+            return p0
+
+        p0 = make_sentence(get_lineno(items[0]), "LETSUBSTR", entry, s[0], s[1], r)
+        return p0
+
+    def goto(self, meta, items):
+        p0 = None
+        entry = check_and_make_label(items[1], get_lineno(items[1]))
+        if entry is not None:
+            p0 = make_sentence(get_lineno(items[0]), items[0].upper(), entry)
+
+        return p0
+
+    def go(self, meta, items):
+        p0 = None
+        p0 = items[0]
+        if p0 == "GO":
+            p0 += items[1]
+        if p0 == "GOSUB" and FUNCTION_LEVEL:
+            error(get_lineno(items[0]), "GOSUB not allowed within SUB or FUNCTION")
+        return p0
+
+    def if_sentence(self, meta, items):
+        p0 = None
+        cond_ = items[0]
+        if len(items) + 1 == 6:
+            lbl = items[2]
+            stat_ = make_block(lbl, items[3])
+            endif_ = items[4]
+        elif len(items) + 1 == 5:
+            stat_ = items[2]
+            endif_ = items[3]
+        else:
+            stat_ = make_nop()
+            endif_ = items[2]
+        p0 = make_sentence(get_lineno(items[1]), "IF", cond_, make_block(stat_, endif_))
+        return p0
+
+    def endif(self, meta, items):
+        p0 = None
+        p0 = (
+            make_nop()
+            if getattr(items[0], "type", None) in ("END", "ENDIF", "END_IF") or items[0] in ("END", "ENDIF", "END_IF")
+            else items[0]
+        )
+        return p0
+
+    def statement_if(self, meta, items):
+        p0 = None
+        p0 = items[0]
+        return p0
+
+    def statement_if_then_endif(self, meta, items):
+        p0 = None
+        cond_ = items[0]
+        stat_ = items[1]
+        endif_ = items[2]
+        p0 = make_sentence(get_lineno(items[0]), "IF", cond_, make_block(stat_, endif_))
+        return p0
+
+    def single_line_if(self, meta, items):
+        p0 = None
+        cond_ = items[0]
+        stat_ = items[1]
+        p0 = make_sentence(get_lineno(items[0]), "IF", cond_, stat_)
+        return p0
+
+    def if_elseif(self, meta, items):
+        p0 = None
+        cond_ = items[0]
+        stats_ = items[2] if len(items) + 1 == 5 else make_nop()
+        eliflist = items[3] if len(items) + 1 == 5 else items[2]
+        p0 = make_sentence(get_lineno(items[1]), "IF", cond_, stats_, eliflist)
+        return p0
+
+    def elseif_part(self, meta, items):
+        p0 = None
+        if items[0] == "ELSEIF":
+            label_ = make_nop()
+            cond_ = items[1]
+        else:
+            label_ = items[0]
+            cond_ = items[2]
+        p0 = (label_, cond_)
+        return p0
+
+    def elseif_list(self, meta, items):
+        p0 = None
+        label_, cond_ = items[0]
+        then_ = items[1]
+        else_ = items[2]
+        if isinstance(else_, list):
+            else_ = make_block(*else_)
+        else:
+            then_ = make_block(then_, else_)
+            else_ = None
+        p0 = make_block(label_, make_sentence(get_lineno(items[0]), "IF", cond_, then_, else_))
+        return p0
+
+    def elseif_elseiflist(self, meta, items):
+        p0 = None
+        label_, cond_ = items[0]
+        then_ = items[1]
+        else_ = items[2]
+        p0 = make_block(label_, make_sentence(get_lineno(items[0]), "IF", cond_, then_, else_))
+        return p0
+
+    def else_part_endif(self, meta, items):
+        p0 = None
+        if items[1] == "\n":
+            if len(items) + 1 == 4:
+                p0 = [make_nop(), items[2]]
+            elif len(items) + 1 == 6:
+                p0 = [items[2], items[3], items[4]]
             else:
-                if expr.operand.token not in ("ID", "VAR", "LABEL"):
-                    error(p.lineno(3), "Only addresses of identifiers are allowed")
-                    return
-                expr.operand.has_address = True
+                p0 = [items[2], items[3]]
+        else:
+            p0 = [items[1], items[2]]
+        return p0
 
-    elif not is_static(expr):
-        errmsg.syntax_error_address_must_be_constant(p.lineno(3))
-        return
+    def else_part(self, meta, items):
+        p0 = None
+        p0 = [items[1], make_nop()]
+        return p0
 
-    arr_entry = SYMBOL_TABLE.access_array(arr_decl[0], arr_decl[1])
-    arr_entry.addr = make_typecast(_TYPE(gl.PTR_TYPE), expr, p.lineno(2))
-    if arr_entry.scope == SCOPE.local:
-        SYMBOL_TABLE.make_static(arr_entry.name)
+    def else_part_is_inline(self, meta, items):
+        p0 = None
+        p0 = items[0]
+        return p0
 
-    p[0] = p[1]
+    def else_part_label(self, meta, items):
+        p0 = None
+        lbl = items[0]
+        p0 = [make_block(lbl, items[2]), items[3]]
+        return p0
 
+    def if_then_part(self, meta, items):
+        p0 = None
+        expr = items[1]
+        if expr is None:
+            p0 = None
+            return p0
+        if is_number(expr):
+            errmsg.warning_condition_is_always(get_lineno(items[0]), bool(expr.value))
+        p0 = expr
+        return p0
 
-def p_decl_arr(p):
-    """var_arr_decl : DIM idlist LP bound_list RP typedef"""
-    if len(p[2]) != 1:
-        error(p.lineno(1), "Array declaration only allows one variable name at a time")
-    else:
-        id_, lineno = p[2][0]
-        SYMBOL_TABLE.declare_array(id_, lineno, p[6], p[4])
+    def if_inline(self, meta, items):
+        p0 = None
+        items[0].append_child(make_block(items[1][0], items[1][1]))
+        p0 = items[0]
+        return p0
 
-    p[0] = p[2][0]
+    def if_else(self, meta, items):
+        p0 = None
+        cond_ = items[0]
+        then_ = items[2]
+        else_ = items[3][0]
+        endif = items[3][1]
+        p0 = make_sentence(get_lineno(items[1]), "IF", cond_, then_, make_block(else_, endif))
+        return p0
 
+    def then(self, meta, items):
+        p0 = None
+        return p0
 
-def p_arr_decl_initialized(p):
-    """var_decl : DIM idlist LP bound_list RP typedef RIGHTARROW const_vector
-    | DIM idlist LP bound_list RP typedef EQ const_vector
-    """
+    def for_sentence(self, meta, items):
+        p0 = None
+        p0 = items[0]
+        if is_null(p0):
+            return p0
+        items[0].append_child(make_block(items[1], items[2]))
+        gl.LOOPS.pop()
+        return p0
 
-    def check_bound(boundlist, remaining):
-        """Checks if constant vector bounds matches the array one"""
-        lineno = p.lineno(8)
-        if not boundlist:  # Returns on empty list
-            if not isinstance(remaining, list):
-                return True  # It's OK :-)
+    def next(self, meta, items):
+        p0 = None
+        p0 = make_nop() if items[0] == "NEXT" else items[0]
+        return p0
 
-            error(
-                lineno,
-                "Unexpected extra vector dimensions. It should be %i" % len(remaining),
+    def next1(self, meta, items):
+        p0 = None
+        if items[0] == "NEXT":
+            p1 = make_nop()
+            p3 = items[1]
+        else:
+            p1 = items[0]
+            p3 = items[2]
+        if p3 != gl.LOOPS[-1].var:
+            errmsg.syntax_error_wrong_for_var(get_lineno(items[1]), gl.LOOPS[-1].var, p3)
+            p0 = make_nop()
+            return p0
+        p0 = p1
+        return p0
+
+    def for_sentence_start(self, meta, items):
+        p0 = None
+        gl.LOOPS.append(LoopInfo(type=LoopType.FOR, lineno=get_lineno(items[0]), var=items[1]))
+        p0 = None
+        if items[3] is None or items[5] is None or items[6] is None:
+            return p0
+        if is_number(items[3], items[5], items[6]):
+            if items[3].value != items[5].value and items[6].value == 0:
+                warning(get_lineno(items[4]), "STEP value is 0 and FOR might loop forever")
+            if items[3].value > items[5].value and items[6].value > 0:
+                warning(get_lineno(items[4]), "FOR start value is greater than end. This FOR loop is useless")
+            if items[3].value < items[5].value and items[6].value < 0:
+                warning(get_lineno(items[1]), "FOR start value is lower than end. This FOR loop is useless")
+        id_type = common_type(common_type(items[3].type_, items[5].type_), items[6].type_)
+        variable = SYMBOL_TABLE.access_var(items[1], get_lineno(items[1]), default_type=id_type)
+        if variable is None:
+            return p0
+        mark_entry_as_accessed(variable)
+        expr1 = make_typecast(variable.type_, items[3], get_lineno(items[2]))
+        expr2 = make_typecast(variable.type_, items[5], get_lineno(items[4]))
+        expr3 = make_typecast(variable.type_, items[6], meta_line(meta))
+        p0 = make_sentence(get_lineno(items[0]), "FOR", variable, expr1, expr2, expr3)
+        return p0
+
+    def step(self, meta, items):
+        p0 = None
+        p0 = make_number(1, lineno=meta_line(meta))
+        return p0
+
+    def step_expr(self, meta, items):
+        p0 = None
+        p0 = items[1]
+        return p0
+
+    def end(self, meta, items):
+        p0 = None
+        q = make_number(0, lineno=get_lineno(items[0])) if len(items) + 1 == 2 else items[1]
+        p0 = make_sentence(get_lineno(items[0]), "END", q)
+        return p0
+
+    def error_raise(self, meta, items):
+        p0 = None
+        q = make_number(1, lineno=get_lineno(items[1]))
+        r = make_binary(
+            get_lineno(items[0]),
+            "MINUS",
+            make_typecast(Type.ubyte, items[1], get_lineno(items[0])),
+            q,
+            lambda x, y: x - y,
+        )
+        p0 = make_sentence(get_lineno(items[0]), "ERROR", r)
+        return p0
+
+    def stop_raise(self, meta, items):
+        p0 = None
+        q = make_number(9, lineno=get_lineno(items[0])) if len(items) + 1 == 2 else items[1]
+        z = make_number(1, lineno=get_lineno(items[0]))
+        r = make_binary(
+            get_lineno(items[0]), "MINUS", make_typecast(Type.ubyte, q, get_lineno(items[0])), z, lambda x, y: x - y
+        )
+        p0 = make_sentence(get_lineno(items[0]), "STOP", r)
+        return p0
+
+    def loop(self, meta, items):
+        p0 = None
+        if items[0] == "LOOP":
+            p0 = None
+        else:
+            p0 = items[0]
+        return p0
+
+    def do_loop(self, meta, items):
+        p0 = None
+        if len(items) + 1 == 4:
+            q = make_block(items[1], items[2])
+        else:
+            q = items[1]
+        if items[0] == "DO":
+            gl.LOOPS.append(LoopInfo(LoopType.DO, get_lineno(items[0])))
+        if q is None:
+            warning(get_lineno(items[0]), "Infinite empty loop")
+        p0 = make_sentence(get_lineno(items[0]), "DO_LOOP", q)
+        gl.LOOPS.pop()
+        return p0
+
+    def do_loop_until(self, meta, items):
+        p0 = None
+        p0 = None
+        if len(items) + 1 == 6:
+            q = make_block(items[1], items[2])
+            r = items[4]
+        else:
+            q = items[1]
+            r = items[3]
+        if items[0] == "DO":
+            gl.LOOPS.append(LoopInfo(LoopType.DO, get_lineno(items[0])))
+        p0 = make_sentence(get_lineno(items[0]), "DO_UNTIL", r, q)
+        gl.LOOPS.pop()
+        if is_number(r):
+            errmsg.warning_condition_is_always(get_lineno(items[-2]), bool(r.value))
+        if q is None:
+            errmsg.warning_empty_loop(get_lineno(items[-2]))
+        return p0
+
+    def data(self, meta, items):
+        p0 = None
+        label_ = make_label(gl.DATA_PTR_CURRENT, lineno=get_lineno(items[0]))
+        datas_ = []
+        funcs = []
+        if items[1] is None:
+            p0 = None
+            return p0
+        if gl.FUNCTION_LEVEL:
+            errmsg.error(get_lineno(items[0]), "DATA not allowed within Functions nor Subs")
+            p0 = None
+            return p0
+        for d in items[1].children:
+            value = d.value
+            if is_static(value):
+                datas_.append(d)
+                continue
+            new_lbl = f"__DATA__FUNCPTR__{len(gl.DATA_FUNCTIONS)}"
+            type_ = value.type_
+            assert isinstance(type_, sym.TYPING)
+            if isinstance(type_, sym.TYPE):
+                type_ = sym.TYPEREF(value.type_, 0)
+            entry = make_func_declaration(new_lbl, get_lineno(items[0]), type_=type_, class_=CLASS.function)
+            if not entry:
+                continue
+            func = entry.entry
+            func.ref.convention = CONVENTION.fastcall
+            SYMBOL_TABLE.enter_scope(new_lbl)
+            func.ref.local_symbol_table = SYMBOL_TABLE.current_scope
+            func.ref.locals_size = SYMBOL_TABLE.leave_scope()
+            gl.DATA_FUNCTIONS.append(func)
+            sent = make_sentence(get_lineno(items[0]), "RETURN", func, value)
+            func.ref.body = make_block(sent)
+            datas_.append(entry)
+            funcs.append(entry)
+        gl.DATAS.append(src.api.dataref.DataRef(label_, datas_))
+        id_ = src.api.utils.current_data_label()
+        gl.DATA_PTR_CURRENT = id_
+        return p0
+
+    def restore(self, meta, items):
+        p0 = None
+        if len(items) + 1 == 2:
+            lbl = None
+        else:
+            lbl = check_and_make_label(items[1], get_lineno(items[0]))
+        p0 = make_sentence(get_lineno(items[0]), "RESTORE", lbl)
+        return p0
+
+    def read(self, meta, items):
+        p0 = None
+        gl.DATA_IS_USED = True
+        reads = []
+        if items[1] is None:
+            return p0
+        for arg in items[1]:
+            entry = arg.value
+            if entry is None:
+                p0 = None
+                return p0
+            if entry.token == "VARARRAY":
+                errmsg.error(get_lineno(items[0]), "Cannot read '%s'. It's an array" % entry.name)
+                p0 = None
+                return p0
+            if isinstance(entry, sym.ID):
+                if entry.class_ != CLASS.var:
+                    errmsg.syntax_error_cannot_assign_not_a_var(get_lineno(items[1]), entry.name)
+                    p0 = None
+                    return p0
+                mark_entry_as_accessed(entry)
+                if entry.type_ == Type.auto:
+                    entry.type_ = _TYPE(gl.DEFAULT_TYPE)
+                    errmsg.warning_implicit_type(get_lineno(items[1]), items[1], entry.type_.name)
+                reads.append(make_sentence(get_lineno(items[0]), "READ", entry))
+                continue
+            if isinstance(entry, sym.ARRAYLOAD):
+                reads.append(
+                    make_sentence(
+                        get_lineno(items[0]),
+                        "READ",
+                        sym.ARRAYACCESS(entry.entry, entry.args, entry.lineno, gl.FILENAME),
+                    )
+                )
+                continue
+            errmsg.error(get_lineno(items[0]), "Syntax error. Can only read a variable or an array element")
+            p0 = None
+            return p0
+        p0 = make_block(*reads)
+        return p0
+
+    def do_loop_while(self, meta, items):
+        p0 = None
+        p0 = None
+        if len(items) + 1 == 6:
+            q = make_block(items[1], items[2])
+            r = items[4]
+        else:
+            q = items[1]
+            r = items[3]
+        if items[0] == "DO":
+            gl.LOOPS.append(LoopInfo(LoopType.DO, get_lineno(items[0])))
+        p0 = make_sentence(get_lineno(items[0]), "DO_WHILE", r, q)
+        gl.LOOPS.pop()
+        if is_number(r):
+            errmsg.warning_condition_is_always(get_lineno(items[-2]), bool(r.value))
+        if q is None:
+            errmsg.warning_empty_loop(get_lineno(items[-2]))
+        return p0
+
+    def do_while_loop(self, meta, items):
+        p0 = None
+        r = items[0]
+        q = items[1]
+        if q == "LOOP":
+            q = None
+        p0 = make_sentence(get_lineno(items[0]), "WHILE_DO", r, q)
+        gl.LOOPS.pop()
+        if is_number(r):
+            errmsg.warning_condition_is_always(get_lineno(items[1]), bool(r.value))
+        return p0
+
+    def do_until_loop(self, meta, items):
+        p0 = None
+        r = items[0]
+        q = items[1]
+        if q == "LOOP":
+            q = None
+        p0 = make_sentence(get_lineno(items[1]), "UNTIL_DO", r, q)
+        gl.LOOPS.pop()
+        if is_number(r):
+            errmsg.warning_condition_is_always(get_lineno(items[1]), bool(r.value))
+        return p0
+
+    def do_while_start(self, meta, items):
+        p0 = None
+        p0 = items[2]
+        gl.LOOPS.append(LoopInfo(LoopType.DO, get_lineno(items[0])))
+        return p0
+
+    def do_until_start(self, meta, items):
+        p0 = None
+        p0 = items[2]
+        gl.LOOPS.append(LoopInfo(LoopType.DO, get_lineno(items[0])))
+        return p0
+
+    def do_start(self, meta, items):
+        p0 = None
+        gl.LOOPS.append(LoopInfo(LoopType.DO, get_lineno(items[0])))
+        return p0
+
+    def label_end_while(self, meta, items):
+        p0 = None
+        if getattr(items[0], "type", None) in ("WEND", "END_WHILE") or items[0] in ("WEND", "END_WHILE"):
+            p0 = None
+        else:
+            p0 = items[0]
+        return p0
+
+    def while_sentence(self, meta, items):
+        p0 = None
+        gl.LOOPS.pop()
+        q = make_block(items[1], items[2])
+        if is_number(items[0]):
+            errmsg.warning_condition_is_always(get_lineno(items[0]), bool(items[0].value))
+        p0 = make_sentence(get_lineno(items[0]), "WHILE", items[0], q)
+        return p0
+
+    def while_start(self, meta, items):
+        p0 = None
+        p0 = items[1]
+        gl.LOOPS.append(LoopInfo(LoopType.WHILE, get_lineno(items[0])))
+        if is_number(items[1]) and (not items[1].value):
+            errmsg.warning_condition_is_always(get_lineno(items[0]))
+        return p0
+
+    def exit(self, meta, items):
+        p0 = None
+        q = items[1]
+        p0 = make_sentence(get_lineno(items[0]), "EXIT_%s" % q)
+        for loop in gl.LOOPS:
+            if q == loop.type:
+                return p0
+        error(get_lineno(items[0]), "Syntax Error: EXIT %s out of loop" % q)
+        return p0
+
+    def continue_(self, meta, items):
+        p0 = None
+        q = items[1]
+        p0 = make_sentence(get_lineno(items[0]), "CONTINUE_%s" % q)
+        for i in gl.LOOPS:
+            if q == i[0]:
+                return p0
+        error(get_lineno(items[0]), "Syntax Error: CONTINUE %s out of loop" % q)
+        return p0
+
+    def print_sentence(self, meta, items):
+        p0 = None
+        global PRINT_IS_USED
+        p0 = items[1]
+        PRINT_IS_USED = True
+        return p0
+
+    def print_elem_expr(self, meta, items):
+        p0 = None
+        p0 = items[0]
+        if items[0] is not None and items[0].type_ == Type.boolean:
+            p0 = make_typecast(Type.ubyte, items[0], get_lineno(items[0]))
+        return p0
+
+    def print_list_expr(self, meta, items):
+        p0 = None
+        if items[0] in ("BOLD", "ITALIC"):
+            p0 = make_sentence(
+                get_lineno(items[0]), items[0] + "_TMP", make_typecast(Type.ubyte, items[1], get_lineno(items[0]))
             )
-            return False
+        else:
+            p0 = items[0]
+        return p0
 
-        if not isinstance(remaining, list):
-            error(
-                lineno,
-                "Mismatched vector size. Missing %i extra dimension(s)" % len(boundlist),
+    def attr_list(self, meta, items):
+        p0 = None
+        p0 = items[0]
+        return p0
+
+    def attr_list_list(self, meta, items):
+        p0 = None
+        p0 = make_block(items[0], items[1])
+        return p0
+
+    def attr(self, meta, items):
+        p0 = None
+        p0 = make_sentence(
+            get_lineno(items[0]), items[0] + "_TMP", make_typecast(Type.ubyte, items[1], get_lineno(items[0]))
+        )
+        return p0
+
+    def print_list_epsilon(self, meta, items):
+        p0 = None
+        p0 = None
+        return p0
+
+    def print_list_elem(self, meta, items):
+        p0 = None
+        p0 = make_sentence(meta_line(meta), "PRINT", items[0])
+        p0.eol = True
+        return p0
+
+    def print_list(self, meta, items):
+        p0 = None
+        p0 = items[0]
+        p0.eol = items[2] is not None
+        if items[2] is not None:
+            p0.append_child(items[2])
+        return p0
+
+    def print_list_comma(self, meta, items):
+        p0 = None
+        p0 = items[0]
+        p0.eol = items[2] is not None
+        p0.append_child(make_sentence(get_lineno(items[1]), "PRINT_COMMA"))
+        if items[2] is not None:
+            p0.append_child(items[2])
+        return p0
+
+    def print_list_at(self, meta, items):
+        p0 = None
+        p0 = make_sentence(
+            get_lineno(items[0]),
+            "PRINT_AT",
+            make_typecast(Type.ubyte, items[1], get_lineno(items[0])),
+            make_typecast(Type.ubyte, items[3], get_lineno(items[2])),
+        )
+        return p0
+
+    def print_list_tab(self, meta, items):
+        p0 = None
+        p0 = make_sentence(get_lineno(items[0]), "PRINT_TAB", make_typecast(Type.ubyte, items[1], get_lineno(items[0])))
+        return p0
+
+    def on_goto(self, meta, items):
+        p0 = None
+        expr = make_typecast(Type.ubyte, items[1], get_lineno(items[0]))
+        p0 = make_sentence(get_lineno(items[0]), "ON_" + items[2], expr, *items[3])
+        return p0
+
+    def label_list(self, meta, items):
+        p0 = None
+        entry = check_and_make_label(items[0], get_lineno(items[0]))
+        p0 = [entry]
+        return p0
+
+    def label_list_list(self, meta, items):
+        p0 = None
+        p0 = items[0]
+        entry = check_and_make_label(items[2], get_lineno(items[2]))
+        items[0].append(entry)
+        return p0
+
+    def return_(self, meta, items):
+        p0 = None
+        if not FUNCTION_LEVEL:
+            p0 = make_sentence(get_lineno(items[0]), "RETURN")
+            return p0
+        if FUNCTION_LEVEL[-1].class_ != CLASS.sub:
+            error(get_lineno(items[0]), "Syntax Error: Function must RETURN a value.")
+            p0 = None
+            return p0
+        p0 = make_sentence(get_lineno(items[0]), "RETURN", FUNCTION_LEVEL[-1])
+        return p0
+
+    def return_expr(self, meta, items):
+        p0 = None
+        if not FUNCTION_LEVEL:
+            error(get_lineno(items[0]), "Syntax Error: Returning value out of FUNCTION")
+            p0 = None
+            return p0
+        if FUNCTION_LEVEL[-1].class_ is CLASS.unknown:
+            p0 = None
+            return p0
+        if FUNCTION_LEVEL[-1].class_ != CLASS.function:
+            error(get_lineno(items[0]), "Syntax Error: SUBs cannot return a value")
+            p0 = None
+            return p0
+        if FUNCTION_LEVEL[-1].type_ is None:
+            p0 = None
+            return p0
+        if is_numeric(items[1]) and FUNCTION_LEVEL[-1].type_.final == Type.string:
+            error(get_lineno(items[1]), "Type Error: Function must return a string, not a numeric value")
+            p0 = None
+            return p0
+        if not is_numeric(items[1]) and FUNCTION_LEVEL[-1].type_.final != Type.string:
+            error(get_lineno(items[1]), "Type Error: Function must return a numeric value, not a string")
+            p0 = None
+            return p0
+        p0 = make_sentence(
+            get_lineno(items[0]),
+            "RETURN",
+            FUNCTION_LEVEL[-1],
+            make_typecast(FUNCTION_LEVEL[-1].type_, items[1], get_lineno(items[0])),
+        )
+        return p0
+
+    def pause(self, meta, items):
+        p0 = None
+        p0 = make_sentence(get_lineno(items[0]), "PAUSE", make_typecast(Type.uinteger, items[1], get_lineno(items[0])))
+        return p0
+
+    def poke(self, meta, items):
+        p0 = None
+        i = 2 if isinstance(items[1], Symbol) or items[1] is None else 3
+        if items[i - 1] is None or items[i + 2 - 1] is None:
+            p0 = None
+            return p0
+        p0 = make_sentence(
+            get_lineno(items[0]),
+            "POKE",
+            make_typecast(Type.uinteger, items[i - 1], get_lineno(items[i + 1 - 1])),
+            make_typecast(Type.ubyte, items[i + 2 - 1], get_lineno(items[i + 1 - 1])),
+        )
+        return p0
+
+    def poke2(self, meta, items):
+        p0 = None
+        i = 2 if isinstance(items[1], Symbol) or items[1] is None else 3
+        if items[i + 1 - 1] is None or items[i + 3 - 1] is None:
+            p0 = None
+            return p0
+        p0 = make_sentence(
+            get_lineno(items[0]),
+            "POKE",
+            make_typecast(Type.uinteger, items[i + 1 - 1], get_lineno(items[i + 2 - 1])),
+            make_typecast(items[i - 1], items[i + 3 - 1], get_lineno(items[i + 3 - 1])),
+        )
+        return p0
+
+    def poke3(self, meta, items):
+        p0 = None
+        i = 2 if isinstance(items[1], Symbol) or items[1] is None else 3
+        if items[i + 2 - 1] is None or items[i + 4 - 1] is None:
+            p0 = None
+            return p0
+        p0 = make_sentence(
+            get_lineno(items[0]),
+            "POKE",
+            make_typecast(Type.uinteger, items[i + 2 - 1], get_lineno(items[i + 3 - 1])),
+            make_typecast(items[i - 1], items[i + 4 - 1], get_lineno(items[i + 5 - 1])),
+        )
+        return p0
+
+    def out(self, meta, items):
+        p0 = None
+        p0 = make_sentence(
+            get_lineno(items[0]),
+            "OUT",
+            make_typecast(Type.uinteger, items[1], get_lineno(items[2])),
+            make_typecast(Type.ubyte, items[3], get_lineno(items[3])),
+        )
+        return p0
+
+    def simple_instruction(self, meta, items):
+        p0 = None
+        p0 = make_sentence(get_lineno(items[0]), items[0], make_typecast(Type.ubyte, items[1], get_lineno(items[0])))
+        return p0
+
+    def save_code(self, meta, items):
+        p0 = None
+        expr = items[1]
+        if expr.type_ != Type.string:
+            errmsg.syntax_error_expected_string(get_lineno(items[0]), expr.type_)
+        if len(items) + 1 == 4:
+            if items[2].upper() not in ("SCREEN", "SCREEN$"):
+                error(get_lineno(items[2]), 'Unexpected "%s" ID. Expected "SCREEN$" instead' % items[2])
+                return None
+            start = make_number(16384, lineno=get_lineno(items[0]))
+            length = make_number(6912, lineno=get_lineno(items[0]))
+        else:
+            start = make_typecast(Type.uinteger, items[3], get_lineno(items[3]))
+            length = make_typecast(Type.uinteger, items[5], get_lineno(items[5]))
+        p0 = make_sentence(get_lineno(items[0]), items[0], expr, start, length)
+        return p0
+
+    def save_data(self, meta, items):
+        p0 = None
+        if items[1].type_ != Type.string:
+            errmsg.syntax_error_expected_string(get_lineno(items[0]), items[1].type_)
+        if len(items) + 1 != 4:
+            entry = SYMBOL_TABLE.access_id(items[3], get_lineno(items[3]))
+            if entry is None:
+                p0 = None
+                return p0
+            mark_entry_as_accessed(entry)
+            access = entry
+            start = make_unary(get_lineno(items[3]), "ADDRESS", access, type_=Type.uinteger)
+            if entry.class_ == CLASS.array:
+                length = make_number(entry.memsize, lineno=get_lineno(items[3]))
+            else:
+                length = make_number(entry.type_.size, lineno=get_lineno(items[3]))
+        else:
+            access = SYMBOL_TABLE.access_label(gl.ZXBASIC_USER_DATA, get_lineno(items[2]), SYMBOL_TABLE.global_scope)
+            start = make_unary(get_lineno(items[2]), "ADDRESS", access, type_=Type.uinteger)
+            access = SYMBOL_TABLE.access_label(
+                gl.ZXBASIC_USER_DATA_LEN, get_lineno(items[2]), SYMBOL_TABLE.global_scope
             )
-            return False
+            length = make_unary(get_lineno(items[2]), "ADDRESS", access, type_=Type.uinteger)
+        p0 = make_sentence(get_lineno(items[0]), items[0], items[1], start, length)
+        return p0
 
-        if len(remaining) != boundlist[0].count:
+    def load_or_verify(self, meta, items):
+        p0 = None
+        p0 = items[0]
+        return p0
+
+    def load_code(self, meta, items):
+        p0 = None
+        if items[1].type_ != Type.string:
+            errmsg.syntax_error_expected_string(get_lineno(items[2]), items[1].type_)
+        if len(items) + 1 == 4:
+            if items[2].upper() not in ("SCREEN", "SCREEN$", "CODE"):
+                error(get_lineno(items[2]), 'Unexpected "%s" ID. Expected "SCREEN$" instead' % items[2])
+                return None
+            if items[2].upper() == "CODE":
+                start = make_number(0, lineno=get_lineno(items[2]))
+                length = make_number(0, lineno=get_lineno(items[2]))
+            else:
+                start = make_number(16384, lineno=get_lineno(items[2]))
+                length = make_number(6912, lineno=get_lineno(items[2]))
+        else:
+            start = make_typecast(Type.uinteger, items[3], get_lineno(items[2]))
+            if len(items) + 1 == 5:
+                length = make_number(0, lineno=get_lineno(items[2]))
+            else:
+                length = make_typecast(Type.uinteger, items[5], get_lineno(items[4]))
+        p0 = make_sentence(get_lineno(items[2]), items[0], items[1], start, length)
+        return p0
+
+    def load_data(self, meta, items):
+        p0 = None
+        if items[1].type_ != Type.string:
+            errmsg.syntax_error_expected_string(get_lineno(items[0]), items[1].type_)
+        if len(items) + 1 != 4:
+            entry = SYMBOL_TABLE.access_id(items[3], get_lineno(items[3]))
+            if entry is None:
+                p0 = None
+                return p0
+            mark_entry_as_accessed(entry)
+            start = make_unary(get_lineno(items[3]), "ADDRESS", entry, type_=Type.uinteger)
+            if entry.class_ == CLASS.array:
+                length = make_number(entry.memsize, lineno=get_lineno(items[3]))
+            else:
+                length = make_number(entry.type_.size, lineno=get_lineno(items[3]))
+        else:
+            entry = SYMBOL_TABLE.access_label(gl.ZXBASIC_USER_DATA, get_lineno(items[2]), SYMBOL_TABLE.global_scope)
+            start = make_unary(get_lineno(items[2]), "ADDRESS", entry, type_=Type.uinteger)
+            entry = SYMBOL_TABLE.access_label(gl.ZXBASIC_USER_DATA_LEN, get_lineno(items[2]), SYMBOL_TABLE.global_scope)
+            length = make_unary(get_lineno(items[2]), "ADDRESS", entry, type_=Type.uinteger)
+        p0 = make_sentence(get_lineno(items[2]), items[0], items[1], start, length)
+        return p0
+
+    def numbertype(self, meta, items):
+        p0 = None
+        p0 = make_type(items[0].lower(), get_lineno(items[0]))
+        return p0
+
+    def expr_plus_expr(self, meta, items):
+        p0 = None
+        p0 = make_binary(get_lineno(items[1]), "PLUS", items[0], items[2], lambda x, y: x + y)
+        return p0
+
+    def expr_minus_expr(self, meta, items):
+        p0 = None
+        p0 = make_binary(get_lineno(items[1]), "MINUS", items[0], items[2], lambda x, y: x - y)
+        return p0
+
+    def expr_mul_expr(self, meta, items):
+        p0 = None
+        p0 = make_binary(get_lineno(items[1]), "MUL", items[0], items[2], lambda x, y: x * y)
+        return p0
+
+    def expr_div_expr(self, meta, items):
+        p0 = None
+        p0 = make_binary(get_lineno(items[1]), "DIV", items[0], items[2], lambda x, y: x / y)
+        return p0
+
+    def expr_mod_expr(self, meta, items):
+        p0 = None
+        p0 = make_binary(get_lineno(items[1]), "MOD", items[0], items[2], lambda x, y: x % y)
+        return p0
+
+    def expr_pow_expr(self, meta, items):
+        p0 = None
+        p0 = make_binary(
+            get_lineno(items[1]),
+            "POW",
+            make_typecast(Type.float_, items[0], get_lineno(items[1])),
+            make_typecast(Type.float_, items[2], meta_line(meta)),
+            lambda x, y: x**y,
+        )
+        return p0
+
+    def expr_shl_expr(self, meta, items):
+        p0 = None
+        if items[0] is None or items[2] is None:
+            p0 = None
+            return p0
+        if items[0].type_ in (Type.float_, Type.fixed):
+            items[0] = make_typecast(Type.ulong, items[0], get_lineno(items[1]))
+        p0 = make_binary(
+            get_lineno(items[1]),
+            "SHL",
+            items[0],
+            make_typecast(Type.ubyte, items[2], get_lineno(items[1])),
+            lambda x, y: x << y,
+        )
+        return p0
+
+    def expr_shr_expr(self, meta, items):
+        p0 = None
+        if items[0] is None or items[2] is None:
+            p0 = None
+            return p0
+        if items[0].type_ in (Type.float_, Type.fixed):
+            items[0] = make_typecast(Type.ulong, items[0], get_lineno(items[1]))
+        p0 = make_binary(
+            get_lineno(items[1]),
+            "SHR",
+            items[0],
+            make_typecast(Type.ubyte, items[2], get_lineno(items[1])),
+            lambda x, y: x >> y,
+        )
+        return p0
+
+    def minus_expr(self, meta, items):
+        p0 = None
+        p0 = make_unary(get_lineno(items[0]), "MINUS", items[1], lambda x: -x)
+        return p0
+
+    def expr_eq_expr(self, meta, items):
+        p0 = None
+        p0 = make_binary(get_lineno(items[1]), "EQ", items[0], items[2], lambda x, y: x == y)
+        return p0
+
+    def expr_lt_expr(self, meta, items):
+        p0 = None
+        p0 = make_binary(get_lineno(items[1]), "LT", items[0], items[2], lambda x, y: x < y)
+        return p0
+
+    def expr_le_expr(self, meta, items):
+        p0 = None
+        p0 = make_binary(get_lineno(items[1]), "LE", items[0], items[2], lambda x, y: x <= y)
+        return p0
+
+    def expr_gt_expr(self, meta, items):
+        p0 = None
+        p0 = make_binary(get_lineno(items[1]), "GT", items[0], items[2], lambda x, y: x > y)
+        return p0
+
+    def expr_ge_expr(self, meta, items):
+        p0 = None
+        p0 = make_binary(get_lineno(items[1]), "GE", items[0], items[2], lambda x, y: x >= y)
+        return p0
+
+    def expr_ne_expr(self, meta, items):
+        p0 = None
+        p0 = make_binary(get_lineno(items[1]), "NE", items[0], items[2], lambda x, y: x != y)
+        return p0
+
+    def expr_or_expr(self, meta, items):
+        p0 = None
+        p0 = make_binary(get_lineno(items[1]), "OR", items[0], items[2], lambda x, y: x or y)
+        return p0
+
+    def expr_bor_expr(self, meta, items):
+        p0 = None
+        p0 = make_binary(get_lineno(items[1]), "BOR", items[0], items[2], lambda x, y: x | y)
+        return p0
+
+    def expr_xor_expr(self, meta, items):
+        p0 = None
+        p0 = make_binary(get_lineno(items[1]), "XOR", items[0], items[2], lambda x, y: x and (not y) or (not x and y))
+        return p0
+
+    def expr_bxor_expr(self, meta, items):
+        p0 = None
+        p0 = make_binary(get_lineno(items[1]), "BXOR", items[0], items[2], lambda x, y: x ^ y)
+        return p0
+
+    def expr_and_expr(self, meta, items):
+        p0 = None
+        p0 = make_binary(get_lineno(items[1]), "AND", items[0], items[2], lambda x, y: x and y)
+        return p0
+
+    def expr_band_expr(self, meta, items):
+        p0 = None
+        p0 = make_binary(get_lineno(items[1]), "BAND", items[0], items[2], lambda x, y: x & y)
+        return p0
+
+    def not_expr(self, meta, items):
+        p0 = None
+        p0 = make_unary(get_lineno(items[0]), "NOT", items[1], lambda x: not x)
+        return p0
+
+    def bnot_expr(self, meta, items):
+        p0 = None
+        p0 = make_unary(get_lineno(items[0]), "BNOT", items[1], lambda x: ~x)
+        return p0
+
+    def lp_expr_rp(self, meta, items):
+        p0 = None
+        p0 = items[1]
+        return p0
+
+    def cast(self, meta, items):
+        p0 = None
+        p0 = make_typecast(items[2], items[4], get_lineno(items[5]))
+        return p0
+
+    def number_expr(self, meta, items):
+        p0 = None
+        p0 = make_number(items[0], lineno=get_lineno(items[0]))
+        return p0
+
+    def expr_pi(self, meta, items):
+        p0 = None
+        p0 = make_number(PI, lineno=get_lineno(items[0]), type_=Type.float_)
+        return p0
+
+    def expr_string(self, meta, items):
+        p0 = None
+        p0 = items[0]
+        return p0
+
+    def string_func_call(self, meta, items):
+        p0 = None
+        p0 = make_strslice(get_lineno(items[0]), items[0], items[1][0], items[1][1])
+        return p0
+
+    def string_func_call_single(self, meta, items):
+        p0 = None
+        p0 = make_strslice(get_lineno(items[0]), items[0], items[2], items[2])
+        return p0
+
+    def string_str(self, meta, items):
+        p0 = None
+        p0 = sym.STRING(items[0], get_lineno(items[0]))
+        return p0
+
+    def string_lprp(self, meta, items):
+        p0 = None
+        p0 = items[0]
+        return p0
+
+    def string_lp_expr_rp(self, meta, items):
+        p0 = None
+        p0 = make_strslice(get_lineno(items[1]), items[0], items[2], items[2])
+        return p0
+
+    def expr_id_substr(self, meta, items):
+        p0 = None
+        entry = SYMBOL_TABLE.get_entry(items[0])
+        if entry is not None and entry.type_ == Type.string and (entry.token == "CONST"):
+            p0 = make_strslice(get_lineno(items[0]), entry, items[1][0], items[1][1])
+            return p0
+        entry = SYMBOL_TABLE.access_var(items[0], get_lineno(items[0]), default_type=Type.string)
+        p0 = None
+        if entry is None:
+            return p0
+        mark_entry_as_accessed(entry)
+        p0 = make_strslice(get_lineno(items[0]), entry, items[1][0], items[1][1])
+        return p0
+
+    def string_substr(self, meta, items):
+        p0 = None
+        p0 = make_strslice(get_lineno(items[0]), items[0], items[1][0], items[1][1])
+        return p0
+
+    def string_expr_lp(self, meta, items):
+        p0 = None
+        if items[1].type_ != Type.string:
             error(
-                lineno,
-                "Mismatched vector size. Expected %i elements, got %i." % (boundlist[0].count, len(remaining)),
+                meta_line(meta),
+                "Expected a string type expression. Got %s type instead" % Type.to_string(items[1].type_),
             )
-            return False  # It's wrong. :-(
+            p0 = None
+        else:
+            p0 = make_strslice(meta_line(meta), items[1], items[3][0], items[3][1])
+        return p0
 
-        for row in remaining:
-            if not check_bound(boundlist[1:], row):
-                return False
+    def subind_str(self, meta, items):
+        p0 = None
+        p0 = (
+            make_typecast(Type.uinteger, items[1], get_lineno(items[0])),
+            make_typecast(Type.uinteger, items[3], get_lineno(items[2])),
+        )
+        return p0
 
+    def subind_strto(self, meta, items):
+        p0 = None
+        p0 = (
+            make_typecast(Type.uinteger, make_number(0, lineno=get_lineno(items[1])), get_lineno(items[0])),
+            make_typecast(Type.uinteger, items[2], get_lineno(items[1])),
+        )
+        return p0
+
+    def subind_tostr(self, meta, items):
+        p0 = None
+        p0 = (
+            make_typecast(Type.uinteger, items[1], get_lineno(items[0])),
+            make_typecast(
+                Type.uinteger,
+                make_number(gl.MAX_STRSLICE_IDX, lineno=get_lineno(items[3])),
+                lineno=get_lineno(items[3]),
+            ),
+            get_lineno(items[2]),
+        )
+        return p0
+
+    def subind_to(self, meta, items):
+        p0 = None
+        p0 = (
+            make_typecast(Type.uinteger, make_number(0, lineno=get_lineno(items[1])), get_lineno(items[0])),
+            make_typecast(
+                Type.uinteger, make_number(gl.MAX_STRSLICE_IDX, lineno=get_lineno(items[2])), get_lineno(items[1])
+            ),
+        )
+        return p0
+
+    def id_expr(self, meta, items):
+        p0 = None
+        entry = SYMBOL_TABLE.access_id(items[0], get_lineno(items[0]), default_class=CLASS.var)
+        if entry is None:
+            p0 = None
+            return p0
+        mark_entry_as_accessed(entry)
+        if entry.type_ == Type.auto:
+            entry.type_ = _TYPEREF(gl.DEFAULT_TYPE)
+            errmsg.warning_implicit_type(get_lineno(items[0]), items[0], entry.type_.name)
+        p0 = entry
+        if p0 is not None:
+            if not hasattr(gl, "expr_linenos"):
+                gl.expr_linenos = {}
+            gl.expr_linenos[id(p0)] = get_lineno(items[0])
+        if entry.class_ == CLASS.array:
+            if not LET_ASSIGNMENT:
+                error(get_lineno(items[0]), "Variable '%s' is an array and cannot be used in this context" % items[0])
+                p0 = None
+        elif entry.class_ == CLASS.function:
+            p0 = make_call(items[0], get_lineno(items[0]), make_arg_list(None))
+        elif entry.class_ == CLASS.sub:
+            errmsg.syntax_error_is_a_sub_not_a_func(get_lineno(items[0]), items[0])
+            p0 = None
+        return p0
+
+    def addr_of_id(self, meta, items):
+        p0 = None
+        id_: Id = items[1]
+        entry = SYMBOL_TABLE.access_id(id_.name, id_.lineno, ignore_explicit_flag=True)
+        if entry is None:
+            p0 = None
+            return p0
+        entry.has_address = True
+        mark_entry_as_accessed(entry)
+        result = make_unary(get_lineno(items[0]), "ADDRESS", entry, type_=_TYPE(gl.PTR_TYPE))
+        if is_dynamic(entry):
+            p0 = result
+        else:
+            p0 = make_constexpr(get_lineno(items[0]), result)
+        return p0
+
+    def expr_bexpr(self, meta, items):
+        p0 = None
+        p0 = items[0]
+        return p0
+
+    def expr_funccall(self, meta, items):
+        p0 = None
+        p0 = items[0]
+        return p0
+
+    def idcall_expr(self, meta, items):
+        p0 = None
+        if items[1] is None:
+            p0 = None
+            return p0
+        p0 = make_call(items[0], get_lineno(items[0]), items[1])
+        if p0 is None:
+            return p0
+        if p0.token in ("STRSLICE", "ID", "STRING") or (p0.token == "CONST" and p0.type_ == Type.string):
+            entry = SYMBOL_TABLE.access_call(items[0], get_lineno(items[0]))
+            mark_entry_as_accessed(entry)
+            return p0
+        convert_to_function(p0.entry, CLASS.function, get_lineno(items[0]))
+        mark_entry_as_accessed(p0.entry)
+        return p0
+
+    def array_eq_error(self, meta, items):
+        p0 = None
+        error(get_lineno(items[3]), f"Invalid assignment. Variable {items[1]}() is an array")
+        p0 = None
+        return p0
+
+    def arr_access_expr(self, meta, items):
+        p0 = None
+        p0 = make_call(items[0], get_lineno(items[0]), items[1])
+        if p0 is None:
+            return p0
+        entry = SYMBOL_TABLE.access_call(items[0], get_lineno(items[0]))
+        mark_entry_as_accessed(entry)
+        return p0
+
+    def let_arr_substr(self, meta, items):
+        p0 = None
+        i = 2 if items[0].upper() == "LET" else 1
+        id_ = items[i - 1]
+        arg_list = items[i + 1 - 1]
+        substr = items[i + 2 - 1]
+        expr_ = items[i + 4 - 1]
+        p0 = make_array_substr_assign(get_lineno(items[i - 1]), id_, arg_list, substr, expr_)
+        return p0
+
+    def let_arr_substr_single(self, meta, items):
+        p0 = None
+        i = 2 if items[0].upper() == "LET" else 1
+        id_ = items[i - 1]
+        arg_list = items[i + 1 - 1]
+        substr = (items[i + 3 - 1], items[i + 3 - 1])
+        expr_ = items[i + 6 - 1]
+        p0 = make_array_substr_assign(get_lineno(items[i - 1]), id_, arg_list, substr, expr_)
+        return p0
+
+    def let_arr_substr_in_args(self, meta, items):
+        p0 = None
+        i = 2 if items[0].upper() == "LET" else 1
+        id_ = items[i - 1]
+        arg_list = items[i + 2 - 1]
+        substr = (arg_list.children.pop().value, make_number(gl.MAX_STRSLICE_IDX, lineno=get_lineno(items[i + 3 - 1])))
+        expr_ = items[i + 6 - 1]
+        p0 = make_array_substr_assign(get_lineno(items[i - 1]), id_, arg_list, substr, expr_)
+        return p0
+
+    def let_arr_substr_in_args2(self, meta, items):
+        p0 = None
+        i = 2 if items[0].upper() == "LET" else 1
+        id_ = items[i - 1]
+        arg_list = items[i + 2 - 1]
+        top_ = items[i + 5 - 1]
+        substr = (make_number(0, lineno=get_lineno(items[i + 4 - 1])), top_)
+        expr_ = items[i + 8 - 1]
+        p0 = make_array_substr_assign(get_lineno(items[i - 1]), id_, arg_list, substr, expr_)
+        return p0
+
+    def let_arr_substr_in_args3(self, meta, items):
+        p0 = None
+        i = 2 if items[0].upper() == "LET" else 1
+        id_ = items[i - 1]
+        arg_list = items[i + 2 - 1]
+        substr = (
+            make_number(0, lineno=get_lineno(items[i + 4 - 1])),
+            make_number(gl.MAX_STRSLICE_IDX, lineno=get_lineno(items[i + 3 - 1])),
+        )
+        expr_ = items[i + 7 - 1]
+        p0 = make_array_substr_assign(get_lineno(items[i - 1]), id_, arg_list, substr, expr_)
+        return p0
+
+    def let_arr_substr_in_args4(self, meta, items):
+        p0 = None
+        i = 2 if items[0].upper() == "LET" else 1
+        id_ = items[i - 1]
+        arg_list = items[i + 2 - 1]
+        substr = (arg_list.children.pop().value, items[i + 4 - 1])
+        expr_ = items[i + 7 - 1]
+        p0 = make_array_substr_assign(get_lineno(items[i - 1]), id_, arg_list, substr, expr_)
+        return p0
+
+    def addr_of_array_element(self, meta, items):
+        p0 = None
+        p0 = None
+        if items[2] is None:
+            return p0
+        result = make_array_access(items[1], get_lineno(items[1]), items[2])
+        if result is None:
+            return p0
+        mark_entry_as_accessed(result.entry)
+        p0 = make_unary(get_lineno(items[0]), "ADDRESS", result, type_=_TYPE(gl.PTR_TYPE))
+        return p0
+
+    def err_undefined_arr_access(self, meta, items):
+        p0 = None
+        error(get_lineno(items[1]), 'Undeclared array "%s"' % items[1])
+        p0 = None
+        return p0
+
+    def bexpr_func(self, meta, items):
+        p0 = None
+        args = make_arg_list(make_argument(items[1], get_lineno(items[1])))
+        p0 = make_call(items[0], get_lineno(items[0]), args)
+        if p0 is None:
+            return p0
+        if p0.token in ("STRSLICE", "VAR", "STRING"):
+            entry = SYMBOL_TABLE.access_call(items[0], get_lineno(items[0]))
+            mark_entry_as_accessed(entry)
+            return p0
+        convert_to_function(p0.entry, CLASS.function, get_lineno(items[0]))
+        mark_entry_as_accessed(p0.entry)
+        return p0
+
+    def arg_list(self, meta, items):
+        p0 = None
+        p0 = make_arg_list(None)
+        return p0
+
+    def arg_list_arg(self, meta, items):
+        p0 = None
+        p0 = items[1]
+        return p0
+
+    def arguments(self, meta, items):
+        p0 = None
+        if items[0] is None:
+            p0 = None
+            return p0
+        p0 = make_arg_list(items[0])
+        return p0
+
+    def arguments_argument(self, meta, items):
+        p0 = None
+        if items[0] is None or items[2] is None:
+            p0 = None
+        else:
+            p0 = make_arg_list(items[0], items[2])
+        return p0
+
+    def argument(self, meta, items):
+        p0 = None
+        p0 = make_argument(items[0], meta_line(meta))
+        return p0
+
+    def named_argument(self, meta, items):
+        p0 = None
+        p0 = make_argument(items[2], meta_line(meta), name=items[0])
+        return p0
+
+    def argument_array(self, meta, items):
+        p0 = None
+        entry = SYMBOL_TABLE.access_array(items[0], get_lineno(items[0]))
+        if entry is None:
+            p0 = None
+            return p0
+        mark_entry_as_accessed(entry)
+        p0 = make_argument(entry, meta_line(meta))
+        return p0
+
+    def funcdecl(self, meta, items):
+        p0 = None
+        if items[0] is None:
+            p0 = None
+            return p0
+        p0 = items[0]
+        p0.local_symbol_table = SYMBOL_TABLE.current_scope
+        p0.locals_size = SYMBOL_TABLE.leave_scope()
+        FUNCTION_LEVEL.pop()
+        p0.entry.ref.body = items[1]
+        p0.local_symbol_table.owner = p0
+        p0.entry.ref.forwarded = False
+        return p0
+
+    def funcdeclforward(self, meta, items):
+        p0 = None
+        if items[1] is None:
+            if FUNCTION_LEVEL:
+                FUNCTION_LEVEL.pop()
+            return p0
+        if items[1].entry.forwarded:
+            error(get_lineno(items[0]), "duplicated declaration for function '%s'" % items[1].name)
+        items[1].entry.ref.forwarded = True
+        SYMBOL_TABLE.leave_scope(show_warnings=False)
+        FUNCTION_LEVEL.pop()
+        return p0
+
+    def function_header(self, meta, items):
+        p0 = None
+        p0 = items[0]
+        return p0
+
+    def function_header_pre(self, meta, items):
+        p0 = None
+        if items[0] is None or items[1] is None:
+            p0 = None
+            return p0
+        forwarded = items[0].entry.forwarded
+        p0 = items[0]
+        p0.append_child(items[1])
+        p0.params_size = items[1].size
+        lineno = get_lineno(items[2])
+        previoustype_ = p0.type_
+        if not items[2].implicit or p0.entry.type_ is None or p0.entry.type_ == Type.unknown:
+            p0.type_ = items[2]
+            if items[2].implicit and p0.entry.class_ == CLASS.function:
+                errmsg.warning_implicit_type(items[2].lineno, p0.entry.name, p0.type_.name)
+        if forwarded and previoustype_ != p0.type_:
+            errmsg.syntax_error_func_type_mismatch(lineno, p0.entry)
+            p0 = None
+            return p0
+        if forwarded:
+            p1 = p0.entry.ref.params
+            p2 = items[1].children
+            if len(p1) != len(p2):
+                errmsg.syntax_error_parameter_mismatch(lineno, p0.entry)
+                p0 = None
+                return p0
+            for a, b in zip(p1, p2):
+                if a.name != b.name:
+                    warning(
+                        lineno, "Parameter '%s' in function '%s' has been renamed to '%s'" % (a.name, p0.name, b.name)
+                    )
+                if a.type_ != b.type_ or a.byref != b.byref:
+                    errmsg.syntax_error_parameter_mismatch(lineno, p0.entry)
+                    p0 = None
+                    return p0
+        p0.entry.ref.params = items[1]
+        if FUNCTION_LEVEL[-1].class_ == CLASS.sub and (not items[2].implicit):
+            error(lineno, "SUBs cannot have a return type definition")
+            p0 = None
+            return p0
+        if FUNCTION_LEVEL[-1].class_ == CLASS.function:
+            src.api.check.check_type_is_explicit(p0.lineno, p0.entry.name, items[2])
+        if p0.entry.convention == CONVENTION.fastcall and len(items[1]) > 1:
+            class_ = "SUB" if FUNCTION_LEVEL[-1].class_ == CLASS.sub else "FUNCTION"
+            errmsg.warning_fastcall_with_N_parameters(lineno, class_, p0.entry.name, len(items[1]))
+        return p0
+
+    def function_def(self, meta, items):
+        p0 = None
+        convention = items[1]
+        name = items[2]
+        class_ = CLASS.sub if items[0] == "SUB" else CLASS.function
+        p0 = make_func_declaration(name, get_lineno(items[2]), class_)
+        SYMBOL_TABLE.enter_scope(name)
+        entry = SYMBOL_TABLE.get_entry(name)
+        FUNCTION_LEVEL.append(entry)
+        if entry.class_ in (CLASS.function, CLASS.sub):
+            FUNCTION_LEVEL[-1].ref.convention = convention
+        return p0
+
+    def convention(self, meta, items):
+        p0 = None
+        p0 = CONVENTION.stdcall
+        return p0
+
+    def convention2(self, meta, items):
+        p0 = None
+        p0 = CONVENTION.fastcall
+        return p0
+
+    def param_decl_none(self, meta, items):
+        p0 = None
+        p0 = make_param_list(None)
+        return p0
+
+    def param_decl(self, meta, items):
+        p0 = None
+        p0 = items[1]
+        return p0
+
+    def param_decl_list(self, meta, items):
+        p0 = None
+        p0 = make_param_list(items[0])
+        return p0
+
+    def param_decl_list2(self, meta, items):
+        p0 = None
+        if items[0] is not None and items[2] is not None:
+            if items[2].default_value is None and items[0][-1].default_value is not None:
+                errmsg.syntax_error_mandatory_param_after_optional(items[2].lineno, items[0][-1].name, items[2].name)
+        p0 = make_param_list(items[0], items[2])
+        return p0
+
+    def param_byref_definition(self, meta, items):
+        p0 = None
+        p0 = items[1]
+        if p0 is not None:
+            p0.ref.byref = True
+        return p0
+
+    def param_byval_definition(self, meta, items):
+        p0 = None
+        param_def = items[1]
+        p0 = param_def
+        if p0 is not None:
+            if param_def.class_ == CLASS.array:
+                errmsg.syntax_error_cannot_pass_array_by_value(get_lineno(items[0]), param_def.name)
+                p0 = None
+                return p0
+            param_def.ref.byref = False
+        return p0
+
+    def param_definition(self, meta, items):
+        p0 = None
+        param_def = items[0]
+        p0 = param_def
+        if p0 is not None:
+            if param_def.class_ == CLASS.array:
+                param_def.ref.byref = True
+            else:
+                param_def.ref.byref = OPTIONS.default_byref
+        return p0
+
+    def param_def_array(self, meta, items):
+        p0 = None
+        typeref = items[3]
+        if typeref is None:
+            p0 = None
+            return p0
+        lineno = items[0].lineno
+        id_ = items[0].name
+        src.api.check.check_type_is_explicit(lineno, id_, typeref)
+        p0 = make_param_decl(id_, lineno, typeref, is_array=True)
+        return p0
+
+    def param_def_type(self, meta, items):
+        p0 = None
+        id_: Id = items[0]
+        typedef = items[1]
+        if typedef is not None:
+            src.api.check.check_type_is_explicit(id_.lineno, id_.name, typedef)
+        default_value = make_typecast(typedef, items[2], id_.lineno)
+        p0 = make_param_decl(id_.name, id_.lineno, typedef, is_array=False, default_value=default_value)
+        return p0
+
+    def param_def_default_arg_value(self, meta, items):
+        p0 = None
+        if len(items) + 1 == 1:
+            p0 = None
+            return p0
+        p0 = items[1]
+        return p0
+        return p0
+
+    def function_body(self, meta, items):
+        p0 = None
+        if not FUNCTION_LEVEL:
+            end_tok = items[-1]
+            error(get_lineno(end_tok), "Unexpected token '%s'. No Function or Sub has been defined." % end_tok)
+            p0 = None
+            return None
+        a = FUNCTION_LEVEL[-1].class_
+        if a not in (CLASS.sub, CLASS.function):
+            p0 = None
+            return None
+        end_tok = items[-1]
+        b = end_tok.split()[-1].lower()
+        if a != b:
+            error(get_lineno(end_tok), "Unexpected token '%s'. Should be 'END %s'" % (end_tok.upper(), a.upper()))
+            p0 = None
+        else:
+            p0 = make_block() if len(items) == 1 else items[0]
+        return p0
+
+    def type_def_empty(self, meta, items):
+        p0 = None
+        p0 = make_type(_TYPE(gl.DEFAULT_TYPE).name, meta_line(meta), implicit=True)
+        return p0
+
+    def type_def(self, meta, items):
+        p0 = None
+        p0 = make_type(items[1], get_lineno(items[1]), implicit=False)
+        return p0
+
+    def type_def_id(self, meta, items):
+        p0 = None
+        errmsg.error(get_lineno(items[1]), "Syntax Error. Unexpected token '%s' <ID>" % items[1])
+        p0 = make_type("float", get_lineno(items[1]), implicit=False)
+        return p0
+
+    def type(self, meta, items):
+        p0 = None
+        p0 = items[0].lower()
+        return p0
+
+    def preproc_line_init(self, meta, items):
+        p0 = None
+        INITS.add(items[1])
+        return p0
+
+    def preproc_line_require(self, meta, items):
+        p0 = None
+        arch.target.backend.REQUIRES.add(items[1])
+        return p0
+
+    def preproc_line_pragma_option(self, meta, items):
+        p0 = None
+        try:
+            setattr(OPTIONS, items[1], items[3])
+        except src.api.options.UndefinedOptionError:
+            errmsg.warning_ignoring_unknown_pragma(get_lineno(items[1]), items[1])
+        return p0
+
+    def preproc_pragma_push(self, meta, items):
+        p0 = None
+        try:
+            OPTIONS[items[3]].push()
+        except src.api.options.UndefinedOptionError:
+            errmsg.warning_ignoring_unknown_pragma(get_lineno(items[3]), items[3])
+        return p0
+
+    def preproc_pragma_pop(self, meta, items):
+        p0 = None
+        try:
+            OPTIONS[items[3]].pop()
+        except src.api.options.UndefinedOptionError:
+            errmsg.warning_ignoring_unknown_pragma(get_lineno(items[3]), items[3])
+        return p0
+
+    def expr_usr(self, meta, items):
+        p0 = None
+        if items[1].type_ == Type.string:
+            p0 = make_builtin(get_lineno(items[0]), "USR_STR", items[1], type_=Type.uinteger)
+        else:
+            p0 = make_builtin(
+                get_lineno(items[0]),
+                "USR",
+                make_typecast(Type.uinteger, items[1], get_lineno(items[0])),
+                type_=Type.uinteger,
+            )
+        return p0
+
+    def expr_rnd(self, meta, items):
+        p0 = None
+        p0 = make_builtin(get_lineno(items[0]), "RND", None, type_=Type.float_)
+        return p0
+
+    def expr_peek(self, meta, items):
+        p0 = None
+        p0 = make_builtin(
+            get_lineno(items[0]), "PEEK", make_typecast(Type.uinteger, items[1], get_lineno(items[0])), type_=Type.ubyte
+        )
+        return p0
+
+    def expr_peektype_(self, meta, items):
+        p0 = None
+        if items[2] is None or items[4] is None:
+            p0 = None
+            return p0
+        p0 = make_builtin(
+            get_lineno(items[0]),
+            "PEEK",
+            make_typecast(Type.uinteger, items[4], get_lineno(items[3])),
+            type_=cast(sym.TYPEREF, items[2]).type_,
+        )
+        return p0
+
+    def expr_in(self, meta, items):
+        p0 = None
+        p0 = make_builtin(
+            get_lineno(items[0]), "IN", make_typecast(Type.uinteger, items[1], get_lineno(items[0])), type_=Type.ubyte
+        )
+        return p0
+
+    def expr_lbound(self, meta, items):
+        p0 = None
+        entry = SYMBOL_TABLE.access_array(items[2], get_lineno(items[2]))
+        if entry is None:
+            p0 = None
+            return p0
+        mark_entry_as_accessed(entry)
+        if entry.scope == SCOPE.parameter:
+            num = make_number(0, get_lineno(items[2]), Type.uinteger)
+            p0 = make_builtin(get_lineno(items[0]), items[0], [entry, num], type_=Type.uinteger)
+        else:
+            p0 = make_number(len(entry.bounds), get_lineno(items[2]), Type.uinteger)
+        return p0
+
+    def expr_lbound_expr(self, meta, items):
+        p0 = None
+        expr = items[4]
+        if expr is None:
+            p0 = None
+            return p0
+        entry = SYMBOL_TABLE.access_array(items[2], get_lineno(items[2]))
+        if entry is None:
+            p0 = None
+            return p0
+        mark_entry_as_accessed(entry)
+        num = make_typecast(Type.uinteger, expr, get_lineno(items[5]))
+        if num is None:
+            p0 = None
+            return p0
+        if is_number(num) and entry.scope in (SCOPE.local, SCOPE.global_):
+            val = num.value
+            if val < 0 or val > len(entry.bounds):
+                error(get_lineno(items[5]), "Dimension out of range")
+                p0 = None
+                return p0
+            if not val:
+                p0 = make_number(len(entry.bounds), get_lineno(items[2]), Type.uinteger)
+            elif items[0] == "LBOUND":
+                p0 = make_number(entry.bounds[val - 1].lower, get_lineno(items[2]), Type.uinteger)
+            else:
+                p0 = make_number(entry.bounds[val - 1].upper, get_lineno(items[2]), Type.uinteger)
+            return p0
+        if items[0] == "LBOUND":
+            entry.ref.lbound_used = True
+        else:
+            entry.ref.ubound_used = True
+        p0 = make_builtin(get_lineno(items[0]), items[0], [entry, num], type_=Type.uinteger)
+        return p0
+
+    def len(self, meta, items):
+        p0 = None
+        arg = items[1]
+        if arg is None:
+            p0 = None
+        elif arg.token == "VAR" and arg.class_ == CLASS.array:
+            p0 = make_number(len(arg.bounds), lineno=get_lineno(items[0]))
+        elif arg.type_ != Type.string:
+            errmsg.syntax_error_expected_string(get_lineno(items[0]), Type.to_string(arg.type_))
+            p0 = None
+        elif is_string(arg):
+            p0 = make_number(len(arg.value), lineno=get_lineno(items[0]))
+        else:
+            p0 = make_builtin(get_lineno(items[0]), "LEN", arg, type_=Type.uinteger)
+        return p0
+
+    def sizeof(self, meta, items):
+        p0 = None
+        if Type.to_type(items[2].lower()) is not None:
+            p0 = make_number(Type.size(Type.to_type(items[2].lower())), lineno=get_lineno(items[2]))
+        else:
+            entry = SYMBOL_TABLE.get_id_or_make_var(items[2], get_lineno(items[0]))
+            p0 = make_number(Type.size(entry.type_), lineno=get_lineno(items[2]))
+        return p0
+
+    def str(self, meta, items):
+        p0 = None
+        if is_number(items[1]):
+            p0 = sym.STRING(str(items[1].value), get_lineno(items[0]))
+        else:
+            p0 = make_builtin(
+                get_lineno(items[0]),
+                "STR",
+                make_typecast(Type.float_, items[1], get_lineno(items[0])),
+                type_=Type.string,
+            )
+        return p0
+
+    def inkey(self, meta, items):
+        p0 = None
+        p0 = make_builtin(get_lineno(items[0]), "INKEY", None, type_=Type.string)
+        return p0
+
+    def chr_one(self, meta, items):
+        p0 = None
+        arg_list = make_arg_list(make_argument(items[1], get_lineno(items[0])))
+        arg_list[0].value = make_typecast(Type.ubyte, arg_list[0].value, get_lineno(items[0]))
+        p0 = make_builtin(get_lineno(items[0]), "CHR", arg_list, type_=Type.string)
+        return p0
+
+    def chr(self, meta, items):
+        p0 = None
+        if len(items[1]) < 1:
+            error(get_lineno(items[0]), "CHR$ function need at less 1 parameter")
+            p0 = None
+            return p0
+        for i in range(len(items[1])):
+            items[1][i].value = make_typecast(Type.ubyte, items[1][i].value, get_lineno(items[0]))
+        p0 = make_builtin(get_lineno(items[0]), "CHR", items[1], type_=Type.string)
+        return p0
+
+    def val(self, meta, items):
+        p0 = None
+
+        def val(s):
+            try:
+                x = float(eval(s, {}, {}))
+            except:
+                x = 0
+                warning(get_lineno(items[0]), f"Invalid string numeric constant '{s}' evaluated as 0")
+            return x
+
+        if items[1].type_ != Type.string:
+            errmsg.syntax_error_expected_string(get_lineno(items[0]), Type.to_string(items[1].type_))
+            p0 = None
+        else:
+            p0 = make_builtin(get_lineno(items[0]), "VAL", items[1], val, type_=Type.float_)
+        return p0
+
+    def code(self, meta, items):
+        p0 = None
+
+        def asc(x):
+            if len(x):
+                return ord(x[0])
+            return 0
+
+        if items[1] is None:
+            p0 = None
+            return p0
+        if items[1].type_ != Type.string:
+            errmsg.syntax_error_expected_string(get_lineno(items[0]), Type.to_string(items[1].type_))
+            p0 = None
+        else:
+            p0 = make_builtin(get_lineno(items[0]), "CODE", items[1], asc, type_=Type.ubyte)
+        return p0
+
+    def sgn(self, meta, items):
+        p0 = None
+        sgn = lambda x: x < 0 and -1 or (x > 0 and 1) or 0
+        if items[1].type_ == Type.string:
+            error(get_lineno(items[0]), "Expected a numeric expression, got TYPE.string instead")
+            p0 = None
+        else:
+            if is_unsigned(items[1]) and (not is_number(items[1])):
+                warning(get_lineno(items[0]), "Sign of unsigned value is always 0 or 1")
+            p0 = make_builtin(get_lineno(items[0]), "SGN", items[1], sgn, type_=Type.byte_)
+        return p0
+
+    def expr_trig(self, meta, items):
+        p0 = None
+        p0 = make_builtin(
+            get_lineno(items[0]),
+            items[0],
+            make_typecast(Type.float_, items[1], get_lineno(items[0])),
+            {
+                "SIN": math.sin,
+                "COS": math.cos,
+                "TAN": math.tan,
+                "ASN": math.asin,
+                "ACS": math.acos,
+                "ATN": math.atan,
+                "LN": lambda y: math.log(y, math.exp(1)),
+                "EXP": math.exp,
+                "SQR": math.sqrt,
+            }[items[0]],
+            type_=Type.float_,
+        )
+        return p0
+
+    def math_fn(self, meta, items):
+        p0 = None
+        p0 = items[0]
+        return p0
+
+    def expr_int(self, meta, items):
+        p0 = None
+        p0 = make_typecast(Type.long_, items[1], get_lineno(items[0]))
+        return p0
+
+    def abs(self, meta, items):
+        p0 = None
+        if is_unsigned(items[1]):
+            p0 = items[1]
+            warning(get_lineno(items[0]), "Redundant operation ABS for unsigned value")
+            return p0
+        p0 = make_builtin(get_lineno(items[0]), "ABS", items[1], lambda x: x if x >= 0 else -x)
+        return p0
+
+
+def handle_parse_error(e):
+    if not isinstance(e, UnexpectedInput):
+        raise e
+    gl.reporting_syntax_error = True
+    try:
+        return _handle_parse_error_inner(e)
+    finally:
+        gl.reporting_syntax_error = False
+
+
+def _handle_parse_error_inner(e):
+    from src.api import errmsg
+    from src.api.errmsg import error
+
+    from .zxbparser_standalone import UnexpectedEOF, UnexpectedToken
+
+    is_eof = isinstance(e, UnexpectedEOF) or (isinstance(e, UnexpectedToken) and e.token.type == "$END")
+
+    if not is_eof:
+        # UnexpectedToken, not EOF
+        tok = e.token
+        t_type = tok.type
+        t_val = tok.value
+        if t_type.startswith("END_") and "_" in t_type:
+            t_type = "END"
+            t_val = t_val.split()[0]
+        if t_type == "NEWLINE":
+            msg = "Unexpected end of line"
+        else:
+            msg = "Syntax Error. Unexpected token '%s' <%s>" % (t_val, t_type)
+        if hasattr(gl, "tokens_rejected"):
+            gl.tokens_rejected += 1
+        yielded = getattr(gl, "tokens_yielded", 0)
+        rejected = getattr(gl, "tokens_rejected", 0)
+        shifted = yielded - rejected
+        shifted_at_last = getattr(gl, "shifted_at_last_error", 0)
+        if shifted - shifted_at_last < 3:
+            return True
+        gl.shifted_at_last_error = shifted
+        key = (getattr(gl, "FILENAME", ""), tok.line)
+        last_key = getattr(handle_parse_error, "last_key", None)
+        if key == last_key:
+            return True
+        handle_parse_error.last_key = key
+        gl.syntax_error_occurred = True
+        error(tok.line, msg)
         return True
 
-    p[0] = None
-    if p[4] is None or p[6] is None or p[8] is None:
-        return
-
-    if not check_bound(p[4].children, p[8]):
-        return
-
-    id_, lineno = p[2][0]
-    SYMBOL_TABLE.declare_array(id_, lineno, p[6], p[4], default_value=p[8])
-
-    entry = SYMBOL_TABLE.get_entry(id_)
-    if entry is None:
-        return
-
-    if p[6] == TYPE.string or entry.type_ == TYPE.string:
-        errmsg.syntax_error_cannot_initialize_array_of_type(p.lineno(1), TYPE.string)
-        return
-
-
-def p_bound_list(p):
-    """bound_list : bound"""
-    p[0] = make_bound_list(p[1])
-
-
-def p_bound_list_bound(p):
-    """bound_list : bound_list COMMA bound"""
-    p[0] = make_bound_list(p[1], p[3])
-
-
-def p_bound(p):
-    """bound : expr"""
-    p[0] = make_bound(make_number(OPTIONS.array_base, lineno=p.lineno(1)), p[1], p.lexer.lineno)
-
-
-def p_bound_to_bound(p):
-    """bound : expr TO expr"""
-    p[0] = make_bound(p[1], p[3], p.lineno(2))
-
-
-def p_const_vector(p):
-    """const_vector : LBRACE const_vector_list RBRACE
-    | LBRACE const_number_list RBRACE
-    """
-    p[0] = p[2]
-
-
-def p_const_vector_elem_list(p):
-    """const_number_list : expr"""
-    if p[1] is None:
-        return
-
-    if not is_static(p[1]):
-        if isinstance(p[1], sym.UNARY):
-            tmp = make_constexpr(p.lineno(1), p[1])
-        else:
-            errmsg.syntax_error_not_constant(p.lexer.lineno)
-            p[0] = None
-            return
-    else:
-        tmp = p[1]
-
-    p[0] = [tmp]
-
-
-def p_const_vector_elem_list_list(p):
-    """const_number_list : const_number_list COMMA expr"""
-    if p[1] is None or p[3] is None:
-        return
-
-    if not is_static(p[3]):
-        if isinstance(p[3], sym.UNARY):
-            tmp = make_constexpr(p.lineno(2), p[3])
-        else:
-            errmsg.syntax_error_not_constant(p.lineno(2))
-            p[0] = None
-            return
-    else:
-        tmp = p[3]
-
-    if p[1] is not None:
-        p[1].append(tmp)
-    p[0] = p[1]
-
-
-def p_const_vector_list(p):
-    """const_vector_list : const_vector"""
-    p[0] = [p[1]]
-
-
-def p_const_vector_vector_list(p):
-    """const_vector_list : const_vector_list COMMA const_vector"""
-    if len(p[3]) != len(p[1][0]):
-        error(p.lineno(2), "All rows must have the same number of elements")
-        p[0] = None
-        return
-
-    p[0] = p[1] + [p[3]]
-
-
-def p_staement_func_decl(p):
-    """statement : function_declaration"""
-    p[0] = p[1]
-
-
-def p_statement_border(p):
-    """statement : BORDER expr"""
-    p[0] = make_sentence(p.lineno(1), "BORDER", make_typecast(TYPE.ubyte, p[2], p.lineno(1)))
-
-
-def p_statement_plot(p):
-    """statement : PLOT expr COMMA expr"""
-    p[0] = make_sentence(
-        p.lineno(1),
-        "PLOT",
-        make_typecast(TYPE.ubyte, p[2], p.lineno(3)),
-        make_typecast(TYPE.ubyte, p[4], p.lineno(3)),
-    )
-
-
-def p_statement_plot_attr(p):
-    """statement : PLOT attr_list expr COMMA expr"""
-    p[0] = make_sentence(
-        p.lineno(1),
-        "PLOT",
-        make_typecast(TYPE.ubyte, p[3], p.lineno(4)),
-        make_typecast(TYPE.ubyte, p[5], p.lineno(4)),
-        p[2],
-    )
-
-
-def p_statement_draw3(p):
-    """statement : DRAW expr COMMA expr COMMA expr"""
-    p[0] = make_sentence(
-        p.lineno(1),
-        "DRAW3",
-        make_typecast(TYPE.integer, p[2], p.lineno(3)),
-        make_typecast(TYPE.integer, p[4], p.lineno(5)),
-        make_typecast(TYPE.float_, p[6], p.lineno(5)),
-    )
-
-
-def p_statement_draw3_attr(p):
-    """statement : DRAW attr_list expr COMMA expr COMMA expr"""
-    p[0] = make_sentence(
-        p.lineno(1),
-        "DRAW3",
-        make_typecast(TYPE.integer, p[3], p.lineno(4)),
-        make_typecast(TYPE.integer, p[5], p.lineno(6)),
-        make_typecast(TYPE.float_, p[7], p.lineno(6)),
-        p[2],
-    )
-
-
-def p_statement_draw(p):
-    """statement : DRAW expr COMMA expr"""
-    p[0] = make_sentence(
-        p.lineno(1),
-        "DRAW",
-        make_typecast(TYPE.integer, p[2], p.lineno(3)),
-        make_typecast(TYPE.integer, p[4], p.lineno(3)),
-    )
-
-
-def p_statement_draw_attr(p):
-    """statement : DRAW attr_list expr COMMA expr"""
-    p[0] = make_sentence(
-        p.lineno(1),
-        "DRAW",
-        make_typecast(TYPE.integer, p[3], p.lineno(4)),
-        make_typecast(TYPE.integer, p[5], p.lineno(4)),
-        p[2],
-    )
-
-
-def p_statement_circle(p):
-    """statement : CIRCLE expr COMMA expr COMMA expr"""
-    p[0] = make_sentence(
-        p.lineno(1),
-        "CIRCLE",
-        make_typecast(TYPE.byte_, p[2], p.lineno(3)),
-        make_typecast(TYPE.byte_, p[4], p.lineno(5)),
-        make_typecast(TYPE.byte_, p[6], p.lineno(5)),
-    )
-
-
-def p_statement_circle_attr(p):
-    """statement : CIRCLE attr_list expr COMMA expr COMMA expr"""
-    p[0] = make_sentence(
-        p.lineno(1),
-        "CIRCLE",
-        make_typecast(TYPE.byte_, p[3], p.lineno(4)),
-        make_typecast(TYPE.byte_, p[5], p.lineno(6)),
-        make_typecast(TYPE.byte_, p[7], p.lineno(6)),
-        p[2],
-    )
-
-
-def p_statement_cls(p):
-    """statement : CLS"""
-    p[0] = make_sentence(p.lineno(1), "CLS")
-
-
-def p_statement_asm(p):
-    """statement : ASM"""
-    p[0] = make_asm_sentence(p[1], p.lineno(1))
-
-
-def p_statement_randomize(p):
-    """statement : RANDOMIZE"""
-    p[0] = make_sentence(p.lineno(1), "RANDOMIZE", make_number(0, lineno=p.lineno(1), type_=TYPE.ulong))
-
-
-def p_statement_randomize_expr(p):
-    """statement : RANDOMIZE expr"""
-    p[0] = make_sentence(p.lineno(1), "RANDOMIZE", make_typecast(TYPE.ulong, p[2], p.lineno(1)))
-
-
-def p_statement_beep(p):
-    """statement : BEEP expr COMMA expr"""
-    p[0] = make_sentence(
-        p.lineno(1),
-        "BEEP",
-        make_typecast(TYPE.float_, p[2], p.lineno(1)),
-        make_typecast(TYPE.float_, p[4], p.lineno(3)),
-    )
-
-
-def p_statement_call(p):
-    """statement : ID arg_list
-    | ID arguments
-    | ID
-    """
-    if len(p) > 2 and p[2] is None:
-        p[0] = None
-    elif len(p) == 2:
-        entry = SYMBOL_TABLE.get_entry(p[1])
-        if entry is not None and entry.class_ in (CLASS.label, CLASS.unknown):
-            p[0] = make_label(p[1], p.lineno(1))
-        else:
-            p[0] = make_sub_call(p[1], p.lineno(1), make_arg_list(None))
-    else:
-        p[0] = make_sub_call(p[1], p.lineno(1), p[2])
-
-
-def p_assignment(p):
-    """statement : lexpr expr"""
-    global LET_ASSIGNMENT
-
-    LET_ASSIGNMENT = False  # Mark we're no longer using LET
-    p[0] = None
-    q = p[1:]
-    i = 1
-
-    if q[1] is None:
-        return
-
-    if q[1].token == "VAR" and q[1].class_ == CLASS.unknown:
-        q[1] = SYMBOL_TABLE.access_var(q[1].name, p.lineno(i))
-
-    q1class_ = q[1].class_ if q[1].token == "VAR" else CLASS.unknown
-    variable = SYMBOL_TABLE.access_id(q[0], p.lineno(i), default_type=q[1].type_, default_class=q1class_)
-    if variable is None:
-        return  # HINT: This only happens if variable was not declared with DIM and --strict flag is in use
-
-    if variable.class_ == CLASS.unknown:  # The variable is implicit
-        variable = variable.to_var()
-
-    if variable.class_ not in (CLASS.var, CLASS.array):
-        errmsg.syntax_error_cannot_assign_not_a_var(p.lineno(i), variable.name)
-        return
-
-    if variable.class_ == CLASS.var and q1class_ == CLASS.array:
-        error(p.lineno(i), "Cannot assign an array to an scalar variable")
-        return
-
-    expr = make_typecast(variable.type_, q[1], p.lineno(i))
-    p[0] = make_sentence(p.lineno(1), "LET", variable, expr)
-
-
-def p_lexpr(p):
-    """lexpr : ID EQ
-    | LET ID EQ
-    """
-    global LET_ASSIGNMENT
-
-    LET_ASSIGNMENT = True  # Mark we're about to start a LET sentence
-
-    if p[1] == "LET":
-        p[0] = p[2]
-        i = 2
-    else:
-        p[0] = p[1]
-        i = 1
-
-    SYMBOL_TABLE.access_id(p[i], p.lineno(i))
-
-
-def p_array_copy(p):
-    """statement : ARRAY_ID EQ ARRAY_ID
-    | LET ARRAY_ID EQ ARRAY_ID
-    """
-    if p[1] == "LET":
-        array_id1, array_id2 = p[2], p[4]
-        l1, l2 = p.lineno(2), p.lineno(4)
-    else:
-        array_id1, array_id2 = p[1], p[3]
-        l1, l2 = p.lineno(1), p.lineno(3)
-
-    larray = SYMBOL_TABLE.access_id(array_id1, l1)
-    rarray = SYMBOL_TABLE.access_id(array_id2, l2)
-
-    if larray is None or rarray is None:
-        p[0] = None
-        return
-
-    if larray.type_ != rarray.type_:
-        error(l1, "Arrays must have the same element type")
-        return
-
-    if larray.ref.memsize != rarray.ref.memsize:
-        error(l1, "Arrays '%s' and '%s' must have the same size" % (array_id1, array_id2))
-        return
-
-    if larray.ref.count != rarray.ref.count:
-        warning(
-            l1,
-            "Arrays '%s' and '%s' don't have the same number of dimensions" % (larray.name, rarray.name),
-        )
-    else:
-        for b1, b2 in zip(larray.ref.bounds, rarray.ref.bounds):
-            if b1.count != b2.count:
-                warning(
-                    l1,
-                    "Arrays '%s' and '%s' don't have the same dimensions" % (array_id1, array_id2),
-                )
-                break
-    # Array copy
-    mark_entry_as_accessed(larray)
-    mark_entry_as_accessed(rarray)
-    p[0] = make_sentence(p.lineno(1), "ARRAYCOPY", larray, rarray)
-
-
-def p_arr_assignment(p):
-    """statement : ARRAY_ID arg_list EQ expr
-    | LET ARRAY_ID arg_list EQ expr
-    """
-    i = 2 if p[1].upper() == "LET" else 1
-    id_ = p[i]
-    arg_list = p[i + 1]
-    expr = p[i + 3]
-
-    p[0] = None
-    if arg_list is None or expr is None:
-        return  # There were errors
-
-    entry = SYMBOL_TABLE.access_call(id_, p.lineno(i))
-    if entry is None:
-        return
-
-    if entry.type_ == TYPE.string:
-        variable = gl.SYMBOL_TABLE.access_array(id_, p.lineno(i))
-        # variable is an array. If it has 0 bounds means they are undefined (param byref)
-        if len(variable.ref.bounds) and len(variable.ref.bounds) + 1 == len(arg_list):
-            ss = arg_list.children.pop().value
-            p[0] = make_array_substr_assign(p.lineno(i), id_, arg_list, (ss, ss), expr)
-            return
-
-    arr = make_array_access(id_, p.lineno(i), arg_list)
-    if arr is None:
-        return
-
-    expr = make_typecast(arr.type_, expr, p.lineno(i))
-    if entry is None:
-        return
-
-    if entry.addr is not None:  # has addr?
-        mark_entry_as_accessed(entry)
-
-    p[0] = make_sentence(p.lineno(1), "LETARRAY", arr, expr)
-
-
-def p_substr_assignment_no_let(p):
-    """statement : ID LP expr RP EQ expr"""
-    # This can be only a substr assignment like a$(i + 3) = ".", since arrays
-    # have ARRAY_ID already
-    entry = SYMBOL_TABLE.access_call(p[1], p.lineno(1))
-    if entry is None:
-        return
-
-    if entry.class_ == CLASS.unknown:
-        entry.class_ = CLASS.var
-
-    if p[6].type_ != TYPE.string:
-        errmsg.syntax_error_expected_string(p.lineno(5), p[6].type_)
-
-    lineno = p.lineno(2)
-    base = make_number(OPTIONS.string_base, lineno, _TYPE(gl.STR_INDEX_TYPE))
-    substr = make_typecast(_TYPE(gl.STR_INDEX_TYPE), p[3], lineno)
-    p[0] = make_sentence(
-        p.lineno(1),
-        "LETSUBSTR",
-        entry,
-        make_binary(lineno, "MINUS", substr, base, func=lambda x, y: x - y),
-        make_binary(lineno, "MINUS", substr, base, func=lambda x, y: x - y),
-        p[6],
-    )
-
-
-def p_substr_assignment(p):
-    """statement : LET ID arg_list EQ expr"""
-    if p[3] is None or p[5] is None:
-        return  # There were errors
-
-    p[0] = None
-    entry = SYMBOL_TABLE.access_call(p[2], p.lineno(2))
-    if entry is None:
-        return
-
-    if entry.class_ == CLASS.unknown:
-        entry = entry.to_var()
-
-    if entry.class_ != CLASS.var:
-        errmsg.syntax_error_cannot_assign_not_a_var(p.lineno(2), p[2])
-        return
-
-    if entry.type_ != TYPE.string:
-        errmsg.syntax_error_expected_string(p.lineno(2), entry.type_)
-        return
-
-    if p[5].type_ != TYPE.string:
-        errmsg.syntax_error_expected_string(p.lineno(4), p[5].type_)
-        return
-
-    if len(p[3]) > 1:
-        error(p.lineno(2), "Accessing string with too many indexes. Expected only one.")
-        return
-
-    if len(p[3]) == 1:
-        substr = (
-            make_typecast(_TYPE(gl.STR_INDEX_TYPE), p[3][0].value, p.lineno(2)),
-            make_typecast(_TYPE(gl.STR_INDEX_TYPE), p[3][0].value, p.lineno(2)),
-        )
-    else:
-        substr = (
-            make_typecast(
-                _TYPE(gl.STR_INDEX_TYPE),
-                make_number(gl.MIN_STRSLICE_IDX, lineno=p.lineno(2)),
-                p.lineno(2),
-            ),
-            make_typecast(
-                _TYPE(gl.STR_INDEX_TYPE),
-                make_number(gl.MAX_STRSLICE_IDX, lineno=p.lineno(2)),
-                p.lineno(2),
-            ),
-        )
-
-    lineno = p.lineno(2)
-    base = make_number(OPTIONS.string_base, lineno, _TYPE(gl.STR_INDEX_TYPE))
-    p[0] = make_sentence(
-        p.lineno(1),
-        "LETSUBSTR",
-        entry,
-        make_binary(lineno, "MINUS", substr[0], base, func=lambda x, y: x - y),
-        make_binary(lineno, "MINUS", substr[1], base, func=lambda x, y: x - y),
-        p[5],
-    )
-
-
-def p_str_assign(p):
-    """statement : ID substr EQ expr
-    | LET ID substr EQ expr
-    """
-    if p[1].upper() != "LET":
-        q = p[1]
-        r = p[4]
-        s = p[2]
-        lineno = p.lineno(3)
-    else:
-        q = p[2]
-        r = p[5]
-        s = p[3]
-        lineno = p.lineno(4)
-
-    if q is None or s is None:
-        p[0] = None
-        return
-
-    if r.type_ != TYPE.string:
-        errmsg.syntax_error_expected_string(lineno, r.type_)
-
-    entry = SYMBOL_TABLE.access_var(q, lineno, default_type=TYPE.string)
-    if entry is None:
-        p[0] = None
-        return
-
-    p[0] = make_sentence(p.lineno(1), "LETSUBSTR", entry, s[0], s[1], r)
-
-
-def p_goto(p):
-    """statement : goto NUMBER
-    | goto ID
-    """
-    entry = check_and_make_label(p[2], p.lineno(2))
-    if entry is not None:
-        p[0] = make_sentence(p.lineno(1), p[1].upper(), entry)
-    else:
-        p[0] = None
-
-
-def p_go(p):
-    """goto : GO TO
-    | GO SUB
-    | GOTO
-    | GOSUB
-    """
-    p[0] = p[1]
-    if p[0] == "GO":
-        p[0] += p[2]
-
-    if p[0] == "GOSUB" and FUNCTION_LEVEL:  # GOSUB not in global scope?
-        error(p.lineno(1), "GOSUB not allowed within SUB or FUNCTION")
-
-
-# region [IF sentence]
-def p_if_sentence(p):
-    """statement : if_then_part NEWLINE program_co endif
-    | if_then_part NEWLINE endif
-    | if_then_part NEWLINE statements_co endif
-    | if_then_part NEWLINE co_statements_co endif
-    | if_then_part NEWLINE label statements_co endif
-    """
-    cond_ = p[1]
-    if len(p) == 6:
-        lbl = p[3]
-        stat_ = make_block(lbl, p[4])
-        endif_ = p[5]
-    elif len(p) == 5:
-        stat_ = p[3]
-        endif_ = p[4]
-    else:
-        stat_ = make_nop()
-        endif_ = p[3]
-
-    p[0] = make_sentence(p.lineno(2), "IF", cond_, make_block(stat_, endif_))
-
-
-def p_endif(p):
-    """endif : END IF
-    | label END IF
-    | ENDIF
-    | label ENDIF
-    """
-    p[0] = make_nop() if p[1] in ("END", "ENDIF") else p[1]
-
-
-def p_statement_if(p):
-    """statement : if_inline %prec RP"""
-    p[0] = p[1]
-
-
-def p_statement_if_then_endif(p):
-    """statement : if_then_part statements_co endif
-    | if_then_part co_statements_co endif
-    """
-    cond_ = p[1]
-    stat_ = p[2]
-    endif_ = p[3]
-    p[0] = make_sentence(p.lineno(1), "IF", cond_, make_block(stat_, endif_))
-
-
-def p_single_line_if(p):
-    """if_inline : if_then_part statements %prec ID
-    | if_then_part co_statements_co %prec NEWLINE
-    | if_then_part statements_co %prec NEWLINE
-    | if_then_part co_statements %prec ID
-    """
-    cond_ = p[1]
-    stat_ = p[2]
-    p[0] = make_sentence(p.lineno(1), "IF", cond_, stat_)
-
-
-def p_if_elseif(p):
-    """statement : if_then_part NEWLINE program_co elseiflist
-    | if_then_part NEWLINE elseiflist
-    """
-    cond_ = p[1]
-    stats_ = p[3] if len(p) == 5 else make_nop()
-    eliflist = p[4] if len(p) == 5 else p[3]
-    p[0] = make_sentence(p.lineno(2), "IF", cond_, stats_, eliflist)
-
-
-def p_elseif_part(p):
-    """elseif_expr : ELSEIF expr then
-    | label ELSEIF expr then
-    """
-    if p[1] == "ELSEIF":
-        label_ = make_nop()  # No label
-        cond_ = p[2]
-    else:
-        label_ = p[1]
-        cond_ = p[3]
-
-    p[0] = label_, cond_
-
-
-def p_elseif_list(p):
-    """elseiflist : elseif_expr program_co endif
-    | elseif_expr program_co else_part
-    """
-    label_, cond_ = p[1]
-    then_ = p[2]
-    else_ = p[3]
-
-    if isinstance(else_, list):  # it's an else part
-        else_ = make_block(*else_)
-    else:
-        then_ = make_block(then_, else_)
-        else_ = None
-
-    p[0] = make_block(label_, make_sentence(p.lineno(1), "IF", cond_, then_, else_))
-
-
-def p_elseif_elseiflist(p):
-    """elseiflist : elseif_expr program_co elseiflist"""
-    label_, cond_ = p[1]
-    then_ = p[2]
-    else_ = p[3]
-    p[0] = make_block(label_, make_sentence(p.lineno(1), "IF", cond_, then_, else_))
-
-
-def p_else_part_endif(p):
-    """else_part_inline : ELSE NEWLINE program_co endif
-    | ELSE NEWLINE statements_co endif
-    | ELSE NEWLINE co_statements_co endif
-    | ELSE NEWLINE endif
-    | ELSE NEWLINE label statements_co endif
-    | ELSE NEWLINE label co_statements_co endif
-    | ELSE statements_co endif
-    | ELSE co_statements_co endif
-    """
-    if p[2] == "\n":
-        if len(p) == 4:
-            p[0] = [make_nop(), p[3]]
-        elif len(p) == 6:
-            p[0] = [p[3], p[4], p[5]]
-        else:
-            p[0] = [p[3], p[4]]
-    else:
-        p[0] = [p[2], p[3]]
-
-
-def p_else_part(p):
-    """else_part_inline : ELSE statements_co
-    | ELSE co_statements_co
-    | ELSE co_statements
-    | ELSE statements
-    """
-    p[0] = [p[2], make_nop()]
-
-
-def p_else_part_is_inline(p):
-    """else_part : else_part_inline"""
-    p[0] = p[1]
-
-
-def p_else_part_label(p):
-    """else_part : label ELSE program_co endif
-    | label ELSE statements_co endif
-    | label ELSE co_statements_co endif
-    """
-    lbl = p[1]
-    p[0] = [make_block(lbl, p[3]), p[4]]
-
-
-def p_if_then_part(p):
-    """if_then_part : IF expr then"""
-    expr = p[2]
-    if expr is None:
-        p[0] = None
-        return
-
-    if is_number(expr):
-        errmsg.warning_condition_is_always(p.lineno(1), bool(expr.value))
-
-    p[0] = expr
-
-
-def p_if_inline(p):
-    """statement : if_inline else_part_inline"""
-    p[1].append_child(make_block(p[2][0], p[2][1]))
-    p[0] = p[1]
-
-
-def p_if_else(p):
-    """statement : if_then_part NEWLINE program_co else_part"""
-    cond_ = p[1]
-    then_ = p[3]
-    else_ = p[4][0]
-    endif = p[4][1]
-    p[0] = make_sentence(p.lineno(2), "IF", cond_, then_, make_block(else_, endif))
-
-
-def p_then(p):
-    """then :
-    | THEN
-    """
-
-
-# endregion
-
-
-# region [FOR sentence]
-def p_for_sentence(p):
-    """statement : for_start program_co label_next
-    | for_start co_statements_co label_next
-    | for_start program label_next
-    """
-    p[0] = p[1]
-    if is_null(p[0]):
-        return
-    p[1].append_child(make_block(p[2], p[3]))
-    gl.LOOPS.pop()
-
-
-def p_next(p):
-    """label_next : label NEXT
-    | NEXT
-    """
-    p[0] = make_nop() if p[1] == "NEXT" else p[1]
-
-
-def p_next1(p):
-    """label_next : label NEXT ID
-    | NEXT ID
-    """
-    if p[1] == "NEXT":
-        p1 = make_nop()
-        p3 = p[2]
-    else:
-        p1 = p[1]
-        p3 = p[3]
-
-    if p3 != gl.LOOPS[-1].var:
-        errmsg.syntax_error_wrong_for_var(p.lineno(2), gl.LOOPS[-1].var, p3)
-        p[0] = make_nop()
-        return
-
-    p[0] = p1
-
-
-def p_for_sentence_start(p):
-    """for_start : FOR ID EQ expr TO expr step"""
-    gl.LOOPS.append(LoopInfo(type=LoopType.FOR, lineno=p.lineno(1), var=p[2]))
-    p[0] = None
-
-    if p[4] is None or p[6] is None or p[7] is None:
-        return
-
-    if is_number(p[4], p[6], p[7]):
-        if p[4].value != p[6].value and p[7].value == 0:
-            warning(p.lineno(5), "STEP value is 0 and FOR might loop forever")
-
-        if p[4].value > p[6].value and p[7].value > 0:
-            warning(
-                p.lineno(5),
-                "FOR start value is greater than end. This FOR loop is useless",
-            )
-
-        if p[4].value < p[6].value and p[7].value < 0:
-            warning(
-                p.lineno(2),
-                "FOR start value is lower than end. This FOR loop is useless",
-            )
-
-    id_type = common_type(common_type(p[4], p[6]), p[7])
-    variable = SYMBOL_TABLE.access_var(p[2], p.lineno(2), default_type=id_type)
-    if variable is None:
-        return
-
-    mark_entry_as_accessed(variable)
-    expr1 = make_typecast(variable.type_, p[4], p.lineno(3))
-    expr2 = make_typecast(variable.type_, p[6], p.lineno(5))
-    expr3 = make_typecast(variable.type_, p[7], p.lexer.lineno)
-
-    p[0] = make_sentence(p.lineno(1), "FOR", variable, expr1, expr2, expr3)
-
-
-def p_step(p):
-    """step :"""
-    p[0] = make_number(1, lineno=p.lexer.lineno)
-
-
-def p_step_expr(p):
-    """step : STEP expr"""
-    p[0] = p[2]
-
-
-# endregion
-
-
-def p_end(p):
-    """statement : END expr
-    | END
-    """
-    q = make_number(0, lineno=p.lineno(1)) if len(p) == 2 else p[2]
-    p[0] = make_sentence(p.lineno(1), "END", q)
-
-
-def p_error_raise(p):
-    """statement : ERROR expr"""
-    q = make_number(1, lineno=p.lineno(2))
-    r = make_binary(
-        p.lineno(1),
-        "MINUS",
-        make_typecast(TYPE.ubyte, p[2], p.lineno(1)),
-        q,
-        lambda x, y: x - y,
-    )
-    p[0] = make_sentence(p.lineno(1), "ERROR", r)
-
-
-def p_stop_raise(p):
-    """statement : STOP expr
-    | STOP
-    """
-    q = make_number(9, lineno=p.lineno(1)) if len(p) == 2 else p[2]
-    z = make_number(1, lineno=p.lineno(1))
-    r = make_binary(
-        p.lineno(1),
-        "MINUS",
-        make_typecast(TYPE.ubyte, q, p.lineno(1)),
-        z,
-        lambda x, y: x - y,
-    )
-    p[0] = make_sentence(p.lineno(1), "STOP", r)
-
-
-def p_loop(p):
-    """label_loop : label LOOP
-    | LOOP
-    """
-    if p[1] == "LOOP":
-        p[0] = None
-    else:
-        p[0] = p[1]
-
-
-def p_do_loop(p):
-    """statement : do_start program_co label_loop
-    | do_start label_loop
-    | DO label_loop
-    """
-    if len(p) == 4:
-        q = make_block(p[2], p[3])
-    else:
-        q = p[2]
-
-    if p[1] == "DO":
-        gl.LOOPS.append(LoopInfo(LoopType.DO, p.lineno(1)))
-
-    if q is None:
-        warning(p.lineno(1), "Infinite empty loop")
-
-    # An infinite loop and no warnings
-    p[0] = make_sentence(p.lineno(1), "DO_LOOP", q)
-    gl.LOOPS.pop()
-
-
-def p_do_loop_until(p):
-    """statement : do_start program_co label_loop UNTIL expr
-    | do_start label_loop UNTIL expr
-    | DO label_loop UNTIL expr
-    """
-    if len(p) == 6:
-        q = make_block(p[2], p[3])
-        r = p[5]
-    else:
-        q = p[2]
-        r = p[4]
-
-    if p[1] == "DO":
-        gl.LOOPS.append(LoopInfo(LoopType.DO, p.lineno(1)))
-
-    p[0] = make_sentence(p.lineno(1), "DO_UNTIL", r, q)
-
-    gl.LOOPS.pop()
-    if is_number(r):
-        errmsg.warning_condition_is_always(p.lineno(3), bool(r.value))
-    if q is None:
-        errmsg.warning_empty_loop(p.lineno(3))
-
-
-def p_data(p):
-    """statement : DATA arguments"""
-    label_ = make_label(gl.DATA_PTR_CURRENT, lineno=p.lineno(1))
-    datas_ = []
-    funcs = []
-
-    if p[2] is None:
-        p[0] = None
-        return
-
-    if gl.FUNCTION_LEVEL:
-        errmsg.error(p.lineno(1), "DATA not allowed within Functions nor Subs")
-        p[0] = None
-        return
-
-    for d in p[2].children:
-        value = d.value
-        if is_static(value):
-            datas_.append(d)
-            continue
-
-        new_lbl = f"__DATA__FUNCPTR__{len(gl.DATA_FUNCTIONS)}"
-        entry = make_func_declaration(new_lbl, p.lineno(1), type_=value.type_, class_=CLASS.function)
-        if not entry:
-            continue
-
-        func = entry.entry
-        func.ref.convention = CONVENTION.fastcall
-        SYMBOL_TABLE.enter_scope(new_lbl)
-        func.ref.local_symbol_table = SYMBOL_TABLE.current_scope
-        func.ref.locals_size = SYMBOL_TABLE.leave_scope()
-
-        gl.DATA_FUNCTIONS.append(func)
-        sent = make_sentence(p.lineno(1), "RETURN", func, value)
-        func.ref.body = make_block(sent)
-        datas_.append(entry)
-        funcs.append(entry)
-
-    gl.DATAS.append(src.api.dataref.DataRef(label_, datas_))
-    id_ = src.api.utils.current_data_label()
-    gl.DATA_PTR_CURRENT = id_
-
-
-def p_restore(p):
-    """statement : RESTORE
-    | RESTORE ID
-    | RESTORE NUMBER
-    """
-    if len(p) == 2:
-        lbl = None
-    else:
-        lbl = check_and_make_label(p[2], p.lineno(1))
-
-    p[0] = make_sentence(p.lineno(1), "RESTORE", lbl)
-
-
-def p_read(p):
-    """statement : READ arguments"""
-    gl.DATA_IS_USED = True
-    reads = []
-
-    if p[2] is None:
-        return
-
-    for arg in p[2]:
-        entry = arg.value
-        if entry is None:
-            p[0] = None
-            return
-
-        if entry.token == "VARARRAY":
-            errmsg.error(p.lineno(1), "Cannot read '%s'. It's an array" % entry.name)
-            p[0] = None
-            return
-
-        if isinstance(entry, sym.ID):
-            if entry.class_ != CLASS.var:
-                errmsg.syntax_error_cannot_assign_not_a_var(p.lineno(2), entry.name)
-                p[0] = None
-                return
-
-            mark_entry_as_accessed(entry)
-            if entry.type_ == TYPE.auto:
-                entry.type_ = _TYPE(gl.DEFAULT_TYPE)
-                errmsg.warning_implicit_type(p.lineno(2), p[2], entry.type_)
-
-            reads.append(make_sentence(p.lineno(1), "READ", entry))
-            continue
-
-        if isinstance(entry, sym.ARRAYLOAD):
-            reads.append(
-                make_sentence(
-                    p.lineno(1),
-                    "READ",
-                    sym.ARRAYACCESS(entry.entry, entry.args, entry.lineno, gl.FILENAME),
-                )
-            )
-            continue
-
-        errmsg.error(p.lineno(1), "Syntax error. Can only read a variable or an array element")
-        p[0] = None
-        return
-
-    p[0] = make_block(*reads)
-
-
-def p_do_loop_while(p):
-    """statement : do_start program_co label_loop WHILE expr
-    | do_start label_loop WHILE expr
-    | DO label_loop WHILE expr
-    """
-    if len(p) == 6:
-        q = make_block(p[2], p[3])
-        r = p[5]
-    else:
-        q = p[2]
-        r = p[4]
-
-    if p[1] == "DO":
-        gl.LOOPS.append(LoopInfo(LoopType.DO, p.lineno(1)))
-
-    p[0] = make_sentence(p.lineno(1), "DO_WHILE", r, q)
-    gl.LOOPS.pop()
-
-    if is_number(r):
-        errmsg.warning_condition_is_always(p.lineno(3), bool(r.value))
-    if q is None:
-        errmsg.warning_empty_loop(p.lineno(3))
-
-
-def p_do_while_loop(p):
-    """statement : do_while_start program_co LOOP
-    | do_while_start co_statements_co LOOP
-    | do_while_start LOOP
-    """
-    r = p[1]
-    q = p[2]
-    if q == "LOOP":
-        q = None
-
-    p[0] = make_sentence(p.lineno(1), "WHILE_DO", r, q)
-    gl.LOOPS.pop()
-
-    if is_number(r):
-        errmsg.warning_condition_is_always(p.lineno(2), bool(r.value))
-
-
-def p_do_until_loop(p):
-    """statement : do_until_start program_co LOOP
-    | do_until_start co_statements_co LOOP
-    | do_until_start LOOP
-    """
-    r = p[1]
-    q = p[2]
-    if q == "LOOP":
-        q = None
-
-    p[0] = make_sentence(p.lineno(2), "UNTIL_DO", r, q)
-    gl.LOOPS.pop()
-
-    if is_number(r):
-        errmsg.warning_condition_is_always(p.lineno(2), bool(r.value))
-
-
-def p_do_while_start(p):
-    """do_while_start : DO WHILE expr"""
-    p[0] = p[3]
-    gl.LOOPS.append(LoopInfo(LoopType.DO, p.lineno(1)))
-
-
-def p_do_until_start(p):
-    """do_until_start : DO UNTIL expr"""
-    p[0] = p[3]
-    gl.LOOPS.append(LoopInfo(LoopType.DO, p.lineno(1)))
-
-
-def p_do_start(p):
-    """do_start : DO CO
-    | DO NEWLINE
-    """
-    gl.LOOPS.append(LoopInfo(LoopType.DO, p.lineno(1)))
-
-
-def p_label_end_while(p):
-    """label_end_while : label WEND
-    | label END WHILE
-    | WEND
-    | END WHILE
-    """
-    if p[1] in ("WEND", "END"):
-        p[0] = None
-    else:
-        p[0] = p[1]
-
-
-def p_while_sentence(p):
-    """statement : while_start co_statements_co label_end_while
-    | while_start program_co label_end_while
-    """
-    gl.LOOPS.pop()
-    q = make_block(p[2], p[3])
-
-    if is_number(p[1]):
-        errmsg.warning_condition_is_always(p.lineno(1), bool(p[1].value))
-
-    p[0] = make_sentence(p.lineno(1), "WHILE", p[1], q)
-
-
-def p_while_start(p):
-    """while_start : WHILE expr"""
-    p[0] = p[2]
-    gl.LOOPS.append(LoopInfo(LoopType.WHILE, p.lineno(1)))
-    if is_number(p[2]) and not p[2].value:
-        errmsg.warning_condition_is_always(p.lineno(1))
-
-
-def p_exit(p):
-    """statement : EXIT WHILE
-    | EXIT DO
-    | EXIT FOR
-    """
-    q = p[2]
-    p[0] = make_sentence(p.lineno(1), "EXIT_%s" % q)
-
-    for loop in gl.LOOPS:
-        if q == loop.type:
-            return
-
-    error(p.lineno(1), "Syntax Error: EXIT %s out of loop" % q)
-
-
-def p_continue(p):
-    """statement : CONTINUE WHILE
-    | CONTINUE DO
-    | CONTINUE FOR
-    """
-    q = p[2]
-    p[0] = make_sentence(p.lineno(1), "CONTINUE_%s" % q)
-
-    for i in gl.LOOPS:
-        if q == i[0]:
-            return
-
-    error(p.lineno(1), "Syntax Error: CONTINUE %s out of loop" % q)
-
-
-def p_print_sentence(p):
-    """statement : PRINT print_list"""
-    global PRINT_IS_USED
-
-    p[0] = p[2]
-    PRINT_IS_USED = True
-
-
-def p_print_elem_expr(p):
-    """print_elem : expr"""
-    p[0] = p[1]
-    if p[1] is not None and p[1].type_ == TYPE.boolean:
-        p[0] = make_typecast(TYPE.ubyte, p[1], p.lineno(1))
-
-
-def p_print_list_expr(p):
-    """print_elem : print_at
-    | print_tab
-    | attr
-    | BOLD expr
-    | ITALIC expr
-    """
-    if p[1] in ("BOLD", "ITALIC"):
-        p[0] = make_sentence(p.lineno(1), p[1] + "_TMP", make_typecast(TYPE.ubyte, p[2], p.lineno(1)))
-    else:
-        p[0] = p[1]
-
-
-def p_attr_list(p):
-    """attr_list : attr SC"""
-    p[0] = p[1]
-
-
-def p_attr_list_list(p):
-    """attr_list : attr_list attr SC"""
-    p[0] = make_block(p[1], p[2])
-
-
-def p_attr(p):
-    """attr : OVER expr
-    | INVERSE expr
-    | INK expr
-    | PAPER expr
-    | BRIGHT expr
-    | FLASH expr
-    """
-    # ATTR_LIST are used by drawing commands: PLOT, DRAW, CIRCLE
-    # BOLD and ITALIC are ignored by them, so we put them out of the
-    # attr definition so something like DRAW BOLD 1; .... will raise
-    # a syntax error
-    p[0] = make_sentence(p.lineno(1), p[1] + "_TMP", make_typecast(TYPE.ubyte, p[2], p.lineno(1)))
-
-
-def p_print_list_epsilon(p):
-    """print_elem :"""
-    p[0] = None
-
-
-def p_print_list_elem(p):
-    """print_list : print_elem"""
-    p[0] = make_sentence(p.lexer.lineno, "PRINT", p[1])
-    p[0].eol = True
-
-
-def p_print_list(p):
-    """print_list : print_list SC print_elem"""
-    p[0] = p[1]
-    p[0].eol = p[3] is not None
-
-    if p[3] is not None:
-        p[0].append_child(p[3])
-
-
-def p_print_list_comma(p):
-    """print_list : print_list COMMA print_elem"""
-    p[0] = p[1]
-    p[0].eol = p[3] is not None
-    p[0].append_child(make_sentence(p.lineno(2), "PRINT_COMMA"))
-
-    if p[3] is not None:
-        p[0].append_child(p[3])
-
-
-def p_print_list_at(p):
-    """print_at : AT expr COMMA expr"""
-    p[0] = make_sentence(
-        p.lineno(1),
-        "PRINT_AT",
-        make_typecast(TYPE.ubyte, p[2], p.lineno(1)),
-        make_typecast(TYPE.ubyte, p[4], p.lineno(3)),
-    )
-
-
-def p_print_list_tab(p):
-    """print_tab : TAB expr"""
-    p[0] = make_sentence(p.lineno(1), "PRINT_TAB", make_typecast(TYPE.ubyte, p[2], p.lineno(1)))
-
-
-def p_on_goto(p):
-    """statement : ON expr goto label_list"""
-    expr = make_typecast(TYPE.ubyte, p[2], p.lineno(1))
-    p[0] = make_sentence(p.lineno(1), "ON_" + p[3], expr, *p[4])
-
-
-def p_label_list(p):
-    """label_list : ID
-    | NUMBER
-    """
-    entry = check_and_make_label(p[1], p.lineno(1))
-    p[0] = [entry]
-
-
-def p_label_list_list(p):
-    """label_list : label_list COMMA ID
-    | label_list COMMA NUMBER
-    """
-    p[0] = p[1]
-    entry = check_and_make_label(p[3], p.lineno(3))
-    p[1].append(entry)
-
-
-def p_return(p):
-    """statement : RETURN"""
-    if not FUNCTION_LEVEL:  # At less one level, otherwise, this return is from a GOSUB
-        p[0] = make_sentence(p.lineno(1), "RETURN")
-        return
-
-    if FUNCTION_LEVEL[-1].class_ != CLASS.sub:
-        error(p.lineno(1), "Syntax Error: Function must RETURN a value.")
-        p[0] = None
-        return
-
-    p[0] = make_sentence(p.lineno(1), "RETURN", FUNCTION_LEVEL[-1])
-
-
-def p_return_expr(p):
-    """statement : RETURN expr"""
-    if not FUNCTION_LEVEL:  # At less one level
-        error(p.lineno(1), "Syntax Error: Returning value out of FUNCTION")
-        p[0] = None
-        return
-
-    if FUNCTION_LEVEL[-1].class_ is CLASS.unknown:  # This function was not correctly declared.
-        p[0] = None
-        return
-
-    if FUNCTION_LEVEL[-1].class_ != CLASS.function:
-        error(p.lineno(1), "Syntax Error: SUBs cannot return a value")
-        p[0] = None
-        return
-
-    if FUNCTION_LEVEL[-1].type_ is None:  # There was an error in the Function declaration
-        p[0] = None
-        return
-
-    if is_numeric(p[2]) and FUNCTION_LEVEL[-1].type_ == TYPE.string:
-        error(
-            p.lineno(2),
-            "Type Error: Function must return a string, not a numeric value",
-        )
-        p[0] = None
-        return
-
-    if not is_numeric(p[2]) and FUNCTION_LEVEL[-1].type_ != TYPE.string:
-        error(
-            p.lineno(2),
-            "Type Error: Function must return a numeric value, not a string",
-        )
-        p[0] = None
-        return
-
-    p[0] = make_sentence(
-        p.lineno(1),
-        "RETURN",
-        FUNCTION_LEVEL[-1],
-        make_typecast(FUNCTION_LEVEL[-1].type_, p[2], p.lineno(1)),
-    )
-
-
-def p_pause(p):
-    """statement : PAUSE expr"""
-    p[0] = make_sentence(p.lineno(1), "PAUSE", make_typecast(TYPE.uinteger, p[2], p.lineno(1)))
-
-
-def p_poke(p):
-    """statement : POKE expr COMMA expr
-    | POKE LP expr COMMA expr RP
-    """
-    i = 2 if isinstance(p[2], Symbol) or p[2] is None else 3
-    if p[i] is None or p[i + 2] is None:
-        p[0] = None
-        return
-    p[0] = make_sentence(
-        p.lineno(1),
-        "POKE",
-        make_typecast(TYPE.uinteger, p[i], p.lineno(i + 1)),
-        make_typecast(TYPE.ubyte, p[i + 2], p.lineno(i + 1)),
-    )
-
-
-def p_poke2(p):
-    """statement : POKE numbertype expr COMMA expr
-    | POKE LP numbertype expr COMMA expr RP
-    """
-    i = 2 if isinstance(p[2], Symbol) or p[2] is None else 3
-    if p[i + 1] is None or p[i + 3] is None:
-        p[0] = None
-        return
-    p[0] = make_sentence(
-        p.lineno(1),
-        "POKE",
-        make_typecast(TYPE.uinteger, p[i + 1], p.lineno(i + 2)),
-        make_typecast(p[i], p[i + 3], p.lineno(i + 3)),
-    )
-
-
-def p_poke3(p):
-    """statement : POKE numbertype COMMA expr COMMA expr
-    | POKE LP numbertype COMMA expr COMMA expr RP
-    """
-    i = 2 if isinstance(p[2], Symbol) or p[2] is None else 3
-    if p[i + 2] is None or p[i + 4] is None:
-        p[0] = None
-        return
-    p[0] = make_sentence(
-        p.lineno(1),
-        "POKE",
-        make_typecast(TYPE.uinteger, p[i + 2], p.lineno(i + 3)),
-        make_typecast(p[i], p[i + 4], p.lineno(i + 5)),
-    )
-
-
-def p_out(p):
-    """statement : OUT expr COMMA expr"""
-    p[0] = make_sentence(
-        p.lineno(1),
-        "OUT",
-        make_typecast(TYPE.uinteger, p[2], p.lineno(3)),
-        make_typecast(TYPE.ubyte, p[4], p.lineno(4)),
-    )
-
-
-def p_simple_instruction(p):
-    """statement : ITALIC expr
-    | BOLD expr
-    | INK expr
-    | PAPER expr
-    | BRIGHT expr
-    | FLASH expr
-    | OVER expr
-    | INVERSE expr
-    """
-    p[0] = make_sentence(p.lineno(1), p[1], make_typecast(TYPE.ubyte, p[2], p.lineno(1)))
-
-
-def p_save_code(p):
-    """statement : SAVE expr CODE expr COMMA expr
-    | SAVE expr ID
-    | SAVE expr ARRAY_ID
-    """
-    expr = p[2]
-    if expr.type_ != TYPE.string:
-        errmsg.syntax_error_expected_string(p.lineno(1), expr.type_)
-
-    if len(p) == 4:
-        if p[3].upper() not in ("SCREEN", "SCREEN$"):
-            error(p.lineno(3), 'Unexpected "%s" ID. Expected "SCREEN$" instead' % p[3])
-            return None
-        # ZX Spectrum screen start + length
-        # This should be stored in a architecture-dependant file
-        start = make_number(16384, lineno=p.lineno(1))
-        length = make_number(6912, lineno=p.lineno(1))
-    else:
-        start = make_typecast(TYPE.uinteger, p[4], p.lineno(4))
-        length = make_typecast(TYPE.uinteger, p[6], p.lineno(6))
-
-    p[0] = make_sentence(p.lineno(1), p[1], expr, start, length)
-
-
-def p_save_data(p):
-    """statement : SAVE expr DATA
-    | SAVE expr DATA ID
-    | SAVE expr DATA ID LP RP
-    """
-    if p[2].type_ != TYPE.string:
-        errmsg.syntax_error_expected_string(p.lineno(1), p[2].type_)
-
-    if len(p) != 4:
-        entry = SYMBOL_TABLE.access_id(p[4], p.lineno(4))
-        if entry is None:
-            p[0] = None
-            return
-
-        mark_entry_as_accessed(entry)
-        access = entry
-        start = make_unary(p.lineno(4), "ADDRESS", access, type_=TYPE.uinteger)
-
-        if entry.class_ == CLASS.array:
-            length = make_number(entry.memsize, lineno=p.lineno(4))
-        else:
-            length = make_number(entry.type_.size, lineno=p.lineno(4))
-    else:
-        access = SYMBOL_TABLE.access_label(gl.ZXBASIC_USER_DATA, p.lineno(3), SYMBOL_TABLE.global_scope)
-        start = make_unary(p.lineno(3), "ADDRESS", access, type_=TYPE.uinteger)
-
-        access = SYMBOL_TABLE.access_label(gl.ZXBASIC_USER_DATA_LEN, p.lineno(3), SYMBOL_TABLE.global_scope)
-        length = make_unary(p.lineno(3), "ADDRESS", access, type_=TYPE.uinteger)
-
-    p[0] = make_sentence(p.lineno(1), p[1], p[2], start, length)
-
-
-def p_load_or_verify(p):
-    """load_or_verify : LOAD
-    | VERIFY
-    """
-    p[0] = p[1]
-
-
-def p_load_code(p):
-    """statement : load_or_verify expr ID
-    | load_or_verify expr CODE
-    | load_or_verify expr CODE expr
-    | load_or_verify expr CODE expr COMMA expr
-    """
-    if p[2].type_ != TYPE.string:
-        errmsg.syntax_error_expected_string(p.lineno(3), p[2].type_)
-
-    if len(p) == 4:
-        if p[3].upper() not in ("SCREEN", "SCREEN$", "CODE"):
-            error(p.lineno(3), 'Unexpected "%s" ID. Expected "SCREEN$" instead' % p[3])
-            return None
-        if p[3].upper() == "CODE":  # LOAD "..." CODE
-            start = make_number(0, lineno=p.lineno(3))
-            length = make_number(0, lineno=p.lineno(3))
-        else:  # SCREEN$
-            start = make_number(16384, lineno=p.lineno(3))
-            length = make_number(6912, lineno=p.lineno(3))
-    else:
-        start = make_typecast(TYPE.uinteger, p[4], p.lineno(3))
-
-        if len(p) == 5:
-            length = make_number(0, lineno=p.lineno(3))
-        else:
-            length = make_typecast(TYPE.uinteger, p[6], p.lineno(5))
-
-    p[0] = make_sentence(p.lineno(3), p[1], p[2], start, length)
-
-
-def p_load_data(p):
-    """statement : load_or_verify expr DATA
-    | load_or_verify expr DATA ID
-    | load_or_verify expr DATA ID LP RP
-    """
-    if p[2].type_ != TYPE.string:
-        errmsg.syntax_error_expected_string(p.lineno(1), p[2].type_)
-
-    if len(p) != 4:
-        entry = SYMBOL_TABLE.access_id(p[4], p.lineno(4))
-        if entry is None:
-            p[0] = None
-            return
-
-        mark_entry_as_accessed(entry)
-        start = make_unary(p.lineno(4), "ADDRESS", entry, type_=TYPE.uinteger)
-
-        if entry.class_ == CLASS.array:
-            length = make_number(entry.memsize, lineno=p.lineno(4))
-        else:
-            length = make_number(entry.type_.size, lineno=p.lineno(4))
-    else:
-        entry = SYMBOL_TABLE.access_label(gl.ZXBASIC_USER_DATA, p.lineno(3), SYMBOL_TABLE.global_scope)
-        start = make_unary(p.lineno(3), "ADDRESS", entry, type_=TYPE.uinteger)
-
-        entry = SYMBOL_TABLE.access_label(gl.ZXBASIC_USER_DATA_LEN, p.lineno(3), SYMBOL_TABLE.global_scope)
-        length = make_unary(p.lineno(3), "ADDRESS", entry, type_=TYPE.uinteger)
-
-    p[0] = make_sentence(p.lineno(3), p[1], p[2], start, length)
-
-
-def p_numbertype(p):
-    """numbertype : BYTE
-    | UBYTE
-    | INTEGER
-    | UINTEGER
-    | LONG
-    | ULONG
-    | FIXED
-    | FLOAT
-    """
-    p[0] = make_type(p[1].lower(), p.lineno(1))
-
-
-def p_expr_plus_expr(p):
-    """expr : expr PLUS expr"""
-    p[0] = make_binary(p.lineno(2), "PLUS", p[1], p[3], lambda x, y: x + y)
-
-
-def p_expr_minus_expr(p):
-    """expr : expr MINUS expr"""
-    p[0] = make_binary(p.lineno(2), "MINUS", p[1], p[3], lambda x, y: x - y)
-
-
-def p_expr_mul_expr(p):
-    """expr : expr MUL expr"""
-    p[0] = make_binary(p.lineno(2), "MUL", p[1], p[3], lambda x, y: x * y)
-
-
-def p_expr_div_expr(p):
-    """expr : expr DIV expr"""
-    p[0] = make_binary(p.lineno(2), "DIV", p[1], p[3], lambda x, y: x / y)
-
-
-def p_expr_mod_expr(p):
-    """expr : expr MOD expr"""
-    p[0] = make_binary(p.lineno(2), "MOD", p[1], p[3], lambda x, y: x % y)
-
-
-def p_expr_pow_expr(p):
-    """expr : expr POW expr"""
-    p[0] = make_binary(
-        p.lineno(2),
-        "POW",
-        make_typecast(TYPE.float_, p[1], p.lineno(2)),
-        make_typecast(TYPE.float_, p[3], p.lexer.lineno),
-        lambda x, y: x**y,
-    )
-
-
-def p_expr_shl_expr(p):
-    """expr : expr SHL expr"""
-    if p[1] is None or p[3] is None:
-        p[0] = None
-        return
-
-    if p[1].type_ in (TYPE.float_, TYPE.fixed):
-        p[1] = make_typecast(TYPE.ulong, p[1], p.lineno(2))
-
-    p[0] = make_binary(
-        p.lineno(2),
-        "SHL",
-        p[1],
-        make_typecast(TYPE.ubyte, p[3], p.lineno(2)),
-        lambda x, y: x << y,
-    )
-
-
-def p_expr_shr_expr(p):
-    """expr : expr SHR expr"""
-    if p[1] is None or p[3] is None:
-        p[0] = None
-        return
-
-    if p[1].type_ in (TYPE.float_, TYPE.fixed):
-        p[1] = make_typecast(TYPE.ulong, p[1], p.lineno(2))
-
-    p[0] = make_binary(
-        p.lineno(2),
-        "SHR",
-        p[1],
-        make_typecast(TYPE.ubyte, p[3], p.lineno(2)),
-        lambda x, y: x >> y,
-    )
-
-
-def p_minus_expr(p):
-    """expr : MINUS expr %prec UMINUS"""
-    p[0] = make_unary(p.lineno(1), "MINUS", p[2], lambda x: -x)
-
-
-def p_expr_EQ_expr(p):
-    """expr : expr EQ expr"""
-    p[0] = make_binary(p.lineno(2), "EQ", p[1], p[3], lambda x, y: x == y)
-
-
-def p_expr_LT_expr(p):
-    """expr : expr LT expr"""
-    p[0] = make_binary(p.lineno(2), "LT", p[1], p[3], lambda x, y: x < y)
-
-
-def p_expr_LE_expr(p):
-    """expr : expr LE expr"""
-    p[0] = make_binary(p.lineno(2), "LE", p[1], p[3], lambda x, y: x <= y)
-
-
-def p_expr_GT_expr(p):
-    """expr : expr GT expr"""
-    p[0] = make_binary(p.lineno(2), "GT", p[1], p[3], lambda x, y: x > y)
-
-
-def p_expr_GE_expr(p):
-    """expr : expr GE expr"""
-    p[0] = make_binary(p.lineno(2), "GE", p[1], p[3], lambda x, y: x >= y)
-
-
-def p_expr_NE_expr(p):
-    """expr : expr NE expr"""
-    p[0] = make_binary(p.lineno(2), "NE", p[1], p[3], lambda x, y: x != y)
-
-
-def p_expr_OR_expr(p):
-    """expr : expr OR expr"""
-    p[0] = make_binary(p.lineno(2), "OR", p[1], p[3], lambda x, y: x or y)
-
-
-def p_expr_BOR_expr(p):
-    """expr : expr BOR expr"""
-    p[0] = make_binary(p.lineno(2), "BOR", p[1], p[3], lambda x, y: x | y)
-
-
-def p_expr_XOR_expr(p):
-    """expr : expr XOR expr"""
-    p[0] = make_binary(p.lineno(2), "XOR", p[1], p[3], lambda x, y: (x and not y) or (not x and y))
-
-
-def p_expr_BXOR_expr(p):
-    """expr : expr BXOR expr"""
-    p[0] = make_binary(p.lineno(2), "BXOR", p[1], p[3], lambda x, y: x ^ y)
-
-
-def p_expr_AND_expr(p):
-    """expr : expr AND expr"""
-    p[0] = make_binary(p.lineno(2), "AND", p[1], p[3], lambda x, y: x and y)
-
-
-def p_expr_BAND_expr(p):
-    """expr : expr BAND expr"""
-    p[0] = make_binary(p.lineno(2), "BAND", p[1], p[3], lambda x, y: x & y)
-
-
-def p_NOT_expr(p):
-    """expr : NOT expr"""
-    p[0] = make_unary(p.lineno(1), "NOT", p[2], lambda x: not x)
-
-
-def p_BNOT_expr(p):
-    """expr : BNOT expr"""
-    p[0] = make_unary(p.lineno(1), "BNOT", p[2], lambda x: ~x)
-
-
-def p_lp_expr_rp(p):
-    """bexpr : LP expr RP %prec ID"""
-    p[0] = p[2]
-
-
-def p_cast(p):
-    """expr : CAST LP numbertype COMMA expr RP"""
-    p[0] = make_typecast(p[3], p[5], p.lineno(6))
-
-
-def p_number_expr(p):
-    """bexpr : NUMBER"""
-    p[0] = make_number(p[1], lineno=p.lineno(1))
-
-
-def p_expr_PI(p):
-    """bexpr : PI"""
-    p[0] = make_number(PI, lineno=p.lineno(1), type_=TYPE.float_)
-
-
-def p_expr_string(p):
-    """bexpr : string %prec ID"""
-    p[0] = p[1]
-
-
-def p_string_func_call(p):
-    """string : func_call substr"""
-    p[0] = make_strslice(p.lineno(1), p[1], p[2][0], p[2][1])
-
-
-def p_string_func_call_single(p):
-    """string : func_call LP expr RP"""
-    p[0] = make_strslice(p.lineno(1), p[1], p[3], p[3])
-
-
-def p_string_str(p):
-    """string : STRC"""
-    p[0] = sym.STRING(p[1], p.lineno(1))
-
-
-def p_string_lprp(p):
-    """string : string LP RP"""
-    p[0] = p[1]
-
-
-def p_string_lp_expr_rp(p):
-    """string : string LP expr RP"""
-    p[0] = make_strslice(p.lineno(2), p[1], p[3], p[3])
-
-
-def p_expr_id_substr(p):
-    """string : ID substr"""
-    entry = SYMBOL_TABLE.get_entry(p[1])
-    if entry is not None and entry.type_ == TYPE.string and entry.token == "CONST":
-        p[0] = make_strslice(p.lineno(1), entry, p[2][0], p[2][1])
-        return
-
-    entry = SYMBOL_TABLE.access_var(p[1], p.lineno(1), default_type=TYPE.string)
-    p[0] = None
-    if entry is None:
-        return
-
-    mark_entry_as_accessed(entry)
-    p[0] = make_strslice(p.lineno(1), entry, p[2][0], p[2][1])
-
-
-def p_string_substr(p):
-    """string : string substr"""
-    p[0] = make_strslice(p.lineno(1), p[1], p[2][0], p[2][1])
-
-
-def p_string_expr_lp(p):
-    """string : LP expr RP substr"""
-    if p[2].type_ != TYPE.string:
-        error(
-            p.lexer.lineno,
-            "Expected a string type expression. Got %s type instead" % TYPE.to_string(p[2].type_),
-        )
-        p[0] = None
-    else:
-        p[0] = make_strslice(p.lexer.lineno, p[2], p[4][0], p[4][1])
-
-
-def p_subind_str(p):
-    """substr : LP expr TO expr RP"""
-    p[0] = (
-        make_typecast(TYPE.uinteger, p[2], p.lineno(1)),
-        make_typecast(TYPE.uinteger, p[4], p.lineno(3)),
-    )
-
-
-def p_subind_strTO(p):
-    """substr : LP TO expr RP"""
-    p[0] = (
-        make_typecast(TYPE.uinteger, make_number(0, lineno=p.lineno(2)), p.lineno(1)),
-        make_typecast(TYPE.uinteger, p[3], p.lineno(2)),
-    )
-
-
-def p_subind_TOstr(p):
-    """substr : LP expr TO RP"""
-    p[0] = (
-        make_typecast(TYPE.uinteger, p[2], p.lineno(1)),
-        make_typecast(
-            TYPE.uinteger,
-            make_number(gl.MAX_STRSLICE_IDX, lineno=p.lineno(4)),
-            lineno=p.lineno(4),
-        ),
-        p.lineno(3),
-    )
-
-
-def p_subind_TO(p):
-    """substr : LP TO RP"""
-    p[0] = (
-        make_typecast(TYPE.uinteger, make_number(0, lineno=p.lineno(2)), p.lineno(1)),
-        make_typecast(
-            TYPE.uinteger,
-            make_number(gl.MAX_STRSLICE_IDX, lineno=p.lineno(3)),
-            p.lineno(2),
-        ),
-    )
-
-
-def p_id_expr(p):
-    """bexpr : ID"""
-    entry = SYMBOL_TABLE.access_id(p[1], p.lineno(1), default_class=CLASS.var)
-    if entry is None:
-        p[0] = None
-        return
-
-    mark_entry_as_accessed(entry)
-    if entry.type_ == TYPE.auto:
-        entry.type_ = _TYPE(gl.DEFAULT_TYPE)
-        errmsg.warning_implicit_type(p.lineno(1), p[1], entry.type_)
-
-    p[0] = entry
-
-    if entry.class_ == CLASS.array:  # HINT: This should never happen now
-        if not LET_ASSIGNMENT:
-            error(
-                p.lineno(1),
-                "Variable '%s' is an array and cannot be used in this context" % p[1],
-            )
-            p[0] = None
-    elif entry.class_ == CLASS.function:  # Function call with 0 args
-        p[0] = make_call(p[1], p.lineno(1), make_arg_list(None))
-    elif entry.class_ == CLASS.sub:  # Forbidden for subs
-        errmsg.syntax_error_is_a_sub_not_a_func(p.lineno(1), p[1])
-        p[0] = None
-
-
-def p_addr_of_id(p):
-    """bexpr : ADDRESSOF singleid"""
-    id_: Id = p[2]
-    # Access id. For @ operator we ignore the explicit flag
-    entry = SYMBOL_TABLE.access_id(id_.name, id_.lineno, ignore_explicit_flag=True)
-    if entry is None:
-        p[0] = None
-        return
-
-    entry.has_address = True
-    mark_entry_as_accessed(entry)
-    result = make_unary(p.lineno(1), "ADDRESS", entry, type_=_TYPE(gl.PTR_TYPE))
-
-    if is_dynamic(entry):
-        p[0] = result
-    else:
-        p[0] = make_constexpr(p.lineno(1), result)
-
-
-def p_expr_bexpr(p):
-    """expr : bexpr"""
-    p[0] = p[1]
-
-
-def p_expr_funccall(p):
-    """bexpr : func_call %prec ID"""
-    p[0] = p[1]
-
-
-def p_idcall_expr(p):
-    """func_call : ID arg_list %prec UMINUS"""  # This can be a function call or a string index
-    if p[2] is None:
-        p[0] = None
-        return
-
-    p[0] = make_call(p[1], p.lineno(1), p[2])
-    if p[0] is None:
-        return
-
-    if p[0].token in ("STRSLICE", "ID", "STRING") or p[0].token == "CONST" and p[0].type_ == TYPE.string:
-        entry = SYMBOL_TABLE.access_call(p[1], p.lineno(1))
-        mark_entry_as_accessed(entry)
-        return
-
-    convert_to_function(p[0].entry, CLASS.function, p.lineno(1))
-    mark_entry_as_accessed(p[0].entry)
-
-
-def p_array_eq_error(p):
-    """statement : LET ARRAY_ID EQ expr"""
-    error(p.lineno(4), f"Invalid assignment. Variable {p[2]}() is an array")
-    p[0] = None
-
-
-def p_arr_access_expr(p):
-    """func_call : ARRAY_ID arg_list"""  # This is an array access
-    p[0] = make_call(p[1], p.lineno(1), p[2])
-    if p[0] is None:
-        return
-
-    entry = SYMBOL_TABLE.access_call(p[1], p.lineno(1))
-    mark_entry_as_accessed(entry)
-
-
-def p_let_arr_substr(p):
-    """statement : LET ARRAY_ID arg_list substr EQ expr
-    | ARRAY_ID arg_list substr EQ expr
-    """
-    i = 2 if p[1].upper() == "LET" else 1
-
-    id_ = p[i]
-    arg_list = p[i + 1]
-    substr = p[i + 2]
-    expr_ = p[i + 4]
-    p[0] = make_array_substr_assign(p.lineno(i), id_, arg_list, substr, expr_)
-
-
-def p_let_arr_substr_single(p):
-    """statement : LET ARRAY_ID arg_list LP expr RP EQ expr
-    | ARRAY_ID arg_list LP expr RP EQ expr
-    """
-    i = 2 if p[1].upper() == "LET" else 1
-
-    id_ = p[i]
-    arg_list = p[i + 1]
-    substr = (p[i + 3], p[i + 3])
-    expr_ = p[i + 6]
-    p[0] = make_array_substr_assign(p.lineno(i), id_, arg_list, substr, expr_)
-
-
-def p_let_arr_substr_in_args(p):
-    """statement : LET ARRAY_ID LP arguments TO RP EQ expr
-    | ARRAY_ID LP arguments TO RP EQ expr
-    """
-    i = 2 if p[1].upper() == "LET" else 1
-
-    id_ = p[i]
-    arg_list = p[i + 2]
-    substr = (
-        arg_list.children.pop().value,
-        make_number(gl.MAX_STRSLICE_IDX, lineno=p.lineno(i + 3)),
-    )
-    expr_ = p[i + 6]
-    p[0] = make_array_substr_assign(p.lineno(i), id_, arg_list, substr, expr_)
-
-
-def p_let_arr_substr_in_args2(p):
-    """statement : LET ARRAY_ID LP arguments COMMA TO expr RP EQ expr
-    | ARRAY_ID LP arguments COMMA TO expr RP EQ expr
-    """
-    i = 2 if p[1].upper() == "LET" else 1
-
-    id_ = p[i]
-    arg_list = p[i + 2]
-    top_ = p[i + 5]
-    substr = (make_number(0, lineno=p.lineno(i + 4)), top_)
-    expr_ = p[i + 8]
-    p[0] = make_array_substr_assign(p.lineno(i), id_, arg_list, substr, expr_)
-
-
-def p_let_arr_substr_in_args3(p):
-    """statement : LET ARRAY_ID LP arguments COMMA TO RP EQ expr
-    | ARRAY_ID LP arguments COMMA TO RP EQ expr
-    """
-    i = 2 if p[1].upper() == "LET" else 1
-
-    id_ = p[i]
-    arg_list = p[i + 2]
-    substr = (
-        make_number(0, lineno=p.lineno(i + 4)),
-        make_number(gl.MAX_STRSLICE_IDX, lineno=p.lineno(i + 3)),
-    )
-    expr_ = p[i + 7]
-    p[0] = make_array_substr_assign(p.lineno(i), id_, arg_list, substr, expr_)
-
-
-def p_let_arr_substr_in_args4(p):
-    """statement : LET ARRAY_ID LP arguments TO expr RP EQ expr
-    | ARRAY_ID LP arguments TO expr RP EQ expr
-    """
-    i = 2 if p[1].upper() == "LET" else 1
-
-    id_ = p[i]
-    arg_list = p[i + 2]
-    substr = (arg_list.children.pop().value, p[i + 4])
-    expr_ = p[i + 7]
-    p[0] = make_array_substr_assign(p.lineno(i), id_, arg_list, substr, expr_)
-
-
-def p_addr_of_array_element(p):
-    """bexpr : ADDRESSOF ARRAY_ID arg_list"""
-    p[0] = None
-
-    if p[3] is None:
-        return
-
-    result = make_array_access(p[2], p.lineno(2), p[3])
-    if result is None:
-        return
-
-    mark_entry_as_accessed(result.entry)
-    p[0] = make_unary(p.lineno(1), "ADDRESS", result, type_=_TYPE(gl.PTR_TYPE))
-
-
-def p_err_undefined_arr_access(p):
-    """bexpr : ADDRESSOF ID arg_list"""
-    error(p.lineno(2), 'Undeclared array "%s"' % p[2])
-    p[0] = None
-
-
-def p_bexpr_func(p):
-    """bexpr : ID bexpr"""
-    args = make_arg_list(make_argument(p[2], p.lineno(2)))
-    p[0] = make_call(p[1], p.lineno(1), args)
-    if p[0] is None:
-        return
-
-    if p[0].token in ("STRSLICE", "VAR", "STRING"):
-        entry = SYMBOL_TABLE.access_call(p[1], p.lineno(1))
-        mark_entry_as_accessed(entry)
-        return
-
-    convert_to_function(p[0].entry, CLASS.function, p.lineno(1))
-    mark_entry_as_accessed(p[0].entry)
-
-
-def p_arg_list(p):
-    """arg_list : LP RP"""
-    p[0] = make_arg_list(None)
-
-
-def p_arg_list_arg(p):
-    """arg_list : LP arguments RP"""
-    p[0] = p[2]
-
-
-def p_arguments(p):
-    """arguments : argument"""
-    if p[1] is None:
-        p[0] = None
-        return
-
-    p[0] = make_arg_list(p[1])
-
-
-def p_arguments_argument(p):
-    """arguments : arguments COMMA argument"""
-    if p[1] is None or p[3] is None:
-        p[0] = None
-    else:
-        p[0] = make_arg_list(p[1], p[3])
-
-
-def p_argument(p):
-    """argument : expr %prec ID"""
-    p[0] = make_argument(p[1], p.lineno(1))
-
-
-def p_named_argument(p):
-    """argument : ID WEQ expr %prec ID"""
-    p[0] = make_argument(p[3], p.lineno(1), name=p[1])
-
-
-def p_argument_array(p):
-    """argument : ARRAY_ID"""
-    entry = SYMBOL_TABLE.access_array(p[1], p.lineno(1))
-    if entry is None:
-        p[0] = None
-        return
-
-    mark_entry_as_accessed(entry)
-    p[0] = make_argument(entry, p.lineno(1))
-
-
-def p_funcdecl(p):
-    """function_declaration : function_header function_body"""
-    if p[1] is None:
-        p[0] = None
-        return
-
-    p[0] = p[1]
-    p[0].local_symbol_table = SYMBOL_TABLE.current_scope
-    p[0].locals_size = SYMBOL_TABLE.leave_scope()
-    FUNCTION_LEVEL.pop()
-    p[0].entry.ref.body = p[2]
-    p[0].local_symbol_table.owner = p[0]
-    p[0].entry.ref.forwarded = False
-
-
-def p_funcdeclforward(p):
-    """function_declaration : DECLARE function_header_pre"""
-    if p[2] is None:
-        if FUNCTION_LEVEL:
-            FUNCTION_LEVEL.pop()
-        return
-
-    if p[2].entry.forwarded:
-        error(p.lineno(1), "duplicated declaration for function '%s'" % p[2].name)
-
-    p[2].entry.ref.forwarded = True
-    SYMBOL_TABLE.leave_scope(show_warnings=False)
-    FUNCTION_LEVEL.pop()
-
-
-def p_function_header(p):
-    """function_header : function_header_pre CO
-    | function_header_pre NEWLINE
-    """
-    p[0] = p[1]
-
-
-def p_function_header_error(p):
-    """function_header : function_def error CO
-    | function_def error NEWLINE
-    """
-    p[0] = None
-
-
-def p_function_header_pre(p):
-    """function_header_pre : function_def param_decl typedef"""
-    if p[1] is None or p[2] is None:
-        p[0] = None
-        return
-
-    forwarded = p[1].entry.forwarded
-
-    p[0] = p[1]
-    p[0].append_child(p[2])
-    p[0].params_size = p[2].size
-    lineno = p.lineno(3)
-
-    previoustype_ = p[0].type_
-    if not p[3].implicit or p[0].entry.type_ is None or p[0].entry.type_ == TYPE.unknown:
-        p[0].type_ = p[3]
-        if p[3].implicit and p[0].entry.class_ == CLASS.function:
-            errmsg.warning_implicit_type(p[3].lineno, p[0].entry.name, p[0].type_)
-
-    if forwarded and previoustype_ != p[0].type_:
-        errmsg.syntax_error_func_type_mismatch(lineno, p[0].entry)
-        p[0] = None
-        return
-
-    if forwarded:  # Was predeclared, check parameters match
-        p1 = p[0].entry.ref.params  # Param list previously declared
-        p2 = p[2].children
-
-        if len(p1) != len(p2):
-            errmsg.syntax_error_parameter_mismatch(lineno, p[0].entry)
-            p[0] = None
-            return
-
-        for a, b in zip(p1, p2):
-            if a.name != b.name:
-                warning(
-                    lineno,
-                    "Parameter '%s' in function '%s' has been renamed to '%s'" % (a.name, p[0].name, b.name),
-                )
-
-            if a.type_ != b.type_ or a.byref != b.byref:
-                errmsg.syntax_error_parameter_mismatch(lineno, p[0].entry)
-                p[0] = None
-                return
-
-    p[0].entry.ref.params = p[2]
-
-    if FUNCTION_LEVEL[-1].class_ == CLASS.sub and not p[3].implicit:
-        error(lineno, "SUBs cannot have a return type definition")
-        p[0] = None
-        return
-
-    if FUNCTION_LEVEL[-1].class_ == CLASS.function:
-        src.api.check.check_type_is_explicit(p[0].lineno, p[0].entry.name, p[3])
-
-    if p[0].entry.convention == CONVENTION.fastcall and len(p[2]) > 1:
-        class_ = "SUB" if FUNCTION_LEVEL[-1].class_ == CLASS.sub else "FUNCTION"
-        errmsg.warning_fastcall_with_N_parameters(lineno, class_, p[0].entry.name, len(p[2]))
-
-
-def p_function_error(p):
-    """function_declaration : function_header program_co END error"""
-    p[0] = None
-    error(
-        p.lineno(3),
-        "Unexpected token 'END'. Expected 'END FUNCTION' or 'END SUB' instead.",
-    )
-
-
-def p_function_def(p):
-    """function_def : FUNCTION convention ID
-    | SUB convention ID
-    """
-    convention = p[2]
-    name = p[3]
-    class_ = CLASS.sub if p[1] == "SUB" else CLASS.function  # Must be 'function' or 'sub'
-
-    p[0] = make_func_declaration(name, p.lineno(3), class_)
-    SYMBOL_TABLE.enter_scope(name)
-    entry = SYMBOL_TABLE.get_entry(name)
-    FUNCTION_LEVEL.append(entry)
-
-    if entry.class_ in (CLASS.function, CLASS.sub):  # Was correctly declared?
-        FUNCTION_LEVEL[-1].ref.convention = convention
-
-
-def p_convention(p):
-    """convention :
-    | STDCALL
-    """
-    p[0] = CONVENTION.stdcall
-
-
-def p_convention2(p):
-    """convention : FASTCALL"""
-    p[0] = CONVENTION.fastcall
-
-
-def p_param_decl_none(p):
-    """param_decl :
-    | LP RP
-    """
-    p[0] = make_param_list(None)
-
-
-def p_param_decl(p):
-    """param_decl : LP param_decl_list RP"""
-    p[0] = p[2]
-
-
-def p_param_decl_errpr(p):
-    """param_decl : LP error RP"""
-    p[0] = None
-
-
-def p_param_decl_list(p):
-    """param_decl_list : param_definition"""
-    p[0] = make_param_list(p[1])
-
-
-def p_param_decl_list2(p):
-    """param_decl_list : param_decl_list COMMA param_definition"""
-    if p[1] is not None and p[3] is not None:  # No errors in parsing
-        if p[3].default_value is None and p[1][-1].default_value is not None:
-            errmsg.syntax_error_mandatory_param_after_optional(p[3].lineno, p[1][-1].name, p[3].name)
-
-    p[0] = make_param_list(p[1], p[3])
-
-
-def p_param_byref_definition(p):
-    """param_definition : BYREF param_def"""
-    p[0] = p[2]
-
-    if p[0] is not None:
-        p[0].ref.byref = True
-
-
-def p_param_byval_definition(p):
-    """param_definition : BYVAL param_def"""
-    param_def = p[2]
-    p[0] = param_def
-
-    if p[0] is not None:
-        if param_def.class_ == CLASS.array:
-            errmsg.syntax_error_cannot_pass_array_by_value(p.lineno(1), param_def.name)
-            p[0] = None
-            return
-        param_def.ref.byref = False
-
-
-def p_param_definition(p):
-    """param_definition : param_def"""
-    param_def = p[1]
-    p[0] = param_def
-    if p[0] is not None:
-        if param_def.class_ == CLASS.array:
-            param_def.ref.byref = True
-        else:
-            param_def.ref.byref = OPTIONS.default_byref
-
-
-def p_param_def_array(p):
-    """param_def : singleid LP RP typedef"""
-    typeref = p[4]
-    if typeref is None:
-        p[0] = None
-        return
-
-    lineno = p[1].lineno
-    id_ = p[1].name
-
-    src.api.check.check_type_is_explicit(lineno, id_, typeref)
-    p[0] = make_param_decl(id_, lineno, typeref, is_array=True)
-
-
-def p_param_def_type(p):
-    """param_def : singleid typedef default_arg_value"""
-    id_: Id = p[1]
-    typedef = p[2]
-    if typedef is not None:
-        src.api.check.check_type_is_explicit(id_.lineno, id_.name, typedef)
-
-    default_value = make_typecast(typedef, p[3], id_.lineno)
-    p[0] = make_param_decl(
-        id_.name,
-        id_.lineno,
-        typedef,
-        is_array=False,
-        default_value=default_value,
-    )
-
-
-def p_param_def_default_arg_value(p):
-    """default_arg_value :
-    | EQ expr
-    """
-    if len(p) == 1:
-        p[0] = None
-        return
-
-    p[0] = p[2]
-    return
-
-
-def p_function_body(p):
-    """function_body : program_co END FUNCTION
-    | program_co END SUB
-    | statements_co END FUNCTION
-    | statements_co END SUB
-    | co_statements_co END FUNCTION
-    | co_statements_co END SUB
-    | END FUNCTION
-    | END SUB
-    """
-    if not FUNCTION_LEVEL:
-        error(
-            p.lineno(3),
-            "Unexpected token 'END %s'. No Function or Sub has been defined." % p[2],
-        )
-        p[0] = None
-        return
-
-    a = FUNCTION_LEVEL[-1].class_
-    if a not in (
-        CLASS.sub,
-        CLASS.function,
-    ):  # This function/sub was not correctly declared, so exit now
-        p[0] = None
-        return
-
-    i = 2 if p[1] == "END" else 3
-    b = p[i].lower()
-
-    if a != b:
-        error(
-            p.lineno(i),
-            "Unexpected token 'END %s'. Should be 'END %s'" % (b.upper(), a.upper()),
-        )
-        p[0] = None
-    else:
-        p[0] = make_block() if p[1] == "END" else p[1]
-
-
-def p_type_def_empty(p):
-    """typedef :"""  # Epsilon. Defaults to float
-    p[0] = make_type(_TYPE(gl.DEFAULT_TYPE).name, p.lexer.lineno, implicit=True)
-
-
-def p_type_def(p):
-    """typedef : AS type"""  # Epsilon. Defaults to float
-    p[0] = make_type(p[2], p.lineno(2), implicit=False)
-
-
-def p_type(p):
-    """type : BYTE
-    | UBYTE
-    | INTEGER
-    | UINTEGER
-    | LONG
-    | ULONG
-    | FIXED
-    | FLOAT
-    | STRING
-    """
-    p[0] = p[1].lower()
-
-
-# region PREPROC
-
-# ----------------------------------------
-# PREPROCESSOR lines starting with:
-#
-#  #pragma
-#  #init
-#  #require
-#
-# are processed here and not in the lexer
-# ----------------------------------------
-
-
-def p_preproc_line_init(p):
-    """preproc_line : _INIT ID"""
-    INITS.add(p[2])
-
-
-def p_preproc_line_require(p):
-    """preproc_line : _REQUIRE STRING"""
-    arch.target.backend.REQUIRES.add(p[2])
-
-
-def p_preproc_line_pragma_option(p):
-    """preproc_line : _PRAGMA ID EQ ID
-    | _PRAGMA ID EQ STRING
-    | _PRAGMA ID EQ INTEGER
-    """
-    try:
-        setattr(OPTIONS, p[2], p[4])
-    except src.api.options.UndefinedOptionError:
-        errmsg.warning_ignoring_unknown_pragma(p.lineno(2), p[2])
-
-
-def p_preproc_pragma_push(p):
-    """preproc_line : _PRAGMA _PUSH LP ID RP"""
-    try:
-        OPTIONS[p[4]].push()
-    except src.api.options.UndefinedOptionError:
-        errmsg.warning_ignoring_unknown_pragma(p.lineno(4), p[4])
-
-
-def p_preproc_pragma_pop(p):
-    """preproc_line : _PRAGMA _POP LP ID RP"""
-    try:
-        OPTIONS[p[4]].pop()
-    except src.api.options.UndefinedOptionError:
-        errmsg.warning_ignoring_unknown_pragma(p.lineno(4), p[4])
-
-
-# region INTERNAL FUNCTIONS
-# -------------------------------------------
-# INTERNAL BASIC Functions
-# These will be implemented in the translator
-# module as a CALL to an ASM function
-# -------------------------------------------
-
-
-def p_expr_usr(p):
-    """bexpr : USR bexpr %prec UMINUS"""
-    if p[2].type_ == TYPE.string:
-        p[0] = make_builtin(p.lineno(1), "USR_STR", p[2], type_=TYPE.uinteger)
-    else:
-        p[0] = make_builtin(
-            p.lineno(1),
-            "USR",
-            make_typecast(TYPE.uinteger, p[2], p.lineno(1)),
-            type_=TYPE.uinteger,
-        )
-
-
-def p_expr_rnd(p):
-    """bexpr : RND %prec ID
-    | RND LP RP
-    """
-    p[0] = make_builtin(p.lineno(1), "RND", None, type_=TYPE.float_)
-
-
-def p_expr_peek(p):
-    """bexpr : PEEK bexpr %prec UMINUS"""
-    p[0] = make_builtin(
-        p.lineno(1),
-        "PEEK",
-        make_typecast(TYPE.uinteger, p[2], p.lineno(1)),
-        type_=TYPE.ubyte,
-    )
-
-
-def p_expr_peektype_(p):
-    """bexpr : PEEK LP numbertype COMMA expr RP"""
-    p[0] = make_builtin(p.lineno(1), "PEEK", make_typecast(TYPE.uinteger, p[5], p.lineno(4)), type_=p[3])
-
-
-def p_expr_in(p):
-    """bexpr : IN bexpr %prec UMINUS"""
-    p[0] = make_builtin(
-        p.lineno(1),
-        "IN",
-        make_typecast(TYPE.uinteger, p[2], p.lineno(1)),
-        type_=TYPE.ubyte,
-    )
-
-
-def p_expr_lbound(p):
-    """bexpr : LBOUND LP ARRAY_ID RP
-    | UBOUND LP ARRAY_ID RP
-    """
-    entry = SYMBOL_TABLE.access_array(p[3], p.lineno(3))
-    if entry is None:
-        p[0] = None
-        return
-
-    mark_entry_as_accessed(entry)
-
-    if entry.scope == SCOPE.parameter:
-        num = make_number(0, p.lineno(3), TYPE.uinteger)
-        p[0] = make_builtin(p.lineno(1), p[1], [entry, num], type_=TYPE.uinteger)
-    else:
-        p[0] = make_number(len(entry.bounds), p.lineno(3), TYPE.uinteger)
-
-
-def p_expr_lbound_expr(p):
-    """bexpr : LBOUND LP ARRAY_ID COMMA expr RP
-    | UBOUND LP ARRAY_ID COMMA expr RP
-    """
-    expr = p[5]
-    if expr is None:
-        p[0] = None
-        return
-
-    entry = SYMBOL_TABLE.access_array(p[3], p.lineno(3))
-    if entry is None:
-        p[0] = None
-        return
-
-    mark_entry_as_accessed(entry)
-    num = make_typecast(TYPE.uinteger, expr, p.lineno(6))
-    if num is None:
-        p[0] = None
-        return
-
-    if is_number(num) and entry.scope in (
-        SCOPE.local,
-        SCOPE.global_,
-    ):  # Try constant propagation
-        val = num.value
-        if val < 0 or val > len(entry.bounds):
-            error(p.lineno(6), "Dimension out of range")
-            p[0] = None
-            return
-
-        if not val:  # 0 => number of dims
-            p[0] = make_number(len(entry.bounds), p.lineno(3), TYPE.uinteger)
-        elif p[1] == "LBOUND":
-            p[0] = make_number(entry.bounds[val - 1].lower, p.lineno(3), TYPE.uinteger)
-        else:
-            p[0] = make_number(entry.bounds[val - 1].upper, p.lineno(3), TYPE.uinteger)
-        return
-
-    if p[1] == "LBOUND":
-        entry.ref.lbound_used = True
-    else:
-        entry.ref.ubound_used = True
-
-    p[0] = make_builtin(p.lineno(1), p[1], [entry, num], type_=TYPE.uinteger)
-
-
-def p_len(p):
-    """bexpr : LEN bexpr %prec UMINUS"""
-    arg = p[2]
-    if arg is None:
-        p[0] = None
-    elif arg.token == "VAR" and arg.class_ == CLASS.array:
-        p[0] = make_number(len(arg.bounds), lineno=p.lineno(1))  # Do constant folding
-    elif arg.type_ != TYPE.string:
-        errmsg.syntax_error_expected_string(p.lineno(1), TYPE.to_string(arg.type_))
-        p[0] = None
-    elif is_string(arg):  # Constant string?
-        p[0] = make_number(len(arg.value), lineno=p.lineno(1))  # Do constant folding
-    else:
-        p[0] = make_builtin(p.lineno(1), "LEN", arg, type_=TYPE.uinteger)
-
-
-def p_sizeof(p):
-    """bexpr : SIZEOF LP type RP
-    | SIZEOF LP ID RP
-    | SIZEOF LP ARRAY_ID RP
-    """
-    if TYPE.to_type(p[3].lower()) is not None:
-        p[0] = make_number(TYPE.size(TYPE.to_type(p[3].lower())), lineno=p.lineno(3))
-    else:
-        entry = SYMBOL_TABLE.get_id_or_make_var(p[3], p.lineno(1))
-        p[0] = make_number(TYPE.size(entry.type_), lineno=p.lineno(3))
-
-
-def p_str(p):
-    """string : STR expr %prec UMINUS"""
-    if is_number(p[2]):  # A constant is converted to string directly
-        p[0] = sym.STRING(str(p[2].value), p.lineno(1))
-    else:
-        p[0] = make_builtin(
-            p.lineno(1),
-            "STR",
-            make_typecast(TYPE.float_, p[2], p.lineno(1)),
-            type_=TYPE.string,
-        )
-
-
-def p_inkey(p):
-    """string : INKEY"""
-    p[0] = make_builtin(p.lineno(1), "INKEY", None, type_=TYPE.string)
-
-
-def p_chr_one(p):
-    """string : CHR bexpr %prec UMINUS"""
-    arg_list = make_arg_list(make_argument(p[2], p.lineno(1)))
-    arg_list[0].value = make_typecast(TYPE.ubyte, arg_list[0].value, p.lineno(1))
-    p[0] = make_builtin(p.lineno(1), "CHR", arg_list, type_=TYPE.string)
-
-
-def p_chr(p):
-    """string : CHR arg_list"""
-    if len(p[2]) < 1:
-        error(p.lineno(1), "CHR$ function need at less 1 parameter")
-        p[0] = None
-        return
-
-    for i in range(len(p[2])):  # Convert every argument to 8bit unsigned
-        p[2][i].value = make_typecast(TYPE.ubyte, p[2][i].value, p.lineno(1))
-
-    p[0] = make_builtin(p.lineno(1), "CHR", p[2], type_=TYPE.string)
-
-
-def p_val(p):
-    """bexpr : VAL bexpr %prec UMINUS"""
-
-    def val(s):
-        try:
-            x = float(eval(s, {}, {}))
-        except:
-            x = 0
-            warning(p.lineno(1), f"Invalid string numeric constant '{s}' evaluated as 0")
-        return x
-
-    if p[2].type_ != TYPE.string:
-        errmsg.syntax_error_expected_string(p.lineno(1), TYPE.to_string(p[2].type_))
-        p[0] = None
-    else:
-        p[0] = make_builtin(p.lineno(1), "VAL", p[2], lambda x: val(x), type_=TYPE.float_)
-
-
-def p_code(p):
-    """bexpr : CODE bexpr %prec UMINUS"""
-
-    def asc(x):
-        if len(x):
-            return ord(x[0])
-
-        return 0
-
-    if p[2] is None:
-        p[0] = None
-        return
-
-    if p[2].type_ != TYPE.string:
-        errmsg.syntax_error_expected_string(p.lineno(1), TYPE.to_string(p[2].type_))
-        p[0] = None
-    else:
-        p[0] = make_builtin(p.lineno(1), "CODE", p[2], lambda x: asc(x), type_=TYPE.ubyte)
-
-
-def p_sgn(p):
-    """bexpr : SGN bexpr %prec UMINUS"""
-    sgn = lambda x: x < 0 and -1 or x > 0 and 1 or 0
-
-    if p[2].type_ == TYPE.string:
-        error(p.lineno(1), "Expected a numeric expression, got TYPE.string instead")
-        p[0] = None
-    else:
-        if is_unsigned(p[2]) and not is_number(p[2]):
-            warning(p.lineno(1), "Sign of unsigned value is always 0 or 1")
-
-        p[0] = make_builtin(p.lineno(1), "SGN", p[2], lambda x: sgn(x), type_=TYPE.byte_)
-
-
-# ----------------------------------------
-# Trigonometric and LN, EXP, SQR
-# ----------------------------------------
-def p_expr_trig(p):
-    """bexpr : math_fn bexpr %prec UMINUS"""
-    p[0] = make_builtin(
-        p.lineno(1),
-        p[1],
-        make_typecast(TYPE.float_, p[2], p.lineno(1)),
-        {
-            "SIN": math.sin,
-            "COS": math.cos,
-            "TAN": math.tan,
-            "ASN": math.asin,
-            "ACS": math.acos,
-            "ATN": math.atan,
-            "LN": lambda y: math.log(y, math.exp(1)),  # LN(x)
-            "EXP": math.exp,
-            "SQR": math.sqrt,
-        }[p[1]],
-        type_=TYPE.float_,
-    )
-
-
-def p_math_fn(p):
-    """math_fn : SIN
-    | COS
-    | TAN
-    | ASN
-    | ACS
-    | ATN
-    | LN
-    | EXP
-    | SQR
-    """
-    p[0] = p[1]
-
-
-# ----------------------------------------
-# Other important functions
-# ----------------------------------------
-def p_expr_int(p):
-    """bexpr : INT bexpr %prec UMINUS"""
-    p[0] = make_typecast(TYPE.long_, p[2], p.lineno(1))
-
-
-def p_abs(p):
-    """bexpr : ABS bexpr %prec UMINUS"""
-    if is_unsigned(p[2]):
-        p[0] = p[2]
-        warning(p.lineno(1), "Redundant operation ABS for unsigned value")
-        return
-
-    p[0] = make_builtin(p.lineno(1), "ABS", p[2], lambda x: x if x >= 0 else -x)
-
-
-# endregion
-
-
-# ----------------------------------------
-# The yyerror function
-# ----------------------------------------
-def p_error(p):
-    if p is not None:
-        if p.type != "NEWLINE":
-            msg = "Syntax Error. Unexpected token '%s' <%s>" % (p.value, p.type)
-        else:
-            msg = "Unexpected end of line"
-        error(p.lineno, msg)
-        return
-
-    # Try to give some hints
+    # EOF cases
     if gl.LOOPS:  # some loop(s) are not closed
         loop_info = gl.LOOPS[-1]
         if loop_info.type == LoopType.FOR:
             errmsg.syntax_error_for_without_next(loop_info.lineno)
         else:
             errmsg.syntax_error_loop_not_closed(loop_info.lineno, loop_info.type.value)
-    # If there were previous errors, stop here
-    # since this end of file is due to previous errors
+
     if gl.has_errors:
-        return
+        return False
 
     msg = "Unexpected end of file"
     error(zxblex.lexer.lineno, msg)
+    return False
 
 
-# ----------------------------------------
-# Initialization
-# ----------------------------------------
-parser = src.api.utils.get_or_create("zxbparser", lambda: yacc.yacc(debug=True))
+class LarkParserWrapper:
+    def __init__(self, lark_instance):
+        self.lark = lark_instance
 
-ast = None
-data_ast = None  # Global Variables AST
-optemps = opcodestemps.OpcodesTemps()
+        # Wrap LALR parser callbacks for inline execution during parsing
+        lalr_parser = lark_instance.parser.parser.parser
+        transformer = ZXBasicTransformer()
+        wrapped_callbacks = {}
+        for rule, callback in list(lalr_parser.callbacks.items()):
+            method_name = rule.alias if rule.alias is not None else rule.origin.name
+            if hasattr(transformer, method_name):
+                method = getattr(transformer, method_name)
+
+                def make_wrapper(m=method):
+                    def wrapper(children):
+                        class MockMeta:
+                            @property
+                            def line(self):
+                                for child in children:
+                                    lineno = get_lineno(child)
+                                    if lineno:
+                                        return lineno
+                                return zxblex.lexer.lineno if hasattr(zxblex, "lexer") else 0
+
+                        meta = MockMeta()
+                        return m(meta, children)
+
+                    return wrapper
+
+                wrapped_callbacks[rule] = make_wrapper()
+            else:
+                wrapped_callbacks[rule] = callback
+        lalr_parser.callbacks = wrapped_callbacks
+
+    def parse(self, text, lexer=None, tracking=True, debug=False):
+        if hasattr(handle_parse_error, "last_key"):
+            handle_parse_error.last_key = None
+        if lexer is not None:
+            lexer.input(text)
+            try:
+                self.lark.parse(lexer, on_error=handle_parse_error)
+            except Exception as e:
+                if not isinstance(e, UnexpectedInput):
+                    raise e
+        else:
+            try:
+                self.lark.parse(text, on_error=handle_parse_error)
+            except Exception as e:
+                if not isinstance(e, UnexpectedInput):
+                    raise e
+
+
+# DO NOT pass transformer=ZXBasicTransformer() to Lark constructor when using meta args
+lark_parser = Lark_StandAlone(lexer=ZXBasicLarkLexerAdapter, propagate_positions=True)
+parser = LarkParserWrapper(lark_parser)
