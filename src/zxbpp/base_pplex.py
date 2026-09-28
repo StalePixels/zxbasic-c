@@ -9,10 +9,9 @@ import os
 import sys
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from enum import Enum, unique
+from enum import StrEnum, unique
 
-from src.api import utils
-from src.ply import lex
+from src.api import lex, utils
 from src.zxbpp.prepro import output
 from src.zxbpp.prepro.builtinmacro import BuiltinMacro
 from src.zxbpp.prepro.definestable import DefinesTable
@@ -26,7 +25,7 @@ STDOUT = "(stdout)"
 
 
 @unique
-class ReservedDirectives(str, Enum):
+class ReservedDirectives(StrEnum):
     INCLUDE = "INCLUDE"
     ONCE = "ONCE"
     DEFINE = "DEFINE"
