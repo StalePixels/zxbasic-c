@@ -58,7 +58,7 @@ class SymbolTable:
 
         # Initialize canonical types
         for type_ in TYPE.types:
-            self.basic_types[type_] = self.declare_type(symbols.BASICTYPE(type_))
+            self.basic_types[type_] = self.declare_type(name=type_.name, lineno=0, type_=symbols.BASICTYPE(type_))
 
     @property
     def current_scope(self) -> Scope:
@@ -68,39 +68,54 @@ class SymbolTable:
     def global_scope(self) -> Scope:
         return self.table[0]
 
-    def get_entry(self, id_: str, scope: Scope | None = None) -> symbols.ID | None:
+    def get_entry(self, id_: str, scope: Scope | None = None, lineno: int | None = None) -> symbols.ID | None:
         """Returns the ID entry stored in self.table, starting
         by the first one. Returns None if not found.
         If scope is not None, only the given scope is searched.
         """
+        suffix = None
         if id_[-1] in DEPRECATED_SUFFIXES:
+            suffix = id_[-1]
             id_ = id_[:-1]  # Remove it
 
+        entry = None
         if scope is not None:
-            return scope[id_]
+            entry = scope[id_]
+        else:
+            for s in self:
+                if s[id_] is not None:
+                    entry = s[id_]
+                    break
 
-        for s in self:
-            if s[id_] is not None:
-                return s[id_]
+        if entry is not None and suffix is not None and lineno is not None:
+            if isinstance(entry, symbols.ID) and entry.type_ is not None:
+                expected_type = symbols.TYPEREF(self.basic_types[SUFFIX_TYPE[suffix]], lineno)
+                if entry.type_ != expected_type:
+                    if suffix == "$":
+                        syntax_error(lineno, "Invalid $ suffix (or sigil) for numeric variable")
+                    else:
+                        syntax_error(lineno, f"Invalid {suffix} suffix (or sigil) for {entry.type_.name} variable")
 
-        return None  # Not found
+        return entry
 
-    def get_existing_entry(self, id_: str, scope: Scope | None = None) -> symbols.ID:
-        result = self.get_entry(id_, scope)
+    def get_existing_entry(self, id_: str, scope: Scope | None = None, lineno: int | None = None) -> symbols.ID:
+        result = self.get_entry(id_, scope, lineno=lineno)
         assert result is not None
 
         return result
 
-    def declare(self, id_: str, lineno: int, entry: symbols.ID) -> None | symbols.ID | symbols.TYPE:
+    def declare(self, id_: str, lineno: int, entry: symbols.ID | symbols.TYPE) -> None | symbols.ID | symbols.TYPE:
         """Check there is no 'id' already declared in the current scope, and
         creates and returns it. Otherwise, returns None,
         and the caller function raises the syntax/semantic error.
         Parameter entry is the SymbolVAR, SymbolVARARRAY, etc. instance
-        The entry 'declared' field is leave untouched. Setting it if on
+        The entry 'declared' field is left untouched. Setting it if on
         behalf of the caller.
         """
+        assert isinstance(entry, symbols.ID | symbols.TYPE)
+
         id2 = id_
-        type_ = entry.type_
+        type_ = entry.type_ if isinstance(entry, symbols.ID) else entry
 
         if id2[-1] in DEPRECATED_SUFFIXES:
             id2 = id2[:-1]  # Remove it
@@ -130,7 +145,7 @@ class SymbolTable:
 
         return entry
 
-    def declare_safe(self, id_: str, lineno: int, entry: symbols.ID):
+    def declare_safe(self, id_: str, lineno: int, entry: symbols.ID) -> symbols.ID | symbols.TYPE:
         """Like declare, but never returns None"""
         result = self.declare(id_, lineno, entry)
         assert result is not None
@@ -160,7 +175,7 @@ class SymbolTable:
         Note: classname is not the class attribute, but the name of
         the class as it would appear on compiler messages.
         """
-        result = self.get_entry(id_, scope)
+        result = self.get_entry(id_, scope, lineno=lineno)
         if isinstance(result, symbols.TYPE):
             return True
 
@@ -174,13 +189,21 @@ class SymbolTable:
             return False
         return True
 
-    def check_is_undeclared(self, id_: str, lineno: int, classname="identifier", scope=None, show_error=False) -> bool:
+    def check_is_undeclared(
+        self,
+        id_: str,
+        lineno: int,
+        classname: str = "identifier",
+        scope: Scope | None = None,
+        *,
+        show_error=False,
+    ) -> bool:
         """The reverse of the above.
 
         Check the given identifier is not already declared. Returns True
         if OK, False otherwise.
         """
-        result = self.get_entry(id_, scope)
+        result = self.get_entry(id_, scope, lineno=lineno)
         if result is None or not result.declared:
             return True
 
@@ -194,7 +217,7 @@ class SymbolTable:
             )
         return False
 
-    def check_class(self, id_: str, class_: CLASS, lineno: int, scope: Scope = None, show_error=True) -> bool:
+    def check_class(self, id_: str, class_: CLASS, lineno: int, scope: Scope | None = None, show_error=True) -> bool:
         """Check the id is either undefined or defined with
         the given class.
 
@@ -207,7 +230,7 @@ class SymbolTable:
         Otherwise, fails returning False.
         """
         assert CLASS.is_valid(class_)
-        entry = self.get_entry(id_, scope)
+        entry = self.get_entry(id_, scope, lineno=lineno)
         if entry is None or entry.class_ in (CLASS.unknown, class_):  # Undeclared yet
             return True
 
@@ -328,10 +351,11 @@ class SymbolTable:
         id_: str,
         lineno: int,
         scope=None,
-        default_type=None,
-        default_class=CLASS.unknown,
+        default_type: symbols.TYPING | None = None,
+        default_class: CLASS = CLASS.unknown,
+        *,
         ignore_explicit_flag=False,
-    ):
+    ) -> symbols.ID | None:
         """Access a symbol by its identifier and checks if it exists.
         If not, it's supposed to be an implicitly declared variable.
 
@@ -344,13 +368,13 @@ class SymbolTable:
         if not ignore_explicit_flag:
             check.check_is_declared_explicit(lineno, id_)
 
-        result = self.get_entry(id_, scope)
+        result = self.get_entry(id_, scope, lineno=lineno)
         if result is None:
             if default_type is None:
                 default_type = symbols.TYPEREF(self.basic_types[global_.DEFAULT_IMPLICIT_TYPE], lineno, implicit=True)
 
             result = self.declare_safe(
-                id_, lineno, entry=symbols.ID(id_, lineno, type_=default_type, class_=default_class)
+                id_, lineno, entry=symbols.ID(id_, lineno, type_ref=default_type, class_=default_class)
             )
             return result
 
@@ -358,7 +382,7 @@ class SymbolTable:
         # update its type.
         if default_type is not None and result.type_ == self.basic_types[TYPE.unknown]:
             if default_type == self.basic_types[TYPE.boolean]:
-                default_type = self.basic_types[TYPE.ubyte]
+                default_type = symbols.TYPEREF(self.basic_types[TYPE.ubyte], 0)
 
             result.type_ = default_type
             warning_implicit_type(lineno, id_, default_type.name)
@@ -415,7 +439,7 @@ class SymbolTable:
         """
         assert default_type is None or isinstance(default_type, symbols.TYPEREF)
 
-        result = self.get_entry(id_, scope)
+        result = self.get_entry(id_, scope, lineno=lineno)
         if result is None:
             if default_type is None:
                 if global_.DEFAULT_IMPLICIT_TYPE == TYPE.unknown:
@@ -431,10 +455,9 @@ class SymbolTable:
 
         return result
 
-    def access_call(self, id_: str, lineno: int, scope=None, type_=None):
+    def access_call(self, id_: str, lineno: int, scope=None, type_=None) -> symbols.ID | None:
         """Creates a func/array/string call. Checks if id is callable or not.
-        An identifier is "callable" if it can be followed by a list of para-
-        meters.
+        An identifier is "callable" if it can be followed by a list of parameters.
         This does not mean the id_ is a function, but that it allows the same
         syntax a function does:
 
@@ -462,7 +485,7 @@ class SymbolTable:
         return entry
 
     def access_label(self, id_: str, lineno: int, scope: Scope | None = None):
-        result = self.get_entry(id_, scope)
+        result = self.get_entry(id_, scope, lineno=lineno)
         if result is None:
             result = self.declare_label(id_, lineno)
             result.declared = False
@@ -475,7 +498,9 @@ class SymbolTable:
 
         return result
 
-    def declare_variable(self, id_: str, lineno: int, type_, default_value=None, class_: CLASS = CLASS.var):
+    def declare_variable(
+        self, id_: str, lineno: int, type_: symbols.TYPEREF, default_value=None, class_: CLASS = CLASS.var
+    ):
         """Like the above, but checks that entry.declared is False.
         Otherwise, raises an error.
 
@@ -485,7 +510,7 @@ class SymbolTable:
         assert class_ in (CLASS.const, CLASS.var, CLASS.unknown)
 
         if not self.check_is_undeclared(id_, lineno, scope=self.current_scope, show_error=False):
-            entry_ = self.get_existing_entry(id_)
+            entry_ = self.get_existing_entry(id_, lineno=lineno)
             if entry_.scope == SCOPE.parameter:
                 syntax_error(
                     lineno,
@@ -498,9 +523,9 @@ class SymbolTable:
         if not self.check_class(id_, class_, lineno, scope=self.current_scope):
             return None
 
-        entry = self.get_entry(id_, scope=self.current_scope)
+        entry = self.get_entry(id_, scope=self.current_scope, lineno=lineno)
         if entry is None:
-            entry = self.declare(id_, lineno, symbols.ID(name=id_, lineno=lineno, type_=type_))
+            entry = self.declare(id_, lineno, symbols.ID(name=id_, lineno=lineno, type_ref=type_))
             assert entry is not None
 
         if entry.class_ == CLASS.unknown:
@@ -522,7 +547,8 @@ class SymbolTable:
         if entry.type_ != type_:
             if not type_.implicit and entry.type_ is not None:
                 syntax_error(
-                    lineno, "'%s' suffix is for type '%s' but it was declared as '%s'" % (id_, entry.type_, type_)
+                    lineno,
+                    f"'{id_!s}' suffix is for type '{entry.type_.name}' but it was declared as '{type_.name}'",
                 )
                 return None
 
@@ -533,7 +559,7 @@ class SymbolTable:
 
         if default_value is not None and entry.type_ != default_value.type_:
             if check.is_number(default_value):
-                default_value = symbols.TYPECAST.make_node(entry.type_, default_value, lineno)
+                default_value = symbols.TYPECAST.make_node(entry.type_.type_, default_value, lineno)
                 if default_value is None:
                     return None
             else:
@@ -546,29 +572,33 @@ class SymbolTable:
 
         return entry
 
-    def declare_type(self, type_):
-        """Declares a type.
+    def declare_type(self, name: str, lineno: int, type_: symbols.TYPE) -> symbols.TYPE | None:
+        """Declares a type. The Type object must be already instantiated, as it's not
+        a normal ID Symbol.
+
         Checks its name is not already used in the current scope,
         and that it's not a basic type.
 
         Returns the given type_ Symbol, or None on error.
         """
         assert isinstance(type_, symbols.TYPE)
+
         # Checks it's not a basic type
         if not type_.is_basic and type_.name.lower() in TYPE.TYPE_NAMES.values():
             syntax_error(type_.lineno, "'%s' is a basic type and cannot be redefined" % type_.name)
             return None
 
-        if not self.check_is_undeclared(type_.name, type_.lineno, scope=self.current_scope, show_error=True):
+        if not self.check_is_undeclared(name, lineno, scope=self.current_scope, show_error=True):
             return None
 
         entry = self.declare(type_.name, type_.lineno, type_)
+        assert isinstance(entry, symbols.TYPE)
         return entry
 
     def declare_const(self, id_: str, lineno: int, type_, default_value):
         """Similar to the above. But declares a Constant."""
         if not self.check_is_undeclared(id_, lineno, scope=self.current_scope, show_error=False):
-            entry = self.get_entry(id_)
+            entry = self.get_entry(id_, lineno=lineno)
             if entry.scope == SCOPE.parameter:
                 syntax_error(
                     lineno,
@@ -590,11 +620,11 @@ class SymbolTable:
         """
         # TODO: consider to make labels private
         if not self.check_is_undeclared(id_, lineno, "label"):
-            e = self.get_existing_entry(id_)
+            e = self.get_existing_entry(id_, lineno=lineno)
             syntax_error(lineno, f"Label '{id_}' already used at {e.filename}:{e.lineno}")
             return e
 
-        entry = self.get_entry(id_)
+        entry = self.get_entry(id_, lineno=lineno)
         if entry is not None and entry.declared:
             if entry.is_line_number:
                 syntax_error(lineno, "Duplicated line number '%s'. Previous was at %i" % (entry.name, entry.lineno))
@@ -603,8 +633,8 @@ class SymbolTable:
             return None
 
         entry = (
-            self.get_entry(id_, scope=self.current_scope)
-            or self.get_entry(id_, scope=self.global_scope)
+            self.get_entry(id_, scope=self.current_scope, lineno=lineno)
+            or self.get_entry(id_, scope=self.global_scope, lineno=lineno)
             or self.declare(id_, lineno, symbols.ID(id_, lineno, class_=CLASS.label))
         )
         if entry is None:
@@ -624,11 +654,17 @@ class SymbolTable:
 
         self.move_to_global_scope(id_)  # Labels are always global # TODO: not in the future
         entry.declared = True
-        entry.type_ = self.basic_types[global_.PTR_TYPE]
+        entry.type_ = symbols.TYPEREF(self.basic_types[global_.PTR_TYPE], lineno, implicit=False)
         return entry
 
     def declare_param(
-        self, id_: str, lineno: int, type_=None, is_array=False, default_value: Symbol | None = None
+        self,
+        id_: str,
+        lineno: int,
+        type_: symbols.TYPEREF | None = None,
+        default_value: Symbol | None = None,
+        *,
+        is_array: bool = False,
     ) -> symbols.ID | None:
         """Declares a parameter
         Check if entry.declared is False. Otherwise, raises an error.
@@ -641,23 +677,35 @@ class SymbolTable:
                 syntax_error_cannot_define_default_array_argument(lineno)
                 return None
 
-            entry = self.declare_safe(id_, lineno, symbols.ID(name=id_, lineno=lineno, type_=type_)).to_vararray(
-                bounds=symbols.BOUNDLIST()
-            )
+            entry = self.declare_safe(
+                id_,
+                lineno,
+                symbols.ID(name=id_, lineno=lineno, type_ref=type_),
+            ).to_vararray(bounds=symbols.BOUNDLIST())
         else:
-            entry = self.declare_safe(id_, lineno, symbols.ID(name=id_, lineno=lineno, type_=type_)).to_var(
-                default_value=default_value
-            )
+            entry = self.declare_safe(
+                id_,
+                lineno,
+                symbols.ID(name=id_, lineno=lineno, type_ref=type_),
+            ).to_var(default_value=default_value)
 
         entry.scope = SCOPE.parameter
         entry.declared = True
 
         if entry.type_.implicit:
-            warning_implicit_type(lineno, id_, type_)
+            warning_implicit_type(lineno, id_, type_.name)
 
         return entry
 
-    def declare_array(self, id_: str, lineno: int, type_, bounds, default_value=None, addr=None):
+    def declare_array(
+        self,
+        id_: str,
+        lineno: int,
+        type_: symbols.TYPEREF,
+        bounds: symbols.BOUNDLIST,
+        default_value=None,
+        addr: str | None = None,
+    ):
         """Declares an array in the symbol table (VARARRAY). Error if already
         exists.
         The optional parameter addr specifies if the array elements must be placed at an specific
@@ -669,9 +717,9 @@ class SymbolTable:
         if not self.check_class(id_, CLASS.array, lineno, scope=self.current_scope):
             return None
 
-        entry = self.get_entry(id_, self.current_scope)
+        entry = self.get_entry(id_, self.current_scope, lineno=lineno)
         if entry is None:
-            entry = self.declare(id_, lineno, symbols.ID(name=id_, lineno=lineno, type_=type_))
+            entry = self.declare(id_, lineno, symbols.ID(name=id_, lineno=lineno, type_ref=type_))
             assert entry is not None
 
         if not entry.declared:
@@ -699,7 +747,7 @@ class SymbolTable:
             type_ = entry.type_
 
         if type_.implicit:
-            warning_implicit_type(lineno, id_, type_)
+            warning_implicit_type(lineno, id_, type_.name)
 
         if entry.class_ != CLASS.array:
             entry = symbols.ID.to_vararray(entry, bounds)
@@ -724,7 +772,7 @@ class SymbolTable:
         if not self.check_class(id_, class_, lineno):
             return None
 
-        entry = self.get_entry(id_)  # Must not exist or have _class = None or Function and declared = False
+        entry = self.get_entry(id_, lineno=lineno)  # Must not exist or have CLASS.unknown/function undeclared
         if entry is not None:
             if entry.declared:
                 assert entry.token == "FUNCTION"
@@ -740,7 +788,7 @@ class SymbolTable:
 
             entry.mangled = f"{self.current_namespace}_{entry.name}"  # HINT: mangle for nexted scopes
         else:
-            entry = self.declare(id_, lineno, symbols.ID(id_, lineno, type_=type_).to_function(class_=class_))
+            entry = self.declare(id_, lineno, symbols.ID(id_, lineno, type_ref=type_).to_function(class_=class_))
 
         assert entry.token == "FUNCTION"
         if entry.forwarded:
@@ -818,7 +866,7 @@ class SymbolTable:
         return self.table[level]
 
     def __iter__(self):
-        """Iterates through scopes, from current one (innermost) to global
+        """Iterates through scopes, from the current one (innermost) to global
         (outermost)
         """
         for scope in self.table[::-1]:
